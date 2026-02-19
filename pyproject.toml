@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agenticflow-cli"
+version = "0.1.0"
+description = "AgenticFlow CLI for agent-native API operations."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AgenticFlow" }]
+dependencies = [
+  "requests>=2.31.0,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/PixelML/agenticflow-cli"
+Repository = "https://github.com/PixelML/agenticflow-cli"
+Issues = "https://github.com/PixelML/agenticflow-cli/issues"
+
+[project.scripts]
+agenticflow = "agenticflow_cli.main:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0,<9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agenticflow_cli"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/agenticflow_cli/openapi.json" = "agenticflow_cli/openapi.json"
+"src/agenticflow_cli/public_ops_manifest.json" = "agenticflow_cli/public_ops_manifest.json"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/agenticflow_cli",
+  "scripts/agenticflow_cli.py",
+  "scripts/public_api_smoke_harness.py",
+  "tests/unit",
+  "docs",
+  "openapi.json",
+  "README.md",
+  "LICENSE",
+]

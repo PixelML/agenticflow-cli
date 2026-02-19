@@ -1,0 +1,30 @@
+{
+  "name": "@pixelml/agenticflow-cli",
+  "version": "0.1.0",
+  "description": "Node wrapper for the AgenticFlow Python CLI.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PixelML/agenticflow-cli.git"
+  },
+  "homepage": "https://github.com/PixelML/agenticflow-cli#readme",
+  "bugs": {
+    "url": "https://github.com/PixelML/agenticflow-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "bin": {
+    "agenticflow": "bin/agenticflow.js"
+  },
+  "files": [
+    "bin/agenticflow.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}
