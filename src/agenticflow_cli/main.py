@@ -10,7 +10,7 @@ import sys
 import re
 from time import perf_counter
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 from agenticflow_cli.client import (
@@ -26,6 +26,7 @@ from agenticflow_cli.spec import (
     default_spec_path,
     load_openapi_spec,
 )
+from agenticflow_sdk import AgenticFlowSDK
 
 DEFAULT_BASE_URL = "https://api.agenticflow.ai/"
 HTTP_OK_MAX = 399
@@ -43,18 +44,23 @@ CLI_CONFIG_DIR_ENV_VAR = "AGENTICFLOW_CLI_DIR"
 
 WORKFLOW_OPERATION_IDS = {
     "create": "create_workflow_model_v1_workspaces__workspace_id__workflows_post",
-    "get": "get_workflow_model_v1_workflows__workflow_id__get",
+    "get_authenticated": "get_workflow_model_v1_workflows__workflow_id__get",
+    "get_anonymous": "get_anonymous_model_v1_workflows_anonymous__workflow_id__get",
     "update": "update_workflow_model_v1_workspaces__workspace_id__workflows__workflow_id__put",
-    "run": "create_workflow_run_model_v1_workflow_runs__post",
-    "run_status": "get_workflow_run_model_v1_workflow_runs__workflow_run_id__get",
+    "run_authenticated": "create_workflow_run_model_v1_workflow_runs__post",
+    "run_anonymous": "create_workflow_run_model_anonymous_v1_workflow_runs_anonymous_post",
+    "run_status_authenticated": "get_workflow_run_model_v1_workflow_runs__workflow_run_id__get",
+    "run_status_anonymous": "get_workflow_run_model_anonymous_v1_workflow_runs_anonymous__workflow_run_id__get",
     "validate": "validate_create_workflow_model_v1_workflows_utils_validate_create_workflow_model_post",
 }
 
 AGENT_OPERATION_IDS = {
     "create": "create_v1_agents__post",
-    "get": "get_by_id_v1_agents__agent_id__get",
+    "get_authenticated": "get_by_id_v1_agents__agent_id__get",
+    "get_anonymous": "get_anonymous_by_id_v1_agents_anonymous__agent_id__get",
     "update": "update_v1_agents__agent_id__put",
-    "stream": "ai_sdk_stream_v2_v1_agents__agent_id__stream_post",
+    "stream_authenticated": "ai_sdk_stream_v2_v1_agents__agent_id__stream_post",
+    "stream_anonymous": "anonymous_ai_sdk_stream_v2_v1_agents_anonymous__agent_id__stream_post",
 }
 
 NODE_TYPE_OPERATION_IDS = {
@@ -459,7 +465,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     node_types_dynamic.add_argument("--name", required=True, help="Node type name.")
     node_types_dynamic.add_argument("--field-name", required=True)
+    node_types_dynamic.add_argument(
+        "--project-id",
+        required=True,
+        help="Project identifier used for authorization and option lookup.",
+    )
     node_types_dynamic.add_argument("--connection-id", default=None)
+    node_types_dynamic.add_argument("--search-term", default=None)
     node_types_dynamic.add_argument(
         "--input-config",
         default=None,
@@ -477,12 +489,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     connections_list = connections_sub.add_parser("list", help="List app connections.")
     connections_list.add_argument("--workspace-id", required=True)
+    connections_list.add_argument(
+        "--project-id",
+        required=True,
+        help="Project identifier used to scope connection access.",
+    )
+    connections_list.add_argument("--limit", type=int, default=None)
+    connections_list.add_argument("--offset", type=int, default=None)
     _add_common_call_flags(connections_list)
 
     connections_categories = connections_sub.add_parser(
         "categories", help="List connection categories."
     )
     connections_categories.add_argument("--workspace-id", required=True)
+    connections_categories.add_argument("--limit", type=int, default=None)
+    connections_categories.add_argument("--offset", type=int, default=None)
     _add_common_call_flags(connections_categories)
 
     policy_parser = subparsers.add_parser(
@@ -998,6 +1019,34 @@ def _resolve_api_call(
     return operation
 
 
+def _pick_operation_id(
+    *,
+    registry: OperationRegistry,
+    authenticated_operation_id: str | None,
+    anonymous_operation_id: str | None = None,
+    token: str | None = None,
+) -> str:
+    candidates: list[str] = []
+    if token:
+        if authenticated_operation_id is not None:
+            candidates.append(authenticated_operation_id)
+        if anonymous_operation_id is not None:
+            candidates.append(anonymous_operation_id)
+    else:
+        if anonymous_operation_id is not None:
+            candidates.append(anonymous_operation_id)
+        if authenticated_operation_id is not None:
+            candidates.append(authenticated_operation_id)
+
+    if not candidates:
+        raise RuntimeError("No operation IDs are configured for this command.")
+
+    for candidate in candidates:
+        if registry.get_operation_by_id(candidate) is not None:
+            return candidate
+    return candidates[0]
+
+
 def _serialize_request_spec(operation: Any, request_spec: Any) -> dict[str, Any]:
     payload = {
         "operation_id": getattr(operation, "operation_id", None),
@@ -1081,6 +1130,13 @@ def _resolve_token_from_args(args: argparse.Namespace) -> str | None:
     if profile_api_key is not None:
         env[AUTH_ENV_API_KEY] = profile_api_key
     return resolve_bearer_token(None, env)
+
+
+def _build_sdk_client(base_url: str, token: str | None) -> AgenticFlowSDK:
+    return AgenticFlowSDK(
+        api_key=token,
+        base_url=base_url,
+    )
 
 
 def _invoke_operation(
@@ -1193,6 +1249,107 @@ def _invoke_operation(
         else:
             print(output)
     return (0 if status <= HTTP_OK_MAX else 1), output
+
+
+def _invoke_sdk_operation(
+    *,
+    registry: OperationRegistry,
+    operation_id: str,
+    invoke: Callable[[bool], Any],
+    estimated_cost: float | None = None,
+    dry_run: bool = False,
+    print_output: bool = True,
+) -> tuple[int, Any]:
+    start_ns = perf_counter()
+    operation = registry.get_operation_by_id(operation_id)
+    if operation is None:
+        error_message = f"Unknown operation_id: {operation_id}"
+        print(error_message, file=sys.stderr)
+        return 1, {"error": error_message}
+
+    try:
+        policy_config = policy_module.load_policy()
+    except policy_module.PolicyConfigError as exc:
+        error_payload = _policy_error_payload(
+            code=exc.code,
+            detail=exc.detail,
+            operation_id=operation_id,
+            retryable=exc.retryable,
+        )
+        _write_machine_error(error_payload)
+        _write_policy_audit_entry(
+            operation_id=operation_id,
+            status="blocked",
+            latency_ms=(perf_counter() - start_ns) * 1000,
+            result_code=error_payload["code"],
+            error=error_payload["detail"],
+        )
+        return 1, error_payload
+
+    violation = policy_module.evaluate_policy(
+        policy_config,
+        operation=operation,
+        estimated_cost=estimated_cost,
+    )
+    if violation is not None:
+        error_payload = _policy_error_payload(
+            code=violation.code,
+            detail=violation.detail,
+            operation_id=operation_id,
+            retryable=violation.retryable,
+        )
+        _write_machine_error(error_payload)
+        _write_policy_audit_entry(
+            operation_id=operation_id,
+            status="blocked",
+            latency_ms=(perf_counter() - start_ns) * 1000,
+            result_code=error_payload["code"],
+            error=error_payload["detail"],
+        )
+        return 1, error_payload
+
+    try:
+        output = invoke(dry_run)
+    except Exception as exc:  # noqa: BLE001
+        error_message = f"Failed to execute operation: {exc}"
+        print(error_message, file=sys.stderr)
+        _write_policy_audit_entry(
+            operation_id=operation_id,
+            status="request_error",
+            latency_ms=(perf_counter() - start_ns) * 1000,
+            result_code="sdk_execution_error",
+            error=str(exc),
+        )
+        return 1, {"error": str(exc)}
+
+    if isinstance(output, dict):
+        payload = dict(output)
+    else:
+        payload = {"body": output}
+    payload.setdefault("operation_id", operation_id)
+
+    if dry_run:
+        _write_policy_audit_entry(
+            operation_id=operation_id,
+            status="dry_run",
+            latency_ms=(perf_counter() - start_ns) * 1000,
+            result_code="dry_run",
+        )
+        if print_output:
+            _print_json(payload)
+        return 0, payload
+
+    status = int(payload.get("status", 0) or 0)
+    payload.setdefault("status", status)
+    _write_policy_audit_entry(
+        operation_id=operation_id,
+        status="success" if status <= HTTP_OK_MAX else "request_error",
+        latency_ms=(perf_counter() - start_ns) * 1000,
+        result_code=str(status),
+    )
+    if print_output:
+        _print_json(payload)
+    return (0 if status <= HTTP_OK_MAX else 1), payload
 
 
 def _run_ops_command(args: argparse.Namespace, registry: OperationRegistry) -> int:
@@ -1520,7 +1677,7 @@ def _run_call_command(
 def _run_workflow_command(
     args: argparse.Namespace,
     registry: OperationRegistry,
-    base_url: str,
+    sdk_client: AgenticFlowSDK,
     token: str | None,
 ) -> int:
     if args.workflow_command == "create":
@@ -1529,25 +1686,35 @@ def _run_workflow_command(
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=WORKFLOW_OPERATION_IDS["create"],
-            path_params={"workspace_id": args.workspace_id},
-            body=body,
+            invoke=lambda dry_run: sdk_client.workflows.create(
+                workspace_id=args.workspace_id,
+                payload=body,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
         return rc
 
     if args.workflow_command == "get":
-        rc, _ = _invoke_operation(
+        operation_id = _pick_operation_id(
             registry=registry,
-            base_url=base_url,
+            authenticated_operation_id=WORKFLOW_OPERATION_IDS["get_authenticated"],
+            anonymous_operation_id=WORKFLOW_OPERATION_IDS["get_anonymous"],
             token=token,
-            operation_id=WORKFLOW_OPERATION_IDS["get"],
-            path_params={"workflow_id": args.workflow_id},
+        )
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=operation_id,
+            invoke=lambda dry_run: sdk_client.workflows.get(
+                workflow_id=args.workflow_id,
+                authenticated=operation_id
+                == WORKFLOW_OPERATION_IDS["get_authenticated"],
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1559,16 +1726,15 @@ def _run_workflow_command(
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=WORKFLOW_OPERATION_IDS["update"],
-            path_params={
-                "workspace_id": args.workspace_id,
-                "workflow_id": args.workflow_id,
-            },
-            body=body,
+            invoke=lambda dry_run: sdk_client.workflows.update(
+                workspace_id=args.workspace_id,
+                workflow_id=args.workflow_id,
+                payload=body,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1581,31 +1747,44 @@ def _run_workflow_command(
             print(str(exc), file=sys.stderr)
             return 1
 
-        body: dict[str, Any] = {
-            "workflow_id": args.workflow_id,
-            "input": input_payload,
-        }
-        if args.response_type is not None:
-            body["response_type"] = args.response_type
-
-        rc, _ = _invoke_operation(
+        operation_id = _pick_operation_id(
             registry=registry,
-            base_url=base_url,
+            authenticated_operation_id=WORKFLOW_OPERATION_IDS["run_authenticated"],
+            anonymous_operation_id=WORKFLOW_OPERATION_IDS["run_anonymous"],
             token=token,
-            operation_id=WORKFLOW_OPERATION_IDS["run"],
-            body=body,
+        )
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=operation_id,
+            invoke=lambda dry_run: sdk_client.workflows.run(
+                workflow_id=args.workflow_id,
+                input_data=input_payload,
+                response_type=args.response_type,
+                authenticated=operation_id
+                == WORKFLOW_OPERATION_IDS["run_authenticated"],
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
         return rc
 
     if args.workflow_command == "run-status":
-        rc, _ = _invoke_operation(
+        operation_id = _pick_operation_id(
             registry=registry,
-            base_url=base_url,
+            authenticated_operation_id=WORKFLOW_OPERATION_IDS["run_status_authenticated"],
+            anonymous_operation_id=WORKFLOW_OPERATION_IDS["run_status_anonymous"],
             token=token,
-            operation_id=WORKFLOW_OPERATION_IDS["run_status"],
-            path_params={"workflow_run_id": args.workflow_run_id},
+        )
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=operation_id,
+            invoke=lambda dry_run: sdk_client.workflows.run_status(
+                workflow_run_id=args.workflow_run_id,
+                authenticated=operation_id
+                == WORKFLOW_OPERATION_IDS["run_status_authenticated"],
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1617,12 +1796,13 @@ def _run_workflow_command(
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=WORKFLOW_OPERATION_IDS["validate"],
-            body=body,
+            invoke=lambda dry_run: sdk_client.workflows.validate(
+                body,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1635,7 +1815,7 @@ def _run_workflow_command(
 def _run_agent_command(
     args: argparse.Namespace,
     registry: OperationRegistry,
-    base_url: str,
+    sdk_client: AgenticFlowSDK,
     token: str | None,
 ) -> int:
     if args.agent_command == "create":
@@ -1644,24 +1824,34 @@ def _run_agent_command(
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=AGENT_OPERATION_IDS["create"],
-            body=body,
+            invoke=lambda dry_run: sdk_client.agents.create(
+                body,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
         return rc
 
     if args.agent_command == "get":
-        rc, _ = _invoke_operation(
+        operation_id = _pick_operation_id(
             registry=registry,
-            base_url=base_url,
+            authenticated_operation_id=AGENT_OPERATION_IDS["get_authenticated"],
+            anonymous_operation_id=AGENT_OPERATION_IDS["get_anonymous"],
             token=token,
-            operation_id=AGENT_OPERATION_IDS["get"],
-            path_params={"agent_id": args.agent_id},
+        )
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=operation_id,
+            invoke=lambda dry_run: sdk_client.agents.get(
+                agent_id=args.agent_id,
+                authenticated=operation_id
+                == AGENT_OPERATION_IDS["get_authenticated"],
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1673,13 +1863,14 @@ def _run_agent_command(
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=AGENT_OPERATION_IDS["update"],
-            path_params={"agent_id": args.agent_id},
-            body=body,
+            invoke=lambda dry_run: sdk_client.agents.update(
+                agent_id=args.agent_id,
+                payload=body,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1691,13 +1882,22 @@ def _run_agent_command(
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        rc, _ = _invoke_operation(
+        operation_id = _pick_operation_id(
             registry=registry,
-            base_url=base_url,
+            authenticated_operation_id=AGENT_OPERATION_IDS["stream_authenticated"],
+            anonymous_operation_id=AGENT_OPERATION_IDS["stream_anonymous"],
             token=token,
-            operation_id=AGENT_OPERATION_IDS["stream"],
-            path_params={"agent_id": args.agent_id},
-            body=body,
+        )
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=operation_id,
+            invoke=lambda dry_run: sdk_client.agents.stream(
+                agent_id=args.agent_id,
+                payload=body if isinstance(body, Mapping) else {"input": body},
+                authenticated=operation_id
+                == AGENT_OPERATION_IDS["stream_authenticated"],
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1707,75 +1907,39 @@ def _run_agent_command(
     return 1
 
 
-def _extract_response_items(output: Any) -> tuple[int | None, list[dict[str, Any]]]:
-    if not isinstance(output, dict):
-        return None, []
-    status = output.get("status")
-    body = output.get("body")
-    if isinstance(body, list):
-        return status, [item for item in body if isinstance(item, dict)]
-    if isinstance(body, dict):
-        items = body.get("items")
-        if isinstance(items, list):
-            return status, [item for item in items if isinstance(item, dict)]
-    return status, []
-
-
 def _run_node_types_search(
     *,
     registry: OperationRegistry,
-    base_url: str,
-    token: str | None,
+    sdk_client: AgenticFlowSDK,
     dry_run: bool,
     estimated_cost: float | None,
     query: str,
 ) -> int:
-    rc, output = _invoke_operation(
+    rc, output = _invoke_sdk_operation(
         registry=registry,
-        base_url=base_url,
-        token=token,
         operation_id=NODE_TYPE_OPERATION_IDS["list"],
+        invoke=lambda current_dry_run: sdk_client.node_types.search(
+            query=query,
+            dry_run=current_dry_run,
+        ),
         estimated_cost=estimated_cost,
         dry_run=dry_run,
-        print_output=False,
     )
-    if rc != 0:
-        _print_json(output)
-        return rc
-    if dry_run:
-        _print_json(output)
-        return 0
-
-    status, records = _extract_response_items(output)
-    needle = query.lower()
-    filtered = [
-        item
-        for item in records
-        if needle in json.dumps(item, sort_keys=True).lower()
-    ]
-    _print_json(
-        {
-            "status": status,
-            "query": query,
-            "count": len(filtered),
-            "body": filtered,
-        }
-    )
-    return 0
+    return rc
 
 
 def _run_node_types_command(
     args: argparse.Namespace,
     registry: OperationRegistry,
-    base_url: str,
-    token: str | None,
+    sdk_client: AgenticFlowSDK,
 ) -> int:
     if args.node_types_command == "list":
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=NODE_TYPE_OPERATION_IDS["list"],
+            invoke=lambda dry_run: sdk_client.node_types.list(
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1784,49 +1948,50 @@ def _run_node_types_command(
     if args.node_types_command == "search":
         return _run_node_types_search(
             registry=registry,
-            base_url=base_url,
-            token=token,
+            sdk_client=sdk_client,
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
             query=args.query,
         )
 
     if args.node_types_command == "get":
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=NODE_TYPE_OPERATION_IDS["get"],
-            path_params={"name": args.name},
+            invoke=lambda dry_run: sdk_client.node_types.get(
+                name=args.name,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
         return rc
 
     if args.node_types_command == "dynamic-options":
-        input_config: dict[str, Any] = {}
-        if args.input_config is not None:
+        if args.input_config is None:
+            input_config: Any = {}
+        else:
             try:
-                parsed_input = load_json_payload(args.input_config)
+                input_config = load_json_payload(args.input_config)
             except ValueError as exc:
                 print(f"Invalid --input-config: {exc}", file=sys.stderr)
                 return 1
-            if not isinstance(parsed_input, dict):
-                print("Invalid --input-config: expected a JSON object.", file=sys.stderr)
-                return 1
-            input_config = parsed_input
-        body = {
-            "field_name": args.field_name,
-            "connection_id": args.connection_id,
-            "input_config": input_config,
-        }
-        rc, _ = _invoke_operation(
+        if not isinstance(input_config, dict):
+            print("Invalid --input-config: expected a JSON object.", file=sys.stderr)
+            return 1
+
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=NODE_TYPE_OPERATION_IDS["dynamic_options"],
-            path_params={"node_type_name": args.name},
-            body=body,
+            invoke=lambda dry_run: sdk_client.node_types.dynamic_options(
+                name=args.name,
+                field_name=args.field_name,
+                project_id=args.project_id,
+                input_config=input_config,
+                connection=args.connection_id,
+                search_term=args.search_term,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1839,28 +2004,34 @@ def _run_node_types_command(
 def _run_connections_command(
     args: argparse.Namespace,
     registry: OperationRegistry,
-    base_url: str,
-    token: str | None,
+    sdk_client: AgenticFlowSDK,
 ) -> int:
     if args.connections_command == "list":
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=CONNECTION_OPERATION_IDS["list"],
-            path_params={"workspace_id": args.workspace_id},
+            invoke=lambda dry_run: sdk_client.connections.list(
+                workspace_id=args.workspace_id,
+                project_id=args.project_id,
+                limit=args.limit,
+                offset=args.offset,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
         return rc
 
     if args.connections_command == "categories":
-        rc, _ = _invoke_operation(
+        rc, _ = _invoke_sdk_operation(
             registry=registry,
-            base_url=base_url,
-            token=token,
             operation_id=CONNECTION_OPERATION_IDS["categories"],
-            path_params={"workspace_id": args.workspace_id},
+            invoke=lambda dry_run: sdk_client.connections.categories(
+                workspace_id=args.workspace_id,
+                limit=args.limit,
+                offset=args.offset,
+                dry_run=dry_run,
+            ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
         )
@@ -1905,17 +2076,20 @@ def run_cli(argv: list[str] | None = None) -> int:
 
     if args.command == "call":
         return _run_call_command(args, registry, base_url, token)
-    if args.command == "workflow":
-        return _run_workflow_command(args, registry, base_url, token)
-    if args.command == "agent":
-        return _run_agent_command(args, registry, base_url, token)
-    if args.command == "node-types":
-        return _run_node_types_command(args, registry, base_url, token)
-    if args.command == "connections":
-        return _run_connections_command(args, registry, base_url, token)
+    if args.command not in {"workflow", "agent", "node-types", "connections"}:
+        print(f"Unknown command: {args.command}", file=sys.stderr)
+        return 1
 
-    print(f"Unknown command: {args.command}", file=sys.stderr)
-    return 1
+    sdk_client = _build_sdk_client(base_url, token)
+
+    if args.command == "workflow":
+        return _run_workflow_command(args, registry, sdk_client, token)
+    if args.command == "agent":
+        return _run_agent_command(args, registry, sdk_client, token)
+    if args.command == "node-types":
+        return _run_node_types_command(args, registry, sdk_client)
+    if args.command == "connections":
+        return _run_connections_command(args, registry, sdk_client)
 
 
 

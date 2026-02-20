@@ -1,8 +1,10 @@
 import json
 import pytest
 from pathlib import Path
+from typing import Any
 
 from agenticflow_cli import main as main_module
+from agenticflow_cli.spec import OperationRegistry, default_spec_path, load_openapi_spec
 from agenticflow_cli.main import (
     AGENT_OPERATION_IDS,
     CONNECTION_OPERATION_IDS,
@@ -144,6 +146,92 @@ def _write_catalog_spec(path: Path) -> None:
             }
         )
     )
+
+
+def _snapshot_operation_ids() -> set[str]:
+    registry = OperationRegistry.from_spec(load_openapi_spec(default_spec_path()))
+    return {op.operation_id for op in registry.list_operations(public_only=False)}
+
+
+def _hardcoded_main_operation_ids() -> set[str]:
+    return {
+        *WORKFLOW_OPERATION_IDS.values(),
+        *AGENT_OPERATION_IDS.values(),
+        *NODE_TYPE_OPERATION_IDS.values(),
+        *CONNECTION_OPERATION_IDS.values(),
+    }
+
+
+def _resolve_preferred_operation_id(
+    *,
+    authenticated_operation_id: str,
+    anonymous_operation_id: str | None,
+    token: str | None,
+) -> str:
+    registry = OperationRegistry.from_spec(load_openapi_spec(default_spec_path()))
+    if token:
+        candidates = [authenticated_operation_id]
+        if anonymous_operation_id is not None:
+            candidates.append(anonymous_operation_id)
+    else:
+        candidates = []
+        if anonymous_operation_id is not None:
+            candidates.append(anonymous_operation_id)
+        candidates.append(authenticated_operation_id)
+
+    for candidate in candidates:
+        if registry.get_operation_by_id(candidate) is not None:
+            return candidate
+    return candidates[0]
+
+
+def _build_sdk_client_spy(
+    captured: dict[str, object],
+    handlers: dict[tuple[str, str], Any] | None = None,
+    default_response: dict[str, object] | None = None,
+) -> Any:
+    handlers = handlers or {}
+    default_response = default_response or {"status": 200}
+
+    def _record_call(
+        resource_name: str,
+        method_name: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, object]:
+        captured["resource"] = resource_name
+        captured["resource_method"] = method_name
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        handler = handlers.get((resource_name, method_name))
+        if handler is None:
+            return dict(default_response)
+        response = handler(*args, **kwargs)
+        if isinstance(response, dict):
+            return response
+        return {"status": 200, "body": response}
+
+    class _Resource:
+        def __init__(self, resource_name: str) -> None:
+            self._resource_name = resource_name
+
+        def __getattr__(self, method_name: str):
+            if method_name.startswith("__"):
+                raise AttributeError(method_name)
+
+            def _method(*args: Any, **kwargs: Any) -> dict[str, object]:
+                return _record_call(self._resource_name, method_name, *args, **kwargs)
+
+            return _method
+
+    class _SDKClient:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            self.workflows = _Resource("workflows")
+            self.agents = _Resource("agents")
+            self.node_types = _Resource("node_types")
+            self.connections = _Resource("connections")
+
+    return _SDKClient()
 
 
 def test_ops_list_public_only_outputs_only_public_operations(capsys, tmp_path: Path) -> None:
@@ -543,21 +631,18 @@ def test_catalog_rank_json_applies_relevance_heuristic(
     assert payload["heuristic"]["formula"] == "score = relevance*10 - cost - latency/200"
 
 
-def test_workflow_run_routes_to_expected_operation(capsys, tmp_path: Path, monkeypatch) -> None:
-    spec_file = tmp_path / "openapi.json"
-    _write_spec(spec_file)
+def test_workflow_run_routes_to_expected_operation(capsys, monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _fake_invoke_operation(**kwargs):
-        captured.update(kwargs)
-        return 0, {"status": 200}
-
-    monkeypatch.setattr(main_module, "_invoke_operation", _fake_invoke_operation)
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
 
     rc = run_cli(
         [
-            "--spec-file",
-            str(spec_file),
             "workflow",
             "run",
             "--workflow-id",
@@ -569,58 +654,108 @@ def test_workflow_run_routes_to_expected_operation(capsys, tmp_path: Path, monke
             "--dry-run",
         ],
     )
+    out = capsys.readouterr().out
+    payload = json.loads(out)
 
     assert rc == 0
-    assert captured["operation_id"] == WORKFLOW_OPERATION_IDS["run"]
-    assert captured["body"] == {
+    assert captured["resource"] == "workflows"
+    assert captured["resource_method"] == "run"
+    assert payload["operation_id"] == WORKFLOW_OPERATION_IDS["run_anonymous"]
+    assert captured["kwargs"] == {
         "workflow_id": "wf-123",
-        "input": {"topic": "agenticflow"},
+        "input_data": {"topic": "agenticflow"},
         "response_type": "queue",
+        "authenticated": False,
+        "dry_run": True,
     }
-    assert captured["dry_run"] is True
-    assert captured["token"] is None
-    assert captured["base_url"] == "https://api.agenticflow.ai/"
+    assert payload["status"] == 200
     assert "workflow" not in capsys.readouterr().err.lower()
 
 
-def test_workflow_create_rejects_invalid_body(capsys, tmp_path: Path) -> None:
-    spec_file = tmp_path / "openapi.json"
-    _write_spec(spec_file)
+def test_workflow_create_routes_to_expected_operation(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
 
     rc = run_cli(
         [
-            "--spec-file",
-            str(spec_file),
             "workflow",
             "create",
             "--workspace-id",
             "ws-1",
             "--body",
-            "{bad-json}",
+            "{}",
             "--dry-run",
         ],
     )
-    err = capsys.readouterr().err
+    payload = json.loads(capsys.readouterr().out)
 
-    assert rc == 1
-    assert "Invalid --body" in err
+    assert rc == 0
+    assert captured["resource"] == "workflows"
+    assert captured["resource_method"] == "create"
+    assert payload["operation_id"] == WORKFLOW_OPERATION_IDS["create"]
+    assert captured["kwargs"] == {
+        "workspace_id": "ws-1",
+        "payload": {},
+        "dry_run": True,
+    }
+    assert payload["status"] == 200
 
 
-def test_agent_stream_routes_to_expected_operation(tmp_path: Path, monkeypatch) -> None:
-    spec_file = tmp_path / "openapi.json"
-    _write_spec(spec_file)
+def test_workflow_update_routes_to_expected_operation(monkeypatch, capsys) -> None:
     captured: dict[str, object] = {}
 
-    def _fake_invoke_operation(**kwargs):
-        captured.update(kwargs)
-        return 0, {"status": 200}
-
-    monkeypatch.setattr(main_module, "_invoke_operation", _fake_invoke_operation)
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
 
     rc = run_cli(
         [
-            "--spec-file",
-            str(spec_file),
+            "workflow",
+            "update",
+            "--workspace-id",
+            "ws-1",
+            "--workflow-id",
+            "wf-1",
+            "--body",
+            "{}",
+            "--dry-run",
+        ],
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert captured["resource"] == "workflows"
+    assert captured["resource_method"] == "update"
+    assert json.loads(out)["operation_id"] == WORKFLOW_OPERATION_IDS["update"]
+    assert captured["kwargs"] == {
+        "workspace_id": "ws-1",
+        "workflow_id": "wf-1",
+        "payload": {},
+        "dry_run": True,
+    }
+
+
+def test_agent_stream_routes_to_expected_operation(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+
+    rc = run_cli(
+        [
             "agent",
             "stream",
             "--agent-id",
@@ -630,48 +765,169 @@ def test_agent_stream_routes_to_expected_operation(tmp_path: Path, monkeypatch) 
             "--dry-run",
         ],
     )
+    out = capsys.readouterr().out
 
     assert rc == 0
-    assert captured["operation_id"] == AGENT_OPERATION_IDS["stream"]
-    assert captured["path_params"] == {"agent_id": "agent-1"}
-    assert captured["body"] == {"messages": [{"role": "user", "content": "hello"}]}
-    assert captured["dry_run"] is True
+    assert captured["resource"] == "agents"
+    assert captured["resource_method"] == "stream"
+    assert json.loads(out)["operation_id"] == AGENT_OPERATION_IDS["stream_anonymous"]
+    assert captured["kwargs"] == {
+        "agent_id": "agent-1",
+        "payload": {"messages": [{"role": "user", "content": "hello"}]},
+        "authenticated": False,
+        "dry_run": True,
+    }
 
 
-def test_node_types_search_filters_results(capsys, tmp_path: Path, monkeypatch) -> None:
-    spec_file = tmp_path / "openapi.json"
-    _write_spec(spec_file)
+@pytest.mark.parametrize(
+    ("command_args", "authenticated_operation_id", "anonymous_operation_id"),
+    [
+        (
+            ["workflow", "get", "--workflow-id", "wf-1", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["get_authenticated"],
+            WORKFLOW_OPERATION_IDS["get_anonymous"],
+        ),
+        (
+            ["workflow", "run", "--workflow-id", "wf-1", "--input", "{}", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["run_authenticated"],
+            WORKFLOW_OPERATION_IDS["run_anonymous"],
+        ),
+        (
+            ["workflow", "run-status", "--workflow-run-id", "run-1", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["run_status_authenticated"],
+            WORKFLOW_OPERATION_IDS["run_status_anonymous"],
+        ),
+        (
+            ["workflow", "validate", "--body", "{}", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["validate"],
+            None,
+        ),
+        (["agent", "get", "--agent-id", "agent-1", "--dry-run"], AGENT_OPERATION_IDS["get_authenticated"], AGENT_OPERATION_IDS["get_anonymous"]),
+        (["agent", "stream", "--agent-id", "agent-1", "--body", '{"messages":[]}', "--dry-run"], AGENT_OPERATION_IDS["stream_authenticated"], AGENT_OPERATION_IDS["stream_anonymous"]),
+    ],
+)
+def test_workflow_and_agent_commands_resolve_snapshot_operation_ids(
+    capsys,
+    command_args: list[str],
+    authenticated_operation_id: str,
+    anonymous_operation_id: str,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.delenv("AGENTICFLOW_PUBLIC_API_KEY", raising=False)
+    monkeypatch.setattr(main_module, "_load_profile_value", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_module, "_resolve_token_from_args", lambda *_: None)
+    rc = run_cli(["--spec-file", str(default_spec_path()), *command_args])
+    out = capsys.readouterr().out
 
-    def _fake_invoke_operation(**_kwargs):
-        return (
-            0,
-            {
+    assert rc == 0
+    payload = json.loads(out)
+    expected_operation_id = _resolve_preferred_operation_id(
+        authenticated_operation_id=authenticated_operation_id,
+        anonymous_operation_id=anonymous_operation_id,
+        token=None,
+    )
+    assert payload["operation_id"] == expected_operation_id
+
+
+@pytest.mark.parametrize(
+    ("command_args", "authenticated_operation_id", "anonymous_operation_id"),
+    [
+        (
+            ["workflow", "get", "--workflow-id", "wf-1", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["get_authenticated"],
+            WORKFLOW_OPERATION_IDS["get_anonymous"],
+        ),
+        (
+            ["workflow", "run", "--workflow-id", "wf-1", "--input", "{}", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["run_authenticated"],
+            WORKFLOW_OPERATION_IDS["run_anonymous"],
+        ),
+        (
+            ["workflow", "run-status", "--workflow-run-id", "run-1", "--dry-run"],
+            WORKFLOW_OPERATION_IDS["run_status_authenticated"],
+            WORKFLOW_OPERATION_IDS["run_status_anonymous"],
+        ),
+        (
+            ["agent", "get", "--agent-id", "agent-1", "--dry-run"],
+            AGENT_OPERATION_IDS["get_authenticated"],
+            AGENT_OPERATION_IDS["get_anonymous"],
+        ),
+        (
+            ["agent", "stream", "--agent-id", "agent-1", "--body", '{"messages":[]}', "--dry-run"],
+            AGENT_OPERATION_IDS["stream_authenticated"],
+            AGENT_OPERATION_IDS["stream_anonymous"],
+        ),
+    ],
+)
+def test_workflow_and_agent_commands_prefer_authenticated_operation_ids_when_api_key_present(
+    capsys,
+    command_args: list[str],
+    authenticated_operation_id: str,
+    anonymous_operation_id: str,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENTICFLOW_PUBLIC_API_KEY", "secure-token")
+    rc = run_cli(["--spec-file", str(default_spec_path()), *command_args])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    payload = json.loads(out)
+    expected_operation_id = _resolve_preferred_operation_id(
+        authenticated_operation_id=authenticated_operation_id,
+        anonymous_operation_id=anonymous_operation_id,
+        token="secure-token",
+    )
+    assert payload["operation_id"] == expected_operation_id
+
+
+def test_node_types_search_filters_results(capsys, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(
+        captured,
+        handlers={
+            ("node_types", "search"): lambda query, **kwargs: {
                 "status": 200,
+                "count": 1,
                 "body": [
                     {"name": "LLM Chat", "description": "Model inference"},
-                    {"name": "HTTP Request", "description": "Call URL"},
-                ],
+                ]
+                if query == "llm"
+                else [],
             },
-        )
-
-    monkeypatch.setattr(main_module, "_invoke_operation", _fake_invoke_operation)
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
 
     rc = run_cli(
         [
-            "--spec-file",
-            str(spec_file),
             "node-types",
             "search",
             "--query",
             "llm",
+            "--dry-run",
         ],
     )
     out = capsys.readouterr().out
+    payload = json.loads(out)
 
     assert rc == 0
-    assert '"count": 1' in out
-    assert "LLM Chat" in out
-    assert "HTTP Request" not in out
+    assert captured["resource"] == "node_types"
+    assert captured["resource_method"] == "search"
+    assert captured["kwargs"] == {"query": "llm", "dry_run": True}
+    assert payload["operation_id"] == NODE_TYPE_OPERATION_IDS["list"]
+    assert payload["count"] == 1
+    assert payload["body"] == [{"name": "LLM Chat", "description": "Model inference"}]
 
 
 def test_node_types_dynamic_options_rejects_invalid_input_config(
@@ -690,6 +946,8 @@ def test_node_types_dynamic_options_rejects_invalid_input_config(
             "google-drive",
             "--field-name",
             "folder",
+            "--project-id",
+            "proj-1",
             "--input-config",
             "{bad-json}",
             "--dry-run",
@@ -701,59 +959,76 @@ def test_node_types_dynamic_options_rejects_invalid_input_config(
     assert "Invalid --input-config" in err
 
 
-def test_connections_list_routes_to_expected_operation(tmp_path: Path, monkeypatch) -> None:
-    spec_file = tmp_path / "openapi.json"
-    _write_spec(spec_file)
+def test_connections_list_routes_to_expected_operation(monkeypatch, capsys) -> None:
     captured: dict[str, object] = {}
-
-    def _fake_invoke_operation(**kwargs):
-        captured.update(kwargs)
-        return 0, {"status": 200}
-
-    monkeypatch.setattr(main_module, "_invoke_operation", _fake_invoke_operation)
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
 
     rc = run_cli(
         [
-            "--spec-file",
-            str(spec_file),
             "connections",
             "list",
             "--workspace-id",
             "ws-001",
+            "--project-id",
+            "proj-001",
+            "--limit",
+            "25",
+            "--offset",
+            "5",
             "--dry-run",
         ],
     )
+    out = capsys.readouterr().out
+    payload = json.loads(out)
 
     assert rc == 0
-    assert captured["operation_id"] == CONNECTION_OPERATION_IDS["list"]
-    assert captured["path_params"] == {"workspace_id": "ws-001"}
-    assert captured["dry_run"] is True
+    assert captured["resource"] == "connections"
+    assert captured["resource_method"] == "list"
+    assert payload["operation_id"] == CONNECTION_OPERATION_IDS["list"]
+    assert captured["kwargs"] == {
+        "workspace_id": "ws-001",
+        "project_id": "proj-001",
+        "limit": 25,
+        "offset": 5,
+        "dry_run": True,
+    }
+    assert payload["status"] == 200
 
 
-def test_node_types_list_routes_to_expected_operation(tmp_path: Path, monkeypatch) -> None:
-    spec_file = tmp_path / "openapi.json"
-    _write_spec(spec_file)
+def test_main_hardcoded_operation_ids_exist_in_snapshot() -> None:
+    missing_ids = sorted(_hardcoded_main_operation_ids() - _snapshot_operation_ids())
+    assert not missing_ids, f"Missing hardcoded operation IDs in openapi snapshot: {missing_ids}"
+
+
+def test_node_types_list_routes_to_expected_operation(monkeypatch, capsys) -> None:
     captured: dict[str, object] = {}
-
-    def _fake_invoke_operation(**kwargs):
-        captured.update(kwargs)
-        return 0, {"status": 200}
-
-    monkeypatch.setattr(main_module, "_invoke_operation", _fake_invoke_operation)
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
 
     rc = run_cli(
         [
-            "--spec-file",
-            str(spec_file),
             "node-types",
             "list",
             "--dry-run",
         ],
     )
+    out = capsys.readouterr().out
+    payload = json.loads(out)
 
     assert rc == 0
-    assert captured["operation_id"] == NODE_TYPE_OPERATION_IDS["list"]
-    assert captured["dry_run"] is True
+    assert captured["resource"] == "node_types"
+    assert captured["resource_method"] == "list"
+    assert payload["operation_id"] == NODE_TYPE_OPERATION_IDS["list"]
+    assert payload["status"] == 200
 
 
 def test_run_cli_with_missing_spec_file_fails_cleanly(capsys, tmp_path: Path) -> None:

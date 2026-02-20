@@ -1,15 +1,55 @@
 # AgenticFlow CLI
 
-Agent-native CLI for AgenticFlow public APIs.
+AgenticFlow CLI for AgenticFlow public APIs (anonymous + authenticated).
+
+## Reliable command entrypoint
+
+Use one of these paths in this repository:
+
+- Installed command (packaged): `agenticflow`
+- Local wrapper script: `python scripts/agenticflow_cli.py`
+- Module fallback: `python -m agenticflow_cli.main`
+
+In shared docs, prefer the module/venv path for deterministic resolution:
+
+- `.venv/bin/python -m agenticflow_cli.main`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py`
 
 ## Features
 
-- OpenAPI-backed operation discovery and invocation.
-- High-level commands for workflows, agents, node types, and connections.
-- API-key-based auth profiles (`AGENTICFLOW_PUBLIC_API_KEY`).
-- Preflight checks (`doctor`) and capability catalog (`catalog`).
-- Local guardrails (`policy`) and audit log support.
-- Built-in CLI playbooks (no MCP required).
+- Thin UX wrapper over `agenticflow_sdk` for high-level commands: `workflow`, `agent`, `node-types`, `connections`.
+- OpenAPI-backed discovery helpers: `ops`, `catalog`
+- Low-level OpenAPI transport via `call`
+- `call` resolves explicit `--operation-id` or raw `--method`/`--path` and executes the API request directly (not a high-level wrapper).
+- Preflight checks (`doctor`) and local policy guardrails (`policy`).
+- Built-in playbooks and command guidance.
+
+## API boundary (important)
+
+This CLI should be documented against the bundled curated snapshot only.
+
+High-level commands in this section are SDK-driven. `call` is the only raw transport command that executes an operation directly from the loaded OpenAPI catalog.
+
+- Supported by snapshot-backed commands:
+  - `catalog export --public-only --json`
+  - `ops list --public-only`
+  - `call --method GET --path /v1/health --dry-run`
+  - `call --operation-id get_nodetype_models_v1_node_types__get --dry-run`
+  - `workflow create --workspace-id <workspace_id> --body @workflow.json --dry-run`
+  - `workflow get --workflow-id <id> --dry-run`
+  - `workflow update --workspace-id <workspace_id> --workflow-id <id> --body @workflow-update.json --dry-run`
+  - `workflow run --workflow-id <id> --input '{}' --dry-run`
+  - `workflow run-status --workflow-run-id <id> --dry-run`
+  - `workflow validate --body '{\"nodes\":[]}' --dry-run`
+  - `agent create --body @agent.json --dry-run`
+  - `agent get --agent-id <id> --dry-run`
+  - `agent update --agent-id <id> --body @agent-update.json --dry-run`
+  - `agent stream --agent-id <id> --body '{\"messages\":[]}' --dry-run`
+  - `node-types dynamic-options --name <node_type> --field-name <field> --project-id <project_id> --input-config '{}' --dry-run`
+  - `connections list --workspace-id <workspace_id> --project-id <project_id> --dry-run`
+  - `connections categories --workspace-id <workspace_id> --dry-run`
+
+Admin/internal endpoints are intentionally not included in the bundled snapshot.
 
 ## Install (Python)
 
@@ -22,6 +62,24 @@ Then run:
 ```bash
 agenticflow --help
 ```
+
+## Python SDK
+
+Install the same package and import the SDK module:
+
+```bash
+pip install agenticflow-cli
+```
+
+```python
+from agenticflow_sdk import AgenticFlowSDK
+
+sdk = AgenticFlowSDK(api_key="...")
+health = sdk.call("public.health.get")
+print(health)
+```
+
+See [`docs/sdk.md`](docs/sdk.md) for additional usage examples.
 
 ## Install (from source)
 
@@ -47,6 +105,22 @@ agenticflow auth whoami --json
 ```
 
 `--token` bearer override is intentionally unsupported.
+
+## Release docs smoke checks
+
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py --help`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py catalog export --public-only --json`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py call --method GET --path /v1/health --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py ops show get_workflow_model_v1_workflows__workflow_id__get`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow create --workspace-id ws_demo --body '{\"name\":\"demo\",\"nodes\":[],\"output_mapping\":{},\"input_schema\":{},\"project_id\":\"proj_demo\"}' --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow get --workflow-id wf_demo --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow run --workflow-id wf_demo --input '{}' --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow validate --body '{\"nodes\":[]}' --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent create --body '{\"name\":\"demo\",\"tools\":[],\"project_id\":\"proj_demo\"}' --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent get --agent-id ag_demo --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent stream --agent-id ag_demo --body '{\"messages\":[]}' --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py node-types dynamic-options --name google-drive --field-name folder --project-id proj_demo --input-config '{}' --dry-run`
+- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py connections list --workspace-id ws_demo --project-id proj_demo --dry-run`
 
 ## Node Wrapper (npm)
 

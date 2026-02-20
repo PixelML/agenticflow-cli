@@ -31,7 +31,10 @@ dev = [
 testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agenticflow_cli"]
+packages = [
+  "src/agenticflow_cli",
+  "src/agenticflow_sdk",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/agenticflow_cli/openapi.json" = "agenticflow_cli/openapi.json"
@@ -40,6 +43,7 @@ packages = ["src/agenticflow_cli"]
 [tool.hatch.build.targets.sdist]
 include = [
   "src/agenticflow_cli",
+  "src/agenticflow_sdk",
   "scripts/agenticflow_cli.py",
   "scripts/public_api_smoke_harness.py",
   "tests/unit",

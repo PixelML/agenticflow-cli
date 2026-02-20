@@ -25,6 +25,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      - name: Validate operation-id mappings
+        run: python scripts/check_operation_id_mappings.py
+
       - name: Run unit tests
         run: |
           pytest -q tests/unit
