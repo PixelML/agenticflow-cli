@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agenticflow_cli.main import (
+from agenticflow_cli.operation_ids import (
     AGENT_OPERATION_IDS,
     CONNECTION_OPERATION_IDS,
     NODE_TYPE_OPERATION_IDS,

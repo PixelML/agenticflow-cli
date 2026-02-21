@@ -23,9 +23,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install python package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
       - name: Validate operation-id mappings
         run: |
           python3 scripts/check_operation_id_mappings.py
+
+      - name: Run CLI smoke gate
+        run: |
+          bash scripts/release_readiness.sh --skip-tests --skip-node
 
       - name: Setup Node
         uses: actions/setup-node@v4

@@ -451,6 +451,103 @@ def test_call_non_2xx_status_returns_failure_exit_code(capsys, tmp_path, monkeyp
     assert '"status": 401' in out
 
 
+def test_help_includes_code_command(capsys) -> None:
+    rc = run_cli(["--help"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert " code " in f" {out} "
+
+
+def test_code_search_help_is_available(capsys) -> None:
+    rc = run_cli(["code", "search", "--help"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "usage:" in out
+    assert "--task" in out
+    assert "--node-query" in out
+
+
+def test_code_execute_help_is_available(capsys) -> None:
+    rc = run_cli(["code", "execute", "--help"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "usage:" in out
+    assert "--plan" in out
+    assert "--dry-run" in out
+
+
+def test_code_search_includes_catalog_rank_and_node_types(capsys, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(
+        captured,
+        handlers={
+            ("node_types", "search"): lambda query, **kwargs: {
+                "status": 200,
+                "query": query,
+                "count": 1,
+                "body": [{"name": "llm node"}],
+            },
+        },
+    )
+    monkeypatch.setattr(main_module, "_build_sdk_client", lambda *_: fake_sdk)  # noqa: ARG005
+
+    rc = run_cli(
+        [
+            "code",
+            "search",
+            "--task",
+            "public item",
+            "--node-query",
+            "llm",
+            "--json",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["schema_version"] == "agenticflow.code.search.v1"
+    assert payload["task"] == "public item"
+    assert isinstance(payload["operations"], list)
+    assert payload["node_types"]["query"] == "llm"
+    assert payload["node_types"]["count"] == 1
+    assert payload["node_types"]["body"] == [{"name": "llm node"}]
+    assert captured["resource"] == "node_types"
+    assert captured["resource_method"] == "search"
+
+
+def test_code_execute_runs_plan_steps_with_dry_run_and_policy_checks(monkeypatch, capsys) -> None:
+    captured_calls: list[dict[str, object]] = []
+
+    def _fake_invoke_operation(**kwargs: Any) -> tuple[int, Any]:
+        captured_calls.append(dict(kwargs))
+        operation_id = kwargs.get("operation_id")
+        assert isinstance(operation_id, str)
+        return 0, {"status": 200, "operation_id": operation_id}
+
+    monkeypatch.setattr(main_module, "_invoke_operation", _fake_invoke_operation)
+    plan = json.dumps({"operation_id": "health_check"})
+
+    rc = run_cli(
+        [
+            "code",
+            "execute",
+            "--plan",
+            plan,
+            "--dry-run",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["dry_run"] is True
+    assert payload["operation_id"] == "health_check"
+    assert payload["status"] == 200
+
+
 def test_playbook_list_outputs_topics(capsys) -> None:
     rc = run_cli(["playbook", "list"])
     out = capsys.readouterr().out
@@ -998,6 +1095,74 @@ def test_connections_list_routes_to_expected_operation(monkeypatch, capsys) -> N
         "dry_run": True,
     }
     assert payload["status"] == 200
+
+
+def test_connections_categories_requires_jwt_when_using_api_key_auth(
+    monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.setenv("AGENTICFLOW_PUBLIC_API_KEY", "a9w_fake_api_key")
+
+    rc = run_cli(
+        [
+            "connections",
+            "categories",
+            "--workspace-id",
+            "ws-001",
+            "--dry-run",
+        ],
+    )
+    out = capsys.readouterr()
+
+    assert rc == 1
+    assert "requires a user JWT bearer token" in out.err
+    assert "resource" not in captured
+
+
+def test_connections_categories_routes_when_jwt_is_present(
+    monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.setenv("AGENTICFLOW_PUBLIC_API_KEY", "header.payload.signature")
+
+    rc = run_cli(
+        [
+            "connections",
+            "categories",
+            "--workspace-id",
+            "ws-001",
+            "--limit",
+            "10",
+            "--offset",
+            "2",
+            "--dry-run",
+        ],
+    )
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+
+    assert rc == 0
+    assert captured["resource"] == "connections"
+    assert captured["resource_method"] == "categories"
+    assert payload["operation_id"] == CONNECTION_OPERATION_IDS["categories"]
+    assert captured["kwargs"] == {
+        "workspace_id": "ws-001",
+        "limit": 10,
+        "offset": 2,
+        "dry_run": True,
+    }
 
 
 def test_main_hardcoded_operation_ids_exist_in_snapshot() -> None:

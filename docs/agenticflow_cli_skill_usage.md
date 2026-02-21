@@ -30,6 +30,7 @@ Use this sequence for production-safe automation:
    - `agenticflow ops show <operation_id>`
    - `agenticflow node-types search --query <topic>`
 5. Validate request shape before execution:
+   - `agenticflow code execute --plan /path/to/operation_plan.json --dry-run`
    - `agenticflow call --operation-id ... --dry-run`
    - `agenticflow workflow validate --body @workflow.json --dry-run`
 6. Execute and verify:
@@ -54,9 +55,11 @@ These playbooks are distilled from the internal skill docs into CLI-first execut
   - `ops list --public-only`
   - `ops show <operation_id>`
   - `node-types search --query <q>`
+  - `code search --task <goal>`
 - Execution:
   - `call --operation-id ...`
   - `call --method GET --path /v1/...`
+  - `code execute --plan /path/to/operation_plan.json --dry-run`
   - `workflow create|get|update|run|run-status|validate`
   - `agent create|get|update|stream`
 - Operational safety:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agenticflow-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "AgenticFlow CLI for agent-native API operations."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -45,7 +45,11 @@ include = [
   "src/agenticflow_cli",
   "src/agenticflow_sdk",
   "scripts/agenticflow_cli.py",
+  "scripts/check_operation_id_mappings.py",
+  "scripts/minion_orchestrator.sh",
+  "scripts/minion_worker.sh",
   "scripts/public_api_smoke_harness.py",
+  "scripts/release_readiness.sh",
   "tests/unit",
   "docs",
   "openapi.json",

@@ -4,7 +4,9 @@
     "method": "GET",
     "path": "/metrics",
     "tags": [],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "get_public_v1_agent_templates_public_get",
@@ -13,7 +15,9 @@
     "tags": [
       "agent_templates"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_by_id_v1_agent_templates__agent_template_id__get",
@@ -22,7 +26,9 @@
     "tags": [
       "agent_templates"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_anonymous_by_id_v1_agent_threads_anonymous__thread_id__get",
@@ -31,7 +37,9 @@
     "tags": [
       "agent_threads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_anonymous_messages_v1_agent_threads_anonymous__thread_id__messages_get",
@@ -40,7 +48,9 @@
     "tags": [
       "agent_threads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_anonymous_suggested_replies_v1_agent_threads__thread_id__anonymous_suggested_replies_post",
@@ -49,7 +59,9 @@
     "tags": [
       "agent_threads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "get_anonymous_by_id_v1_agents_anonymous__agent_id__get",
@@ -58,7 +70,9 @@
     "tags": [
       "agents"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "anonymous_ai_sdk_stream_v2_v1_agents_anonymous__agent_id__stream_post",
@@ -67,7 +81,9 @@
     "tags": [
       "agents"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "upload_file_public_v1_agents_anonymous__agent_id__upload_file_post",
@@ -77,7 +93,9 @@
       "agents",
       "agent-uploads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "get_upload_session_public_v1_agents_anonymous__agent_id__upload_sessions__session_id__get",
@@ -87,7 +105,9 @@
       "agents",
       "agent-uploads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "trigger_agent_webhook_delete_v1_agents_webhook__path__trigger_delete",
@@ -97,7 +117,9 @@
       "agents",
       "agent-triggers"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "trigger_agent_webhook_get_v1_agents_webhook__path__trigger_get",
@@ -107,7 +129,9 @@
       "agents",
       "agent-triggers"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "trigger_agent_webhook_post_v1_agents_webhook__path__trigger_post",
@@ -117,7 +141,9 @@
       "agents",
       "agent-triggers"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "trigger_agent_webhook_put_v1_agents_webhook__path__trigger_put",
@@ -127,7 +153,9 @@
       "agents",
       "agent-triggers"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "handle_check_license_v1_app_sumo_check_license_post",
@@ -136,7 +164,9 @@
     "tags": [
       "app_sumo"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "handle_app_sumo_webhook_v1_app_sumo_webhook_post",
@@ -145,7 +175,9 @@
     "tags": [
       "app_sumo"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "login_v1_auth_login_get",
@@ -154,7 +186,9 @@
     "tags": [
       "auth"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "login_callback_v1_auth_login_callback_get",
@@ -163,7 +197,9 @@
     "tags": [
       "auth"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "get_copilot_info_v1_copilot_info_get",
@@ -172,7 +208,9 @@
     "tags": [
       "copilot"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "handle_s3_object_created_v1_drive_s3_events_object_created_post",
@@ -181,7 +219,9 @@
     "tags": [
       "drive"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "handle_s3_object_removed_v1_drive_s3_events_object_removed_post",
@@ -190,7 +230,9 @@
     "tags": [
       "drive"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "complete_upload_v1_drive_uploads_complete_post",
@@ -199,7 +241,9 @@
     "tags": [
       "drive"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "get_dummy_models_v1_dummy__get",
@@ -208,7 +252,9 @@
     "tags": [
       "dummy"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "create_dummy_model_v1_dummy__put",
@@ -217,7 +263,9 @@
     "tags": [
       "dummy"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "send_echo_message_v1_echo__post",
@@ -226,14 +274,18 @@
     "tags": [
       "echo"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "health_check_v1_health_get",
     "method": "GET",
     "path": "/v1/health",
     "tags": [],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_mas_templates_v1_mas_templates__get",
@@ -242,7 +294,9 @@
     "tags": [
       "mas_templates"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_providers_v1_model_providers__get",
@@ -251,7 +305,9 @@
     "tags": [
       "model"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_all_v1_node_type_categories__get",
@@ -260,7 +316,9 @@
     "tags": [
       "node_type_category"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_by_id_v1_node_type_categories__item_id__get",
@@ -269,7 +327,9 @@
     "tags": [
       "node_type_category"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_nodetype_models_v1_node_types__get",
@@ -278,7 +338,9 @@
     "tags": [
       "node_type"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_nodetype_model_by_name_v1_node_types_name__name__get",
@@ -287,7 +349,9 @@
     "tags": [
       "node_type"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "list_subscription_plans_v1_payment_subscription_plans_get",
@@ -296,7 +360,9 @@
     "tags": [
       "payment"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "list_subscription_tiers_v1_payment_subscription_tiers_get",
@@ -305,7 +371,9 @@
     "tags": [
       "payment"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "list_topup_packages_v1_payment_topup_packages_get",
@@ -314,7 +382,9 @@
     "tags": [
       "payment"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "stripe_webhook_v1_payment_webhook_stripe_post",
@@ -323,7 +393,9 @@
     "tags": [
       "payment"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "get_perks_dashboard_v1_perks_get",
@@ -332,7 +404,9 @@
     "tags": [
       "perks"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "list_gift_codes_v1_perks_gift_codes_get",
@@ -341,7 +415,9 @@
     "tags": [
       "perks"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "create_gift_codes_v1_perks_gift_codes_post",
@@ -350,7 +426,9 @@
     "tags": [
       "perks"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "convert_remaining_seats_v1_perks_gift_codes_convert_post",
@@ -359,7 +437,9 @@
     "tags": [
       "perks"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "create_anonymous_input_upload_session_v1_uploads_inputs_anonymous_post",
@@ -368,7 +448,9 @@
     "tags": [
       "uploads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "get_anonymous_upload_session_status_v1_uploads_sessions__session_id__anonymous_get",
@@ -377,7 +459,9 @@
     "tags": [
       "uploads"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "web_scraping_v1_utils_web_scraping_post",
@@ -386,7 +470,9 @@
     "tags": [
       "utils"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   },
   {
     "operation_id": "create_workflow_run_model_anonymous_v1_workflow_runs_anonymous_post",
@@ -395,7 +481,9 @@
     "tags": [
       "workflow_run"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "get_workflow_run_model_anonymous_v1_workflow_runs_anonymous__workflow_run_id__get",
@@ -404,7 +492,9 @@
     "tags": [
       "workflow_run"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "trigger_workflow_webhook_delete_v1_workflow_runs_webhook__path__trigger_delete",
@@ -413,7 +503,9 @@
     "tags": [
       "workflow_run"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "trigger_workflow_webhook_get_v1_workflow_runs_webhook__path__trigger_get",
@@ -422,7 +514,9 @@
     "tags": [
       "workflow_run"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "trigger_workflow_webhook_post_v1_workflow_runs_webhook__path__trigger_post",
@@ -431,7 +525,9 @@
     "tags": [
       "workflow_run"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "trigger_workflow_webhook_put_v1_workflow_runs_webhook__path__trigger_put",
@@ -440,7 +536,9 @@
     "tags": [
       "workflow_run"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "get_workflow_templates_v1_workflow_templates__get",
@@ -449,7 +547,9 @@
     "tags": [
       "workflow_template"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_workflow_templates_by_name_v1_workflow_templates_category__name__get",
@@ -458,7 +558,9 @@
     "tags": [
       "workflow_template"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_workflow_template_by_id_v1_workflow_templates__wt_id__get",
@@ -467,7 +569,9 @@
     "tags": [
       "workflow_template"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_anonymous_model_v1_workflows_anonymous__workflow_id__get",
@@ -476,7 +580,9 @@
     "tags": [
       "workflow"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "validate_create_workflow_model_v1_workflows_utils_validate_create_workflow_model_post",
@@ -485,7 +591,9 @@
     "tags": [
       "workflow"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_public_mas_info_v1_workforce_public__public_key__info_get",
@@ -494,7 +602,9 @@
     "tags": [
       "public"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "run_public_mas_v1_workforce_public__public_key__run_post",
@@ -503,7 +613,9 @@
     "tags": [
       "public"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
   },
   {
     "operation_id": "get_public_thread_info_v1_workforce_public__public_key__threads__thread_id__get",
@@ -512,7 +624,9 @@
     "tags": [
       "public"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_public_thread_events_v1_workforce_public__public_key__threads__thread_id__events_get",
@@ -521,7 +635,9 @@
     "tags": [
       "public"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
   },
   {
     "operation_id": "get_supported_node_types_v1_workspaces__workspace_id__workforce_node_types_get",
@@ -530,6 +646,140 @@
     "tags": [
       "workforces"
     ],
-    "security_len": 0
+    "security_len": 0,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+  },
+  {
+    "operation_id": "ai_sdk_stream_v2_v1_agents__agent_id__stream_post",
+    "method": "POST",
+    "path": "/v1/agents/{agent_id}/stream",
+    "tags": [
+      "agents"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+  },
+  {
+    "operation_id": "create_v1_agents__post",
+    "method": "POST",
+    "path": "/v1/agents/",
+    "tags": [
+      "agents"
+    ],
+    "security_len": 1,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
+  },
+  {
+    "operation_id": "create_workflow_model_v1_workspaces__workspace_id__workflows_post",
+    "method": "POST",
+    "path": "/v1/workspaces/{workspace_id}/workflows",
+    "tags": [
+      "workflows"
+    ],
+    "security_len": 1,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
+  },
+  {
+    "operation_id": "create_workflow_run_model_v1_workflow_runs__post",
+    "method": "POST",
+    "path": "/v1/workflow_runs/",
+    "tags": [
+      "workflow_run"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+  },
+  {
+    "operation_id": "get_app_connection_categories_v1_workspaces__workspace_id__app_connections_categories_get",
+    "method": "GET",
+    "path": "/v1/workspaces/{workspace_id}/app_connections/categories",
+    "tags": [
+      "app_connections"
+    ],
+    "security_len": 1,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
+  },
+  {
+    "operation_id": "get_app_connections_v1_workspaces__workspace_id__app_connections__get",
+    "method": "GET",
+    "path": "/v1/workspaces/{workspace_id}/app_connections/",
+    "tags": [
+      "app_connections"
+    ],
+    "security_len": 1,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
+  },
+  {
+    "operation_id": "get_by_id_v1_agents__agent_id__get",
+    "method": "GET",
+    "path": "/v1/agents/{agent_id}",
+    "tags": [
+      "agents"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+  },
+  {
+    "operation_id": "get_dynamic_options_v1_node_types_name__node_type_name__dynamic_options_post",
+    "method": "POST",
+    "path": "/v1/node_types/name/{node_type_name}/dynamic_options",
+    "tags": [
+      "node_type"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-blocked-policy",
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+  },
+  {
+    "operation_id": "get_workflow_model_v1_workflows__workflow_id__get",
+    "method": "GET",
+    "path": "/v1/workflows/{workflow_id}",
+    "tags": [
+      "workflow"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+  },
+  {
+    "operation_id": "get_workflow_run_model_v1_workflow_runs__workflow_run_id__get",
+    "method": "GET",
+    "path": "/v1/workflow_runs/{workflow_run_id}",
+    "tags": [
+      "workflow_run"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-executed",
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+  },
+  {
+    "operation_id": "update_v1_agents__agent_id__put",
+    "method": "PUT",
+    "path": "/v1/agents/{agent_id}",
+    "tags": [
+      "agents"
+    ],
+    "security_len": 1,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
+  },
+  {
+    "operation_id": "update_workflow_model_v1_workspaces__workspace_id__workflows__workflow_id__put",
+    "method": "PUT",
+    "path": "/v1/workspaces/{workspace_id}/workflows/{workflow_id}",
+    "tags": [
+      "workflows"
+    ],
+    "security_len": 1,
+    "support_scope": "out-of-scope",
+    "support_rationale": "Internal/uncovered endpoint or not part of supported CLI public surface."
   }
 ]

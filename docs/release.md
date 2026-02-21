@@ -1,5 +1,13 @@
 # Release Guide
 
+## Preflight Gate (required)
+
+Run before creating tags:
+
+```bash
+bash scripts/release_readiness.sh
+```
+
 ## Python (PyPI + GitHub Release)
 
 1. Bump `pyproject.toml` version.
@@ -19,3 +27,4 @@ Notes:
 - Node workflow syncs `package.json` version from tag at release time.
 - Python publish requires `PYPI_API_TOKEN` secret.
 - npm publish uses Trusted Publishing (OIDC), no `NPM_TOKEN` needed.
+- If Node is unavailable locally, run `bash scripts/release_readiness.sh --skip-node` and rely on CI for wrapper verification.

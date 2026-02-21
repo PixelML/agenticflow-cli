@@ -19,6 +19,7 @@ In shared docs, prefer the module/venv path for deterministic resolution:
 
 - Thin UX wrapper over `agenticflow_sdk` for high-level commands: `workflow`, `agent`, `node-types`, `connections`.
 - OpenAPI-backed discovery helpers: `ops`, `catalog`
+- Agent-native execution path: `code search`, `code execute`
 - Low-level OpenAPI transport via `call`
 - `call` resolves explicit `--operation-id` or raw `--method`/`--path` and executes the API request directly (not a high-level wrapper).
 - Preflight checks (`doctor`) and local policy guardrails (`policy`).
@@ -47,7 +48,6 @@ High-level commands in this section are SDK-driven. `call` is the only raw trans
   - `agent stream --agent-id <id> --body '{\"messages\":[]}' --dry-run`
   - `node-types dynamic-options --name <node_type> --field-name <field> --project-id <project_id> --input-config '{}' --dry-run`
   - `connections list --workspace-id <workspace_id> --project-id <project_id> --dry-run`
-  - `connections categories --workspace-id <workspace_id> --dry-run`
 
 Admin/internal endpoints are intentionally not included in the bundled snapshot.
 
@@ -106,6 +106,10 @@ agenticflow auth whoami --json
 
 `--token` bearer override is intentionally unsupported.
 
+Compatibility note:
+- `connections categories` maps to a server endpoint that currently requires user JWT bearer auth.
+- With API-key-only auth, use `connections list` and `node-types` discovery flows.
+
 ## Release docs smoke checks
 
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py --help`
@@ -122,6 +126,24 @@ agenticflow auth whoami --json
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py node-types dynamic-options --name google-drive --field-name folder --project-id proj_demo --input-config '{}' --dry-run`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py connections list --workspace-id ws_demo --project-id proj_demo --dry-run`
 
+## Release Readiness Gate
+
+Run the full local gate before tagging a release:
+
+```bash
+bash scripts/release_readiness.sh
+```
+
+This validates operation-id mappings, runs unit tests, executes CLI dry-run smoke checks, and verifies the Node wrapper.
+
+## Unattended Minion Flow
+
+This repository includes a tmux-based one-shot multi-agent workflow for `gpt-5.3-codex-spark`.
+
+- Runbook: `docs/minion_runbook.md`
+- Launcher: `scripts/minion_orchestrator.sh`
+- Worker runner: `scripts/minion_worker.sh`
+
 ## Node Wrapper (npm)
 
 This repo also ships a thin npm wrapper package (`@pixelml/agenticflow-cli`) that invokes the Python CLI.
@@ -131,7 +153,9 @@ npm i -g @pixelml/agenticflow-cli
 agenticflow --help
 ```
 
-The wrapper requires Python 3.10+ with `agenticflow-cli` installed or importable.
+The wrapper requires:
+- Node.js 18+
+- Python 3.10+ with `agenticflow-cli` installed or importable.
 
 ## Release Tags
 

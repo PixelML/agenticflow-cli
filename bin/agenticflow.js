@@ -4,12 +4,33 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
+function parseNodeMajorVersion() {
+  const raw = process.versions && process.versions.node ? process.versions.node : "";
+  const major = parseInt(String(raw).split(".")[0], 10);
+  if (Number.isNaN(major)) {
+    return null;
+  }
+  return major;
+}
+
+const majorVersion = parseNodeMajorVersion();
+if (majorVersion === null || majorVersion < 18) {
+  const rendered = process.versions && process.versions.node ? process.versions.node : "unknown";
+  console.error(
+    "[agenticflow wrapper] Node.js >= 18 is required. " +
+      "Current runtime: " +
+      rendered +
+      ". " +
+      "Install a newer Node version and rerun."
+  );
+  process.exit(1);
+}
+
 const cliArgs = process.argv.slice(2);
 const repoRoot = path.resolve(__dirname, "..");
 const localVenvPython = path.join(repoRoot, ".venv", "bin", "python");
 
 const candidates = [
-  { cmd: "agenticflow", args: cliArgs, env: { AGENTICFLOW_NODE_WRAPPER: "1" } },
   ...(fs.existsSync(localVenvPython)
     ? [{ cmd: localVenvPython, args: ["-m", "agenticflow_cli", ...cliArgs] }]
     : []),
@@ -32,7 +53,7 @@ for (const candidate of candidates) {
     process.exit(1);
   }
 
-  process.exit(result.status ?? 0);
+  process.exit(typeof result.status === "number" ? result.status : 0);
 }
 
 console.error(

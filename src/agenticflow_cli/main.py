@@ -13,20 +13,26 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
+from agenticflow_cli import policy as policy_module
 from agenticflow_cli.client import (
     build_request_spec,
     load_json_payload,
     parse_key_value_pairs,
     resolve_bearer_token,
 )
-from agenticflow_cli import policy as policy_module
+from agenticflow_cli.operation_ids import (
+    AGENT_OPERATION_IDS,
+    CONNECTION_OPERATION_IDS,
+    NODE_TYPE_OPERATION_IDS,
+    WORKFLOW_OPERATION_IDS,
+)
 from agenticflow_cli.playbooks import get_playbook, list_playbooks
 from agenticflow_cli.spec import (
     OperationRegistry,
     default_spec_path,
     load_openapi_spec,
 )
-from agenticflow_sdk import AgenticFlowSDK
+from agenticflow_sdk.client import AgenticFlowSDK
 
 DEFAULT_BASE_URL = "https://api.agenticflow.ai/"
 HTTP_OK_MAX = 399
@@ -40,39 +46,9 @@ AUTH_PROFILE_KEY_BASE_URL = "base_url"
 DOCTOR_SCHEMA_VERSION = "agenticflow.doctor.v1"
 CATALOG_EXPORT_SCHEMA_VERSION = "agenticflow.catalog.export.v1"
 CATALOG_RANK_SCHEMA_VERSION = "agenticflow.catalog.rank.v1"
+CODE_SEARCH_SCHEMA_VERSION = "agenticflow.code.search.v1"
+CODE_EXECUTE_SCHEMA_VERSION = "agenticflow.code.execute.v1"
 CLI_CONFIG_DIR_ENV_VAR = "AGENTICFLOW_CLI_DIR"
-
-WORKFLOW_OPERATION_IDS = {
-    "create": "create_workflow_model_v1_workspaces__workspace_id__workflows_post",
-    "get_authenticated": "get_workflow_model_v1_workflows__workflow_id__get",
-    "get_anonymous": "get_anonymous_model_v1_workflows_anonymous__workflow_id__get",
-    "update": "update_workflow_model_v1_workspaces__workspace_id__workflows__workflow_id__put",
-    "run_authenticated": "create_workflow_run_model_v1_workflow_runs__post",
-    "run_anonymous": "create_workflow_run_model_anonymous_v1_workflow_runs_anonymous_post",
-    "run_status_authenticated": "get_workflow_run_model_v1_workflow_runs__workflow_run_id__get",
-    "run_status_anonymous": "get_workflow_run_model_anonymous_v1_workflow_runs_anonymous__workflow_run_id__get",
-    "validate": "validate_create_workflow_model_v1_workflows_utils_validate_create_workflow_model_post",
-}
-
-AGENT_OPERATION_IDS = {
-    "create": "create_v1_agents__post",
-    "get_authenticated": "get_by_id_v1_agents__agent_id__get",
-    "get_anonymous": "get_anonymous_by_id_v1_agents_anonymous__agent_id__get",
-    "update": "update_v1_agents__agent_id__put",
-    "stream_authenticated": "ai_sdk_stream_v2_v1_agents__agent_id__stream_post",
-    "stream_anonymous": "anonymous_ai_sdk_stream_v2_v1_agents_anonymous__agent_id__stream_post",
-}
-
-NODE_TYPE_OPERATION_IDS = {
-    "list": "get_nodetype_models_v1_node_types__get",
-    "get": "get_nodetype_model_by_name_v1_node_types_name__name__get",
-    "dynamic_options": "get_dynamic_options_v1_node_types_name__node_type_name__dynamic_options_post",
-}
-
-CONNECTION_OPERATION_IDS = {
-    "list": "get_app_connections_v1_workspaces__workspace_id__app_connections__get",
-    "categories": "get_app_connection_categories_v1_workspaces__workspace_id__app_connections_categories_get",
-}
 
 
 def _add_common_call_flags(parser: argparse.ArgumentParser) -> None:
@@ -355,6 +331,60 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Emit machine-readable JSON output.",
     )
+
+    code_parser = subparsers.add_parser(
+        "code", help="Agent-native discovery and execution workflows."
+    )
+    code_sub = code_parser.add_subparsers(dest="code_command", required=True)
+
+    code_search = code_sub.add_parser(
+        "search", help="Discover capabilities for a task intent."
+    )
+    code_search.add_argument("--task", required=True, help="Task description to match.")
+    code_search.add_argument(
+        "--public-only",
+        action="store_true",
+        help="Search only public operations.",
+    )
+    code_search.add_argument(
+        "--max-cost",
+        type=float,
+        default=None,
+        help="Filter out candidates whose estimated cost exceeds this value.",
+    )
+    code_search.add_argument(
+        "--max-latency-ms",
+        type=float,
+        default=None,
+        help="Filter out candidates whose estimated latency exceeds this value.",
+    )
+    code_search.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit number of ranked operation matches to show.",
+    )
+    code_search.add_argument(
+        "--node-query",
+        default=None,
+        help="Optional node-type search query to include with discovery results.",
+    )
+    code_search.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON output.",
+    )
+    _add_common_call_flags(code_search)
+
+    code_execute = code_sub.add_parser(
+        "execute", help="Execute an operation plan with policy checks."
+    )
+    code_execute.add_argument(
+        "--plan",
+        required=True,
+        help="Operation plan JSON string or @/path/to/plan.json",
+    )
+    _add_common_call_flags(code_execute)
 
     workflow_parser = subparsers.add_parser("workflow", help="Workflow lifecycle commands.")
     workflow_sub = workflow_parser.add_subparsers(dest="workflow_command", required=True)
@@ -1130,6 +1160,13 @@ def _resolve_token_from_args(args: argparse.Namespace) -> str | None:
     if profile_api_key is not None:
         env[AUTH_ENV_API_KEY] = profile_api_key
     return resolve_bearer_token(None, env)
+
+
+def _looks_like_jwt(token: str | None) -> bool:
+    if not isinstance(token, str):
+        return False
+    parts = token.split(".")
+    return len(parts) == 3 and all(part.strip() for part in parts)
 
 
 def _build_sdk_client(base_url: str, token: str | None) -> AgenticFlowSDK:
@@ -1928,6 +1965,341 @@ def _run_node_types_search(
     return rc
 
 
+def _coerce_plan_mapping(value: Any, label: str) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise RuntimeError(f"Invalid {label}: expected an object.")
+    mapping: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise RuntimeError(f"Invalid {label}: keys must be non-empty strings.")
+        mapping[str(raw_key)] = str(raw_value)
+    return mapping
+
+
+def _coerce_plan_bool(value: Any, label: str) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise RuntimeError(f"Invalid {label}: expected a boolean.")
+
+
+def _coerce_plan_float(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid {label}: {value}") from exc
+    raise RuntimeError(f"Invalid {label}: expected a number.")
+
+
+def _coerce_plan_body(value: Any, label: str) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return load_json_payload(value)
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid {label}: {exc}")
+    return value
+
+
+def _load_code_plan(raw_plan: str) -> list[Mapping[str, Any]]:
+    payload = load_json_payload(raw_plan)
+    if isinstance(payload, list):
+        steps = payload
+    elif isinstance(payload, Mapping):
+        steps_value = payload.get("steps")
+        if steps_value is None:
+            steps = [payload]
+        elif isinstance(steps_value, list):
+            steps = steps_value
+            if not steps:
+                raise RuntimeError("`plan.steps` contains no steps.")
+        else:
+            raise RuntimeError(
+                "`plan` must be a JSON object with a 'steps' list or a single step object."
+            )
+    else:
+        raise RuntimeError(
+            "`plan` must be a JSON array of step objects or a single step object."
+        )
+
+    if not steps:
+        raise RuntimeError("`plan` contains no steps.")
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, Mapping):
+            raise RuntimeError(f"Plan step #{index} must be a JSON object.")
+    return steps
+
+
+def _normalize_code_plan_step(
+    step: Mapping[str, Any],
+    step_index: int,
+    command_dry_run: bool,
+    command_estimated_cost: float | None,
+) -> dict[str, Any]:
+    operation_id = step.get("operation_id")
+    method = step.get("method")
+    path = step.get("path")
+
+    if operation_id is not None and not isinstance(operation_id, str):
+        raise RuntimeError(f"Step #{step_index}: operation_id must be a string.")
+    if method is not None and not isinstance(method, str):
+        raise RuntimeError(
+            f"Step #{step_index}: method must be a string when provided."
+        )
+    if path is not None and not isinstance(path, str):
+        raise RuntimeError(f"Step #{step_index}: path must be a string when provided.")
+    if method is not None and path is None:
+        raise RuntimeError(f"Step #{step_index}: method requires path.")
+    if path is not None and method is None:
+        raise RuntimeError(f"Step #{step_index}: path requires method.")
+
+    if operation_id is None and (method is None or path is None):
+        raise RuntimeError(
+            f"Step #{step_index}: provide operation_id or both method and path."
+        )
+    if operation_id is not None and (method is not None or path is not None):
+        raise RuntimeError(
+            f"Step #{step_index}: use operation_id OR method+path, not both."
+        )
+
+    path_params = _coerce_plan_mapping(
+        step.get("path_params"), f"step #{step_index} path_params"
+    )
+    query_params = _coerce_plan_mapping(
+        step.get("query_params", step.get("query")),
+        f"step #{step_index} query_params",
+    )
+    headers = _coerce_plan_mapping(
+        step.get("headers"), f"step #{step_index} headers"
+    )
+    body = _coerce_plan_body(step.get("body"), f"step #{step_index} body")
+
+    step_dry_run = _coerce_plan_bool(step.get("dry_run"), f"step #{step_index} dry_run")
+    if step_dry_run is None:
+        step_dry_run = command_dry_run
+
+    step_estimated_cost = _coerce_plan_float(
+        step.get("estimated_cost"), f"step #{step_index} estimated_cost"
+    )
+    if step_estimated_cost is None:
+        step_estimated_cost = command_estimated_cost
+
+    return {
+        "operation_id": operation_id,
+        "method": method.upper() if isinstance(method, str) else None,
+        "path": path,
+        "path_params": path_params,
+        "query_params": query_params,
+        "headers": headers,
+        "body": body,
+        "dry_run": step_dry_run,
+        "estimated_cost": step_estimated_cost,
+    }
+
+
+def _run_code_search_node_types(
+    registry: OperationRegistry,
+    sdk_client: AgenticFlowSDK,
+    *,
+    query: str,
+    estimated_cost: float | None,
+    dry_run: bool,
+) -> tuple[int, Any]:
+    operation_id = NODE_TYPE_OPERATION_IDS["list"]
+    if registry.get_operation_by_id(operation_id) is None:
+        return (
+            1,
+            {
+                "status": 404,
+                "error": f"Missing required operation_id in spec: {operation_id}",
+                "query": query,
+                "count": 0,
+                "body": [],
+            },
+        )
+
+    return _invoke_sdk_operation(
+        registry=registry,
+        operation_id=operation_id,
+        invoke=lambda current_dry_run: sdk_client.node_types.search(
+            query=query,
+            dry_run=current_dry_run,
+        ),
+        estimated_cost=estimated_cost,
+        dry_run=dry_run,
+        print_output=False,
+    )
+
+
+def _run_code_search_command(
+    args: argparse.Namespace,
+    registry: OperationRegistry,
+    sdk_client: AgenticFlowSDK,
+) -> int:
+    ranked = _rank_catalog_operations(
+        _catalog_operations(registry, public_only=args.public_only),
+        task=args.task,
+        max_cost=args.max_cost,
+        max_latency_ms=args.max_latency_ms,
+    )
+
+    if args.limit is not None and args.limit > 0:
+        ranked = ranked[: args.limit]
+
+    ranked_with_details: list[dict[str, Any]] = []
+    for item in ranked:
+        operation = registry.get_operation_by_id(item["operation_id"])
+        detail = _serialize_dataclass_like(getattr(operation, "raw", operation))
+        ranked_with_details.append({**item, "details": detail})
+
+    node_types_payload: Any = None
+    if args.node_query:
+        _, node_types_payload = _run_code_search_node_types(
+            registry=registry,
+            sdk_client=sdk_client,
+            query=args.node_query,
+            estimated_cost=args.estimated_cost,
+            dry_run=args.dry_run,
+        )
+
+    if args.json:
+        payload = {
+            "schema_version": CODE_SEARCH_SCHEMA_VERSION,
+            "task": args.task,
+            "public_only": args.public_only,
+            "count": len(ranked_with_details),
+            "max_cost": args.max_cost,
+            "max_latency_ms": args.max_latency_ms,
+            "operations": ranked_with_details,
+        }
+        if args.limit is not None:
+            payload["limit"] = args.limit
+        if args.node_query is not None:
+            payload["node_query"] = args.node_query
+            payload["node_types"] = node_types_payload
+        _print_json(payload)
+        return 0
+
+    print(f"Task: {args.task}")
+    if not ranked_with_details:
+        print("No operations matched.")
+        return 0
+
+    print(f"Matches: {len(ranked_with_details)}")
+    for index, item in enumerate(ranked_with_details, start=1):
+        operation_id = item["operation_id"]
+        score = item["score"]
+        relevance = item["relevance"]
+        cost = item["cost"]
+        latency = item["estimated_latency_ms"]
+        print(
+            f"{index:>3}. {operation_id} score={score} relevance={relevance} "
+            f"cost={cost} latency={latency}ms"
+        )
+
+    if args.node_query is not None:
+        if not isinstance(node_types_payload, Mapping):
+            print("Node-type search is unavailable for this snapshot.")
+            return 0
+        print(f"Node-type query: {args.node_query}")
+        node_count = node_types_payload.get("count")
+        print(f"Node-type matches: {node_count}")
+        nodes = node_types_payload.get("body")
+        if isinstance(nodes, list):
+            if args.limit is not None and args.limit > 0:
+                nodes = nodes[: args.limit]
+            for index, node in enumerate(nodes, start=1):
+                node_name = node.get("name") if isinstance(node, Mapping) else None
+                print(f"  {index:>2}. {node_name}")
+
+    return 0
+
+
+def _run_code_execute_command(
+    args: argparse.Namespace,
+    registry: OperationRegistry,
+    base_url: str,
+    token: str | None,
+) -> int:
+    try:
+        steps = _load_code_plan(args.plan)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    normalized_steps = []
+    for index, step in enumerate(steps, start=1):
+        try:
+            normalized_steps.append(
+                _normalize_code_plan_step(
+                    step,
+                    step_index=index,
+                    command_dry_run=args.dry_run,
+                    command_estimated_cost=args.estimated_cost,
+                )
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    executed: list[dict[str, Any]] = []
+    final_rc = 0
+    for index, step in enumerate(normalized_steps, start=1):
+        rc, payload = _invoke_operation(
+            registry=registry,
+            base_url=base_url,
+            token=token,
+            operation_id=step["operation_id"],
+            method=step["method"],
+            path=step["path"],
+            path_params=step["path_params"],
+            query_params=step["query_params"],
+            headers=step["headers"],
+            body=step["body"],
+            estimated_cost=step["estimated_cost"],
+            dry_run=bool(step["dry_run"]),
+            print_output=False,
+        )
+        normalized_payload = payload
+        if not isinstance(payload, Mapping):
+            normalized_payload = {"value": payload}
+        executed.append(
+            {
+                "step": index,
+                "operation_id": step["operation_id"],
+                "method": step["method"],
+                "path": step["path"],
+                "dry_run": bool(step["dry_run"]),
+                "status": rc,
+                "result": normalized_payload,
+            }
+        )
+        final_rc = max(final_rc, rc)
+        if rc != 0:
+            break
+
+    if len(executed) == 1:
+        _print_json(executed[0]["result"])
+        return final_rc
+
+    payload = {
+        "schema_version": CODE_EXECUTE_SCHEMA_VERSION,
+        "status": final_rc,
+        "steps": executed,
+    }
+    _print_json(payload)
+    return final_rc
+
+
 def _run_node_types_command(
     args: argparse.Namespace,
     registry: OperationRegistry,
@@ -2005,6 +2377,7 @@ def _run_connections_command(
     args: argparse.Namespace,
     registry: OperationRegistry,
     sdk_client: AgenticFlowSDK,
+    token: str | None,
 ) -> int:
     if args.connections_command == "list":
         rc, _ = _invoke_sdk_operation(
@@ -2023,6 +2396,13 @@ def _run_connections_command(
         return rc
 
     if args.connections_command == "categories":
+        if not _looks_like_jwt(token):
+            print(
+                "connections categories requires a user JWT bearer token on the API "
+                "server. API keys are not supported for this endpoint.",
+                file=sys.stderr,
+            )
+            return 1
         rc, _ = _invoke_sdk_operation(
             registry=registry,
             operation_id=CONNECTION_OPERATION_IDS["categories"],
@@ -2076,6 +2456,14 @@ def run_cli(argv: list[str] | None = None) -> int:
 
     if args.command == "call":
         return _run_call_command(args, registry, base_url, token)
+    if args.command == "code":
+        if args.code_command == "search":
+            sdk_client = _build_sdk_client(base_url, token)
+            return _run_code_search_command(args, registry, sdk_client)
+        if args.code_command == "execute":
+            return _run_code_execute_command(args, registry, base_url, token)
+        print(f"Unknown code command: {args.code_command}", file=sys.stderr)
+        return 1
     if args.command not in {"workflow", "agent", "node-types", "connections"}:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1
@@ -2089,7 +2477,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.command == "node-types":
         return _run_node_types_command(args, registry, sdk_client)
     if args.command == "connections":
-        return _run_connections_command(args, registry, sdk_client)
+        return _run_connections_command(args, registry, sdk_client, token)
 
 
 

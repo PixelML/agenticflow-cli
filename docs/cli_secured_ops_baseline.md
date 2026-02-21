@@ -13,6 +13,38 @@ Use a curated bundled snapshot:
 - Add authenticated operations required by current CLI wrappers.
 - Exclude admin/internal endpoints from the bundled snapshot.
 
+## Declared public API vs CLI-supported coverage baseline
+
+- **Declared public API** is the bundled snapshot contract:
+  - `71` operations total (`59` public/no-security + `12` authenticated wrapper-backed operations).
+  - Exposed through `catalog`/`ops` and reflected in CLI command docs.
+- **CLI-supported coverage baseline** is the same operation set, with one `support_scope` per operation used by harness and release review.
+
+## Support matrix (single source of truth)
+
+The support scope baseline is stored in `src/agenticflow_cli/public_ops_manifest.json` on each operation record:
+
+- `support_scope`: one of `executed`, `blocked-by-policy`, or `unsupported/out-of-scope`.
+- `support_rationale`: operator-facing reason this operation is in its class.
+
+Current baseline totals:
+
+- `34` `executed`
+- `17` `blocked-by-policy`
+- `20` `unsupported/out-of-scope`
+
+Policy semantics:
+
+- `executed`: safe read/query/validation/public wrappers that coverage attempts as live API calls.
+- `blocked-by-policy`: command intent exists, but execution is intentionally blocked in harness for safety/policy.
+- `unsupported/out-of-scope`: intentionally not part of the CLI-supported public surface (internal, unsupported workflow, or unimplemented wrapper contract).
+
+## Release interpretation of support rows
+
+- `executed`: release as supported/available behavior. These operations are expected to remain runnable in public smoke checks.
+- `blocked-by-policy`: keep listed as “declared public API, unavailable by policy” in release notes and include policy rationale.
+- `unsupported/out-of-scope`: do not promote as supported features; these are intentionally outside the CLI contract even if visible in discovery.
+
 ## Added authenticated operation IDs
 
 - `create_workflow_model_v1_workspaces__workspace_id__workflows_post`

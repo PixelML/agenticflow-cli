@@ -1,7 +1,6 @@
 """Public AgenticFlow SDK entrypoint."""
 
 from .client import AgenticFlowSDK
-from .core import AgenticFlowSDK as CoreAgenticFlowSDK
 from .exceptions import (
     APIError,
     AuthenticationError,
@@ -16,9 +15,14 @@ from .exceptions import (
 )
 from .types import APIResponse
 
+CoreAgenticFlowSDK = None
+try:
+    from .core import AgenticFlowSDK as CoreAgenticFlowSDK
+except Exception:  # pragma: no cover - optional dependency path.
+    CoreAgenticFlowSDK = None
+
 __all__ = [
     "AgenticFlowSDK",
-    "CoreAgenticFlowSDK",
     "APIError",
     "APIResponse",
     "AuthenticationError",
@@ -31,3 +35,6 @@ __all__ = [
     "ServerError",
     "ValidationError",
 ]
+
+if CoreAgenticFlowSDK is not None:
+    __all__.append("CoreAgenticFlowSDK")
