@@ -27,6 +27,7 @@ if str(SRC_DIR) not in sys.path:
 from agenticflow_sdk.client import AgenticFlowSDK
 from agenticflow_cli.operation_ids import (
     AGENT_OPERATION_IDS,
+    COVERAGE_WRAPPER_ALIASES,
     CONNECTION_OPERATION_IDS,
     NODE_TYPE_OPERATION_IDS,
     WORKFLOW_OPERATION_IDS,
@@ -293,14 +294,20 @@ def _load_manifest(path: Path) -> list[dict[str, Any]]:
 
 def _collect_wrapper_sources() -> dict[str, list[str]]:
     source_map: dict[str, list[str]] = {}
-    for alias, operation_id in WORKFLOW_OPERATION_IDS.items():
-        source_map.setdefault(operation_id, []).append(f"cli.workflow:{alias}")
-    for alias, operation_id in AGENT_OPERATION_IDS.items():
-        source_map.setdefault(operation_id, []).append(f"cli.agent:{alias}")
-    for alias, operation_id in NODE_TYPE_OPERATION_IDS.items():
-        source_map.setdefault(operation_id, []).append(f"cli.node_type:{alias}")
-    for alias, operation_id in CONNECTION_OPERATION_IDS.items():
-        source_map.setdefault(operation_id, []).append(f"cli.connection:{alias}")
+    buckets = {
+        "workflow": WORKFLOW_OPERATION_IDS,
+        "agent": AGENT_OPERATION_IDS,
+        "node_type": NODE_TYPE_OPERATION_IDS,
+        "connection": CONNECTION_OPERATION_IDS,
+    }
+    for namespace, aliases in COVERAGE_WRAPPER_ALIASES.items():
+        bucket = buckets.get(namespace, {})
+        for alias in aliases:
+            operation_id = bucket.get(alias)
+            if isinstance(operation_id, str) and operation_id:
+                source_map.setdefault(operation_id, []).append(
+                    f"cli.{namespace}:{alias}"
+                )
     return source_map
 
 

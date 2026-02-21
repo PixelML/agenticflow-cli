@@ -389,6 +389,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     workflow_parser = subparsers.add_parser("workflow", help="Workflow lifecycle commands.")
     workflow_sub = workflow_parser.add_subparsers(dest="workflow_command", required=True)
 
+    workflow_list = workflow_sub.add_parser("list", help="List workflows.")
+    workflow_list.add_argument("--workspace-id", required=True)
+    workflow_list.add_argument("--project-id", required=True)
+    workflow_list.add_argument("--limit", type=int, default=None)
+    workflow_list.add_argument("--offset", type=int, default=None)
+    _add_common_call_flags(workflow_list)
+
     workflow_create = workflow_sub.add_parser("create", help="Create a workflow.")
     workflow_create.add_argument("--workspace-id", required=True)
     workflow_create.add_argument(
@@ -445,6 +452,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     agent_parser = subparsers.add_parser("agent", help="Agent lifecycle commands.")
     agent_sub = agent_parser.add_subparsers(dest="agent_command", required=True)
+
+    agent_list = agent_sub.add_parser("list", help="List agents.")
+    agent_list.add_argument("--workspace-id", required=True)
+    agent_list.add_argument("--project-id", required=True)
+    agent_list.add_argument("--limit", type=int, default=None)
+    agent_list.add_argument("--offset", type=int, default=None)
+    _add_common_call_flags(agent_list)
 
     agent_create = agent_sub.add_parser("create", help="Create an agent.")
     agent_create.add_argument("--body", required=True, help="JSON payload or @/path/to/agent.json")
@@ -1717,6 +1731,22 @@ def _run_workflow_command(
     sdk_client: AgenticFlowSDK,
     token: str | None,
 ) -> int:
+    if args.workflow_command == "list":
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=WORKFLOW_OPERATION_IDS["list"],
+            invoke=lambda dry_run: sdk_client.workflows.list(
+                workspace_id=args.workspace_id,
+                project_id=args.project_id,
+                limit=args.limit,
+                offset=args.offset,
+                dry_run=dry_run,
+            ),
+            estimated_cost=args.estimated_cost,
+            dry_run=args.dry_run,
+        )
+        return rc
+
     if args.workflow_command == "create":
         try:
             body = _load_body(args.body)
@@ -1855,6 +1885,22 @@ def _run_agent_command(
     sdk_client: AgenticFlowSDK,
     token: str | None,
 ) -> int:
+    if args.agent_command == "list":
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=AGENT_OPERATION_IDS["list"],
+            invoke=lambda dry_run: sdk_client.agents.list(
+                workspace_id=args.workspace_id,
+                project_id=args.project_id,
+                limit=args.limit,
+                offset=args.offset,
+                dry_run=dry_run,
+            ),
+            estimated_cost=args.estimated_cost,
+            dry_run=args.dry_run,
+        )
+        return rc
+
     if args.agent_command == "create":
         try:
             body = _load_body(args.body)

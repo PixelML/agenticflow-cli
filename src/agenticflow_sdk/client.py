@@ -42,6 +42,16 @@ _KNOWN_OPERATIONS: dict[str, _OperationSpec] = {
         method="POST",
         path="/v1/workspaces/{workspace_id}/workflows",
     ),
+    "workflows.list": _OperationSpec(
+        operation_id="get_workflow_models_v1_workspaces__workspace_id__workflows_get",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/workflows",
+    ),
+    "workflows.list.secure": _OperationSpec(
+        operation_id="get_workflow_models_v1_workspaces__workspace_id__workflows_get",
+        method="GET",
+        path="/v1/workspaces/{workspace_id}/workflows",
+    ),
     "workflows.create.secure": _OperationSpec(
         operation_id="create_workflow_model_v1_workspaces__workspace_id__workflows_post",
         method="POST",
@@ -135,6 +145,16 @@ _KNOWN_OPERATIONS: dict[str, _OperationSpec] = {
     "agents.create": _OperationSpec(
         operation_id="create_v1_agents__post",
         method="POST",
+        path="/v1/agents/",
+    ),
+    "agents.list": _OperationSpec(
+        operation_id="get_all_v1_agents__get",
+        method="GET",
+        path="/v1/agents/",
+    ),
+    "agents.list.secure": _OperationSpec(
+        operation_id="get_all_v1_agents__get",
+        method="GET",
         path="/v1/agents/",
     ),
     "agents.create.secure": _OperationSpec(

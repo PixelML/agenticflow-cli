@@ -8,6 +8,16 @@ Run before creating tags:
 bash scripts/release_readiness.sh
 ```
 
+Optional live coverage check for public manifest scope (requires API key env):
+
+```bash
+bash scripts/release_readiness.sh --live-ops-gate --env-file /path/to/.env
+```
+
+CI automation:
+- `release-python` and `release-node` workflows run the same live gate when `AGENTICFLOW_PUBLIC_API_KEY` secret is set.
+- Optional `AGENTICFLOW_BASE_URL` secret can override the default API base URL.
+
 ## Python (PyPI + GitHub Release)
 
 1. Bump `pyproject.toml` version.

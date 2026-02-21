@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 WORKFLOW_OPERATION_IDS = {
+    "list": "get_workflow_models_v1_workspaces__workspace_id__workflows_get",
     "create": "create_workflow_model_v1_workspaces__workspace_id__workflows_post",
     "get_authenticated": "get_workflow_model_v1_workflows__workflow_id__get",
     "get_anonymous": "get_anonymous_model_v1_workflows_anonymous__workflow_id__get",
@@ -15,6 +16,7 @@ WORKFLOW_OPERATION_IDS = {
 }
 
 AGENT_OPERATION_IDS = {
+    "list": "get_all_v1_agents__get",
     "create": "create_v1_agents__post",
     "get_authenticated": "get_by_id_v1_agents__agent_id__get",
     "get_anonymous": "get_anonymous_by_id_v1_agents_anonymous__agent_id__get",
@@ -34,3 +36,27 @@ CONNECTION_OPERATION_IDS = {
     "categories": "get_app_connection_categories_v1_workspaces__workspace_id__app_connections_categories_get",
 }
 
+# MCP-first authenticated surface for coverage/release gating.
+COVERAGE_WRAPPER_ALIASES = {
+    "workflow": (
+        "list",
+        "create",
+        "get_authenticated",
+        "update",
+        "run_authenticated",
+        "run_status_authenticated",
+        "validate",
+    ),
+    "agent": (
+        "list",
+        "create",
+        "get_authenticated",
+        "update",
+    ),
+    "node_type": (
+        "list",
+        "get",
+        "dynamic_options",
+    ),
+    "connection": ("list",),
+}

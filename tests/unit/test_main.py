@@ -841,6 +841,46 @@ def test_workflow_update_routes_to_expected_operation(monkeypatch, capsys) -> No
     }
 
 
+def test_workflow_list_routes_to_expected_operation(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+
+    rc = run_cli(
+        [
+            "workflow",
+            "list",
+            "--workspace-id",
+            "ws-1",
+            "--project-id",
+            "project-1",
+            "--limit",
+            "5",
+            "--offset",
+            "2",
+            "--dry-run",
+        ],
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert captured["resource"] == "workflows"
+    assert captured["resource_method"] == "list"
+    assert json.loads(out)["operation_id"] == WORKFLOW_OPERATION_IDS["list"]
+    assert captured["kwargs"] == {
+        "workspace_id": "ws-1",
+        "project_id": "project-1",
+        "limit": 5,
+        "offset": 2,
+        "dry_run": True,
+    }
+
+
 def test_agent_stream_routes_to_expected_operation(monkeypatch, capsys) -> None:
     captured: dict[str, object] = {}
 
@@ -876,6 +916,46 @@ def test_agent_stream_routes_to_expected_operation(monkeypatch, capsys) -> None:
     }
 
 
+def test_agent_list_routes_to_expected_operation(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+
+    rc = run_cli(
+        [
+            "agent",
+            "list",
+            "--workspace-id",
+            "ws-1",
+            "--project-id",
+            "project-1",
+            "--limit",
+            "10",
+            "--offset",
+            "4",
+            "--dry-run",
+        ],
+    )
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert captured["resource"] == "agents"
+    assert captured["resource_method"] == "list"
+    assert json.loads(out)["operation_id"] == AGENT_OPERATION_IDS["list"]
+    assert captured["kwargs"] == {
+        "workspace_id": "ws-1",
+        "project_id": "project-1",
+        "limit": 10,
+        "offset": 4,
+        "dry_run": True,
+    }
+
+
 @pytest.mark.parametrize(
     ("command_args", "authenticated_operation_id", "anonymous_operation_id"),
     [
@@ -899,8 +979,34 @@ def test_agent_stream_routes_to_expected_operation(monkeypatch, capsys) -> None:
             WORKFLOW_OPERATION_IDS["validate"],
             None,
         ),
+        (
+            [
+                "workflow",
+                "list",
+                "--workspace-id",
+                "ws-1",
+                "--project-id",
+                "project-1",
+                "--dry-run",
+            ],
+            WORKFLOW_OPERATION_IDS["list"],
+            None,
+        ),
         (["agent", "get", "--agent-id", "agent-1", "--dry-run"], AGENT_OPERATION_IDS["get_authenticated"], AGENT_OPERATION_IDS["get_anonymous"]),
         (["agent", "stream", "--agent-id", "agent-1", "--body", '{"messages":[]}', "--dry-run"], AGENT_OPERATION_IDS["stream_authenticated"], AGENT_OPERATION_IDS["stream_anonymous"]),
+        (
+            [
+                "agent",
+                "list",
+                "--workspace-id",
+                "ws-1",
+                "--project-id",
+                "project-1",
+                "--dry-run",
+            ],
+            AGENT_OPERATION_IDS["list"],
+            None,
+        ),
     ],
 )
 def test_workflow_and_agent_commands_resolve_snapshot_operation_ids(
@@ -952,6 +1058,19 @@ def test_workflow_and_agent_commands_resolve_snapshot_operation_ids(
             WORKFLOW_OPERATION_IDS["run_status_anonymous"],
         ),
         (
+            [
+                "workflow",
+                "list",
+                "--workspace-id",
+                "ws-1",
+                "--project-id",
+                "project-1",
+                "--dry-run",
+            ],
+            WORKFLOW_OPERATION_IDS["list"],
+            None,
+        ),
+        (
             ["agent", "get", "--agent-id", "agent-1", "--dry-run"],
             AGENT_OPERATION_IDS["get_authenticated"],
             AGENT_OPERATION_IDS["get_anonymous"],
@@ -960,6 +1079,19 @@ def test_workflow_and_agent_commands_resolve_snapshot_operation_ids(
             ["agent", "stream", "--agent-id", "agent-1", "--body", '{"messages":[]}', "--dry-run"],
             AGENT_OPERATION_IDS["stream_authenticated"],
             AGENT_OPERATION_IDS["stream_anonymous"],
+        ),
+        (
+            [
+                "agent",
+                "list",
+                "--workspace-id",
+                "ws-1",
+                "--project-id",
+                "project-1",
+                "--dry-run",
+            ],
+            AGENT_OPERATION_IDS["list"],
+            None,
         ),
     ],
 )

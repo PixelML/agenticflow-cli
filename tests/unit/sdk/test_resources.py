@@ -125,6 +125,30 @@ def test_workflows_get_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) 
     assert _get_forwarded_param(captured, "workflow_id", 1) == "wf-123"
 
 
+def test_workflows_list_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = _build_sdk("api-token-123")
+    workflows = _get_resource(sdk, "workflows")
+    if workflows is None or not hasattr(workflows, "list"):
+        pytest.skip("workflows resource or workflows.list() is not available in this SDK revision.")
+
+    captured: dict[str, Any] = {}
+    _install_call_spy(sdk, monkeypatch, captured)
+    workflows.list(
+        workspace_id="ws-1",
+        project_id="project-1",
+        limit=10,
+        offset=2,
+    )
+
+    operation = _get_operation_from_call(captured)
+    assert isinstance(operation, str)
+    assert operation
+    assert "workflow" in operation.lower()
+    assert _get_forwarded_param(captured, "project_id") == "project-1"
+    assert _get_forwarded_param(captured, "limit") == 10
+    assert _get_forwarded_param(captured, "offset") == 2
+
+
 def test_agents_get_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> None:
     sdk = _build_sdk("api-token-123")
     agents = _get_resource(sdk, "agents")
@@ -139,6 +163,30 @@ def test_agents_get_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> 
     assert operation
     assert "agent" in operation.lower()
     assert _get_forwarded_param(captured, "agent_id", 1) == "agent-123"
+
+
+def test_agents_list_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = _build_sdk("api-token-123")
+    agents = _get_resource(sdk, "agents")
+    if agents is None or not hasattr(agents, "list"):
+        pytest.skip("agents resource or agents.list() is not available in this SDK revision.")
+
+    captured: dict[str, Any] = {}
+    _install_call_spy(sdk, monkeypatch, captured)
+    agents.list(
+        workspace_id="ws-1",
+        project_id="project-1",
+        limit=10,
+        offset=2,
+    )
+
+    operation = _get_operation_from_call(captured)
+    assert isinstance(operation, str)
+    assert operation
+    assert "agent" in operation.lower()
+    assert _get_forwarded_param(captured, "project_id") == "project-1"
+    assert _get_forwarded_param(captured, "limit") == 10
+    assert _get_forwarded_param(captured, "offset") == 2
 
 
 def test_node_types_list_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> None:

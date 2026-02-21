@@ -31,23 +31,26 @@ This CLI should be documented against the bundled curated snapshot only.
 
 High-level commands in this section are SDK-driven. `call` is the only raw transport command that executes an operation directly from the loaded OpenAPI catalog.
 
+`public_ops_manifest.json` is MCP-first and policy-lean:
+
+- 26 operations total
+- 18 `supported-executed` (safe/read/query/public wrapper)
+- 8 `supported-blocked-policy` (known side-effectful or risky flows kept for intent visibility only)
+
 - Supported by snapshot-backed commands:
   - `catalog export --public-only --json`
   - `ops list --public-only`
   - `call --method GET --path /v1/health --dry-run`
   - `call --operation-id get_nodetype_models_v1_node_types__get --dry-run`
-  - `workflow create --workspace-id <workspace_id> --body @workflow.json --dry-run`
+  - `workflow list --workspace-id <workspace_id> --dry-run`
   - `workflow get --workflow-id <id> --dry-run`
-  - `workflow update --workspace-id <workspace_id> --workflow-id <id> --body @workflow-update.json --dry-run`
-  - `workflow run --workflow-id <id> --input '{}' --dry-run`
-  - `workflow run-status --workflow-run-id <id> --dry-run`
   - `workflow validate --body '{\"nodes\":[]}' --dry-run`
-  - `agent create --body @agent.json --dry-run`
+  - `workflow run-status --workflow-run-id <id> --dry-run`
   - `agent get --agent-id <id> --dry-run`
-  - `agent update --agent-id <id> --body @agent-update.json --dry-run`
-  - `agent stream --agent-id <id> --body '{\"messages\":[]}' --dry-run`
-  - `node-types dynamic-options --name <node_type> --field-name <field> --project-id <project_id> --input-config '{}' --dry-run`
+  - `node-types list --project-id <project_id> --dry-run`
   - `connections list --workspace-id <workspace_id> --project-id <project_id> --dry-run`
+  - `get_nodetype_models_v1_node_types__get` and `get_anonymous_messages_v1_agent_threads_anonymous__thread_id__messages_get` are available as anonymous MCP discovery/ops through `call`.
+  - `node-types dynamic-options` and workflow `create/run` are intentionally in `supported-blocked-policy` and must be blocked in automated coverage by default.
 
 Admin/internal endpoints are intentionally not included in the bundled snapshot.
 
@@ -116,14 +119,9 @@ Compatibility note:
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py catalog export --public-only --json`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py call --method GET --path /v1/health --dry-run`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py ops show get_workflow_model_v1_workflows__workflow_id__get`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow create --workspace-id ws_demo --body '{\"name\":\"demo\",\"nodes\":[],\"output_mapping\":{},\"input_schema\":{},\"project_id\":\"proj_demo\"}' --dry-run`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow get --workflow-id wf_demo --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow run --workflow-id wf_demo --input '{}' --dry-run`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow validate --body '{\"nodes\":[]}' --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent create --body '{\"name\":\"demo\",\"tools\":[],\"project_id\":\"proj_demo\"}' --dry-run`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent get --agent-id ag_demo --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent stream --agent-id ag_demo --body '{\"messages\":[]}' --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py node-types dynamic-options --name google-drive --field-name folder --project-id proj_demo --input-config '{}' --dry-run`
 - `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py connections list --workspace-id ws_demo --project-id proj_demo --dry-run`
 
 ## Release Readiness Gate
@@ -135,6 +133,14 @@ bash scripts/release_readiness.sh
 ```
 
 This validates operation-id mappings, runs unit tests, executes CLI dry-run smoke checks, and verifies the Node wrapper.
+
+Optional live API coverage gate (26-op MCP-first public scope) with real key:
+
+```bash
+bash scripts/release_readiness.sh --live-ops-gate --env-file /path/to/.env
+```
+
+Release workflows (`release-python`, `release-node`) run this live gate automatically when GitHub secret `AGENTICFLOW_PUBLIC_API_KEY` is configured (optional `AGENTICFLOW_BASE_URL` for custom base URL).
 
 ## Unattended Minion Flow
 

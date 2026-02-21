@@ -12,6 +12,29 @@ class AgentsResource:
     def __init__(self, client: "AgenticFlowSDK") -> None:
         self._client = client
 
+    def list(
+        self,
+        *,
+        workspace_id: str,
+        project_id: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        operation = self._client.resolve_operation("agents.list")
+        query_params: dict[str, Any] = {}
+        if project_id is not None:
+            query_params["project_id"] = project_id
+        if limit is not None:
+            query_params["limit"] = limit
+        if offset is not None:
+            query_params["offset"] = offset
+        return self._client.call(
+            operation,
+            query_params=query_params,
+            dry_run=dry_run,
+        )
+
     def create(
         self,
         payload: Any,

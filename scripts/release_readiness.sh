@@ -5,17 +5,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
 SKIP_NODE=0
 SKIP_TESTS=0
+LIVE_OPS_GATE=0
+ENV_FILE=""
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/release_readiness.sh [--skip-node] [--skip-tests]
+  scripts/release_readiness.sh [--skip-node] [--skip-tests] [--live-ops-gate] [--env-file <path>]
 
 Runs production-readiness gates:
   1) operation-id mapping validation
   2) unit tests
   3) CLI dry-run smoke checks
   4) Node wrapper smoke check (unless --skip-node)
+  5) Live manifest-scoped coverage policy gate (optional: --live-ops-gate)
 EOF
 }
 
@@ -28,6 +31,14 @@ while [[ $# -gt 0 ]]; do
     --skip-tests)
       SKIP_TESTS=1
       shift
+      ;;
+    --live-ops-gate)
+      LIVE_OPS_GATE=1
+      shift
+      ;;
+    --env-file)
+      ENV_FILE="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -76,6 +87,49 @@ if [[ "$SKIP_NODE" -eq 0 ]]; then
     exit 1
   fi
   node ./bin/agenticflow.js --help >/dev/null
+fi
+
+if [[ "$LIVE_OPS_GATE" -eq 1 ]]; then
+  echo "[gate] live ops coverage policy"
+  OPS_ENV_ARGS=()
+  if [[ -n "$ENV_FILE" ]]; then
+    if [[ ! -f "$ENV_FILE" ]]; then
+      echo "Env file not found: $ENV_FILE" >&2
+      exit 1
+    fi
+    # shellcheck disable=SC1090
+    set -a && source "$ENV_FILE" && set +a
+    OPS_ENV_ARGS+=(--env-file "$ENV_FILE")
+  fi
+
+  if [[ -z "${AGENTICFLOW_PUBLIC_API_KEY:-}" ]]; then
+    echo "AGENTICFLOW_PUBLIC_API_KEY is required for --live-ops-gate." >&2
+    echo "Provide it via env or --env-file <path>." >&2
+    exit 1
+  fi
+
+  RELEASE_OPS_DIR="$ROOT_DIR/.minion-runs/release-ops-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$RELEASE_OPS_DIR"
+  OPS_REPORT_JSON="$RELEASE_OPS_DIR/ops_coverage_report.json"
+  OPS_REPORT_MD="$RELEASE_OPS_DIR/ops_coverage_report.md"
+
+  set +e
+  PYTHONPATH=. "$PYTHON_BIN" scripts/ops_coverage_harness.py \
+    "${OPS_ENV_ARGS[@]}" \
+    --node-type-name openai_ask_assistant \
+    --report-json "$OPS_REPORT_JSON" \
+    --report-md "$OPS_REPORT_MD"
+  HARNESS_EXIT=$?
+  set -e
+  echo "[gate] ops coverage harness exit code: $HARNESS_EXIT"
+
+  if [[ ! -f "$OPS_REPORT_JSON" ]]; then
+    echo "Coverage report was not generated: $OPS_REPORT_JSON" >&2
+    exit 1
+  fi
+
+  PYTHONPATH=. "$PYTHON_BIN" scripts/ops_release_gate.py \
+    --report-json "$OPS_REPORT_JSON"
 fi
 
 echo "[gate] release readiness passed"

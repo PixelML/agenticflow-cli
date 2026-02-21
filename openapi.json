@@ -3001,6 +3001,101 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get All",
+        "description": "Retrieve all agents for a workspace.",
+        "operationId": "get_all_v1_agents__get",
+        "security": [
+          {
+            "AuthHTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "search_query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Query"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "title": "Response Get All V1 Agents  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/v1/workspaces/{workspace_id}/workflows": {
@@ -3045,6 +3140,111 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Get Workflow Models",
+        "description": "Retrieve all workflow objects from the database.\n\n:param limit: limit of workflow objects, defaults to 10.\n:param offset: offset of workflow objects, defaults to 0.\n:param search_query: optional search query to filter workflows by name or description.\n:return: list of workflow objects from database.",
+        "operationId": "get_workflow_models_v1_workspaces__workspace_id__workflows_get",
+        "security": [
+          {
+            "AuthHTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "search_query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Query"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Workflow"
+                  },
+                  "title": "Response Get Workflow Models V1 Workspaces  Workspace Id  Workflows Get"
                 }
               }
             }
