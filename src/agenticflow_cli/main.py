@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import re
+from functools import lru_cache
 from time import perf_counter
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -49,6 +50,9 @@ CATALOG_RANK_SCHEMA_VERSION = "agenticflow.catalog.rank.v1"
 CODE_SEARCH_SCHEMA_VERSION = "agenticflow.code.search.v1"
 CODE_EXECUTE_SCHEMA_VERSION = "agenticflow.code.execute.v1"
 CLI_CONFIG_DIR_ENV_VAR = "AGENTICFLOW_CLI_DIR"
+CURATED_MANIFEST_PATH = Path(__file__).resolve().parent / "public_ops_manifest.json"
+SUPPORT_SCOPE_EXECUTED = "supported-executed"
+SUPPORT_SCOPE_BLOCKED = "supported-blocked-policy"
 
 
 def _add_common_call_flags(parser: argparse.ArgumentParser) -> None:
@@ -643,18 +647,81 @@ def _catalog_operation_item(operation: Any) -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=1)
+def _manifest_scope_by_operation_id() -> dict[str, str]:
+    try:
+        raw = json.loads(CURATED_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, list):
+        return {}
+
+    scopes: dict[str, str] = {}
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        operation_id = item.get("operation_id")
+        support_scope = item.get("support_scope")
+        if isinstance(operation_id, str) and operation_id and isinstance(support_scope, str):
+            scopes[operation_id] = support_scope
+    return scopes
+
+
+def _should_use_curated_manifest(spec_file: Path, public_only: bool) -> bool:
+    if not public_only:
+        return False
+    try:
+        return spec_file.resolve() == default_spec_path().resolve()
+    except Exception:
+        return False
+
+
+def _apply_curated_manifest_filter(
+    operations: list[Any],
+    *,
+    public_only: bool,
+    spec_file: Path,
+) -> list[Any]:
+    if not _should_use_curated_manifest(spec_file, public_only):
+        return operations
+
+    manifest_scope = _manifest_scope_by_operation_id()
+    if not manifest_scope:
+        return operations
+    allowed_operation_ids = set(manifest_scope)
+    return [
+        operation
+        for operation in operations
+        if getattr(operation, "operation_id", None) in allowed_operation_ids
+    ]
+
+
 def _catalog_records(
-    registry: OperationRegistry, public_only: bool
+    registry: OperationRegistry,
+    public_only: bool,
+    spec_file: Path,
 ) -> list[dict[str, Any]]:
     operations = _list_operations(registry, public_only=public_only, tag=None)
+    operations = _apply_curated_manifest_filter(
+        operations,
+        public_only=public_only,
+        spec_file=spec_file,
+    )
     records = [_catalog_operation_item(operation) for operation in operations]
     return sorted(records, key=lambda item: (item["path"], item["method"], item["operation_id"]))
 
 
 def _catalog_operations(
-    registry: OperationRegistry, public_only: bool
+    registry: OperationRegistry,
+    public_only: bool,
+    spec_file: Path,
 ) -> list[Any]:
     operations = _list_operations(registry, public_only=public_only, tag=None)
+    operations = _apply_curated_manifest_filter(
+        operations,
+        public_only=public_only,
+        spec_file=spec_file,
+    )
     return sorted(
         operations,
         key=lambda item: (item.path, item.method, item.operation_id),
@@ -711,6 +778,7 @@ def _rank_catalog_operations(
     task: str,
     max_cost: float | None = None,
     max_latency_ms: float | None = None,
+    manifest_scope_by_operation_id: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     task_terms = _tokenize_catalog_text(task)
     if not task_terms:
@@ -736,13 +804,64 @@ def _rank_catalog_operations(
         if max_latency_ms is not None and latency > max_latency_ms:
             continue
 
-        score = round((relevance * 10) - cost - (latency / 200), 3)
+        support_scope = None
+        if manifest_scope_by_operation_id is not None:
+            support_scope = manifest_scope_by_operation_id.get(
+                operation_record["operation_id"]
+            )
+        scope_bonus = 0.0
+        if support_scope == SUPPORT_SCOPE_EXECUTED:
+            scope_bonus = 4.0
+        elif support_scope == SUPPORT_SCOPE_BLOCKED:
+            scope_bonus = 2.0
+
+        dependency_bonus = 0.0
+        builder_terms = {
+            "build",
+            "builder",
+            "create",
+            "workflow",
+            "workflows",
+            "agent",
+            "agents",
+            "workforce",
+            "dependencies",
+            "dependency",
+        }
+        if task_terms.intersection(builder_terms):
+            dependency_tokens = {
+                "node",
+                "nodes",
+                "connection",
+                "connections",
+                "provider",
+                "providers",
+                "template",
+                "templates",
+                "validate",
+                "schema",
+            }
+            dependency_bonus = float(
+                min(3, len(operation_tokens.intersection(dependency_tokens)))
+            )
+
+        score = round(
+            (relevance * 10)
+            - cost
+            - (latency / 200)
+            + scope_bonus
+            + dependency_bonus,
+            3,
+        )
         ranked.append(
             {
                 **operation_record,
                 "relevance": relevance,
                 "cost": cost,
                 "estimated_latency_ms": latency,
+                "support_scope": support_scope,
+                "scope_bonus": scope_bonus,
+                "dependency_bonus": dependency_bonus,
                 "score": score,
             }
         )
@@ -1406,6 +1525,11 @@ def _invoke_sdk_operation(
 def _run_ops_command(args: argparse.Namespace, registry: OperationRegistry) -> int:
     if args.ops_command == "list":
         operations = _list_operations(registry, args.public_only, args.tag)
+        operations = _apply_curated_manifest_filter(
+            operations,
+            public_only=args.public_only,
+            spec_file=args.spec_file,
+        )
         for operation in operations:
             operation_id = getattr(operation, "operation_id", "")
             method = getattr(operation, "method", "")
@@ -1456,7 +1580,11 @@ def _run_catalog_command(
     args: argparse.Namespace, registry: OperationRegistry
 ) -> int:
     if args.catalog_command == "export":
-        items = _catalog_records(registry, public_only=args.public_only)
+        items = _catalog_records(
+            registry,
+            public_only=args.public_only,
+            spec_file=args.spec_file,
+        )
         if args.json:
             payload = {
                 "schema_version": CATALOG_EXPORT_SCHEMA_VERSION,
@@ -1474,12 +1602,22 @@ def _run_catalog_command(
         return 0
 
     if args.catalog_command == "rank":
-        operations = _catalog_operations(registry, public_only=args.public_only)
+        operations = _catalog_operations(
+            registry,
+            public_only=args.public_only,
+            spec_file=args.spec_file,
+        )
+        manifest_scope = (
+            _manifest_scope_by_operation_id()
+            if _should_use_curated_manifest(args.spec_file, args.public_only)
+            else None
+        )
         ranked = _rank_catalog_operations(
             operations,
             task=args.task,
             max_cost=args.max_cost,
             max_latency_ms=args.max_latency_ms,
+            manifest_scope_by_operation_id=manifest_scope,
         )
         if args.json:
             payload = {
@@ -2191,11 +2329,21 @@ def _run_code_search_command(
     registry: OperationRegistry,
     sdk_client: AgenticFlowSDK,
 ) -> int:
+    manifest_scope = (
+        _manifest_scope_by_operation_id()
+        if _should_use_curated_manifest(args.spec_file, args.public_only)
+        else None
+    )
     ranked = _rank_catalog_operations(
-        _catalog_operations(registry, public_only=args.public_only),
+        _catalog_operations(
+            registry,
+            public_only=args.public_only,
+            spec_file=args.spec_file,
+        ),
         task=args.task,
         max_cost=args.max_cost,
         max_latency_ms=args.max_latency_ms,
+        manifest_scope_by_operation_id=manifest_scope,
     )
 
     if args.limit is not None and args.limit > 0:

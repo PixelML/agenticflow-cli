@@ -148,6 +148,32 @@ def _write_catalog_spec(path: Path) -> None:
     )
 
 
+def _write_rank_scope_spec(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "openapi": "3.1.0",
+                "paths": {
+                    "/v1/public/a": {
+                        "get": {
+                            "operationId": "op_a",
+                            "tags": ["public", "workflow", "nodes"],
+                            "responses": {"200": {"description": "ok"}},
+                        },
+                    },
+                    "/v1/public/b": {
+                        "get": {
+                            "operationId": "op_b",
+                            "tags": ["public", "workflow", "nodes"],
+                            "responses": {"200": {"description": "ok"}},
+                        },
+                    },
+                },
+            }
+        )
+    )
+
+
 def _snapshot_operation_ids() -> set[str]:
     registry = OperationRegistry.from_spec(load_openapi_spec(default_spec_path()))
     return {op.operation_id for op in registry.list_operations(public_only=False)}
@@ -245,6 +271,32 @@ def test_ops_list_public_only_outputs_only_public_operations(capsys, tmp_path: P
     assert "health_check" in out
     assert "get_item" not in out
     assert "admin_items" not in out
+
+
+def test_ops_list_public_only_applies_curated_manifest_filter_when_enabled(
+    capsys,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec_file = tmp_path / "openapi.json"
+    _write_rank_scope_spec(spec_file)
+    monkeypatch.setattr(
+        main_module,
+        "_should_use_curated_manifest",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_manifest_scope_by_operation_id",
+        lambda: {"op_a": "supported-executed"},
+    )
+
+    rc = run_cli(["--spec-file", str(spec_file), "ops", "list", "--public-only"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "op_a" in out
+    assert "op_b" not in out
 
 
 def test_call_dry_run_by_operation_id(capsys, tmp_path: Path) -> None:
@@ -726,6 +778,48 @@ def test_catalog_rank_json_applies_relevance_heuristic(
     assert ranked[0]["operation_id"] == "get_public_item"
     assert ranked[0]["relevance"] >= ranked[1]["relevance"]
     assert payload["heuristic"]["formula"] == "score = relevance*10 - cost - latency/200"
+
+
+def test_catalog_rank_prefers_executed_manifest_scope_for_builder_tasks(
+    capsys,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec_file = tmp_path / "openapi.json"
+    _write_rank_scope_spec(spec_file)
+    monkeypatch.setattr(
+        main_module,
+        "_should_use_curated_manifest",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_manifest_scope_by_operation_id",
+        lambda: {
+            "op_a": "supported-executed",
+            "op_b": "supported-blocked-policy",
+        },
+    )
+
+    rc = run_cli(
+        [
+            "--spec-file",
+            str(spec_file),
+            "catalog",
+            "rank",
+            "--public-only",
+            "--task",
+            "build workflow",
+            "--json",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+    ranked = payload["items"]
+
+    assert rc == 0
+    assert ranked[0]["operation_id"] == "op_a"
+    assert ranked[0]["support_scope"] == "supported-executed"
+    assert ranked[0]["scope_bonus"] > ranked[1]["scope_bonus"]
 
 
 def test_workflow_run_routes_to_expected_operation(capsys, monkeypatch) -> None:
