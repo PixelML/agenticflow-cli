@@ -1,6 +1,6 @@
 {
   "name": "@pixelml/agenticflow-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Node wrapper for the AgenticFlow Python CLI.",
   "license": "Apache-2.0",
   "repository": {
