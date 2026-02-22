@@ -697,7 +697,13 @@ def _apply_curated_manifest_filter(
     manifest_metadata = _manifest_metadata_by_operation_id()
     if not manifest_metadata:
         return operations
-    allowed_operation_ids = set(manifest_metadata)
+    allowed_operation_ids = {
+        operation_id
+        for operation_id, metadata in manifest_metadata.items()
+        if not isinstance(metadata, Mapping)
+        or not isinstance(metadata.get("exposed_to_end_user"), bool)
+        or bool(metadata.get("exposed_to_end_user"))
+    }
     return [
         operation
         for operation in operations

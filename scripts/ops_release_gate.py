@@ -51,7 +51,8 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Validate scripts/ops_coverage_harness.py JSON report against release "
-            "expectations derived from the public ops manifest by default."
+            "expectations derived from the public ops manifest "
+            "(prefer `exposed_to_end_user` + `ci_live_execute` when present)."
         )
     )
     parser.add_argument(
@@ -110,6 +111,38 @@ def _normalize_support_scope(value: Any) -> str:
     return SUPPORT_SCOPE_ALIASES.get(normalized, SUPPORT_SCOPE_UNSUPPORTED)
 
 
+def _coerce_manifest_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _derive_manifest_support_scope(record: Mapping[str, Any]) -> str:
+    # Backward compatibility: if boolean fields are absent, derive from legacy
+    # support_scope aliases.
+    legacy_scope = _normalize_support_scope(record.get("support_scope"))
+    exposed_to_end_user = _coerce_manifest_bool(
+        record.get("exposed_to_end_user"),
+        default=legacy_scope != SUPPORT_SCOPE_UNSUPPORTED,
+    )
+    ci_live_execute = _coerce_manifest_bool(
+        record.get("ci_live_execute"),
+        default=legacy_scope == SUPPORT_SCOPE_EXECUTED,
+    )
+
+    if not exposed_to_end_user:
+        return SUPPORT_SCOPE_UNSUPPORTED
+    if ci_live_execute:
+        return SUPPORT_SCOPE_EXECUTED
+    return SUPPORT_SCOPE_BLOCKED
+
+
 def _load_manifest(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
@@ -125,7 +158,7 @@ def _derive_expected_counts_from_manifest(path: Path) -> dict[str, int]:
     records = _load_manifest(path)
     scope_counts: Counter[str] = Counter()
     for record in records:
-        scope_counts[_normalize_support_scope(record.get("support_scope"))] += 1
+        scope_counts[_derive_manifest_support_scope(record)] += 1
     return {
         "total": len(records),
         "executed": scope_counts[SUPPORT_SCOPE_EXECUTED],

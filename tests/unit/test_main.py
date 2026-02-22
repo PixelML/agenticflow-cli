@@ -301,6 +301,43 @@ def test_ops_list_public_only_applies_curated_manifest_filter_when_enabled(
     assert "op_b" not in out
 
 
+def test_ops_list_public_only_respects_manifest_exposure_flag(
+    capsys,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec_file = tmp_path / "openapi.json"
+    _write_rank_scope_spec(spec_file)
+    monkeypatch.setattr(
+        main_module,
+        "_should_use_curated_manifest",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_manifest_metadata_by_operation_id",
+        lambda: {
+            "op_a": {
+                "operation_id": "op_a",
+                "support_scope": "supported-executed",
+                "exposed_to_end_user": True,
+            },
+            "op_b": {
+                "operation_id": "op_b",
+                "support_scope": "supported-executed",
+                "exposed_to_end_user": False,
+            },
+        },
+    )
+
+    rc = run_cli(["--spec-file", str(spec_file), "ops", "list", "--public-only"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "op_a" in out
+    assert "op_b" not in out
+
+
 def test_call_dry_run_by_operation_id(capsys, tmp_path: Path) -> None:
     spec_file = tmp_path / "openapi.json"
     _write_spec(spec_file)

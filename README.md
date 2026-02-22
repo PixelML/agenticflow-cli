@@ -33,9 +33,11 @@ High-level commands in this section are SDK-driven. `call` is the only raw trans
 
 `public_ops_manifest.json` is MCP-first and policy-lean:
 
-- 26 operations total
-- 18 `supported-executed` (safe/read/query/public wrapper)
-- 8 `supported-blocked-policy` (known side-effectful or risky flows kept for intent visibility only)
+- 33 operations total
+- `support_scope` is user-facing support intent for ranking/discovery.
+- `exposed_to_end_user` controls CLI catalog exposure.
+- `ci_live_execute` controls whether live release coverage executes the operation.
+- CI blocking does not imply end-user CLI blocking.
 
 - Supported by snapshot-backed commands:
   - `catalog export --public-only --json`
@@ -47,10 +49,10 @@ High-level commands in this section are SDK-driven. `call` is the only raw trans
   - `workflow validate --body '{\"nodes\":[]}' --dry-run`
   - `workflow run-status --workflow-run-id <id> --dry-run`
   - `agent get --agent-id <id> --dry-run`
-  - `node-types list --project-id <project_id> --dry-run`
+  - `node-types list --dry-run`
   - `connections list --workspace-id <workspace_id> --project-id <project_id> --dry-run`
   - `get_nodetype_models_v1_node_types__get` and `get_anonymous_messages_v1_agent_threads_anonymous__thread_id__messages_get` are available as anonymous MCP discovery/ops through `call`.
-  - `node-types dynamic-options` and workflow `create/run` are intentionally in `supported-blocked-policy` and must be blocked in automated coverage by default.
+  - Side-effectful operations can still be exposed to end users while remaining `ci_live_execute=false` for safe release gating.
 
 Admin/internal endpoints are intentionally not included in the bundled snapshot.
 
@@ -134,7 +136,7 @@ bash scripts/release_readiness.sh
 
 This validates operation-id mappings, runs unit tests, executes CLI dry-run smoke checks, and verifies the Node wrapper.
 
-Optional live API coverage gate (26-op MCP-first public scope) with real key:
+Optional live API coverage gate (manifest-scoped public surface) with real key:
 
 ```bash
 bash scripts/release_readiness.sh --live-ops-gate --env-file /path/to/.env

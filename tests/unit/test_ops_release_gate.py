@@ -41,7 +41,7 @@ def _baseline_report() -> dict[str, object]:
     }
 
 
-def _write_manifest(path: Path, items: list[dict[str, str]]) -> Path:
+def _write_manifest(path: Path, items: list[dict[str, object]]) -> Path:
     path.write_text(json.dumps(items), encoding="utf-8")
     return path
 
@@ -84,6 +84,39 @@ def test_derive_expected_counts_from_manifest_normalizes_support_scope(tmp_path:
         "executed": 2,
         "blocked": 2,
         "unsupported": 3,
+    }
+
+
+def test_derive_expected_counts_from_manifest_prefers_ci_policy_flags(tmp_path: Path) -> None:
+    manifest_path = _write_manifest(
+        tmp_path / "public_ops_manifest.json",
+        [
+            {
+                "operation_id": "op.execute.runtime",
+                "support_scope": "supported-blocked-policy",
+                "exposed_to_end_user": True,
+                "ci_live_execute": True,
+            },
+            {
+                "operation_id": "op.block.runtime",
+                "support_scope": "supported-executed",
+                "exposed_to_end_user": True,
+                "ci_live_execute": False,
+            },
+            {
+                "operation_id": "op.hidden",
+                "support_scope": "supported-executed",
+                "exposed_to_end_user": False,
+                "ci_live_execute": True,
+            },
+        ],
+    )
+
+    assert _derive_expected_counts_from_manifest(manifest_path) == {
+        "total": 3,
+        "executed": 1,
+        "blocked": 1,
+        "unsupported": 1,
     }
 
 

@@ -318,7 +318,7 @@ def _collect_declared_operations(
     declared: dict[str, dict[str, Any]] = {}
     for record in manifest_records:
         op_id = record["operation_id"]
-        support_scope = _normalize_support_scope(record.get("support_scope"))
+        support_scope = _derive_manifest_support_scope(record)
         support_rationale = str(
             record.get("support_rationale", "No support rationale declared in manifest.")
         )
@@ -344,6 +344,38 @@ def _collect_declared_operations(
 def _normalize_support_scope(value: Any) -> str:
     normalized = str(value).strip().lower() if isinstance(value, str) else ""
     return SUPPORT_SCOPE_ALIASES.get(normalized, SUPPORT_SCOPE_OUT_OF_SCOPE)
+
+
+def _coerce_manifest_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _derive_manifest_support_scope(record: Mapping[str, Any]) -> str:
+    # `support_scope` remains supported for backward compatibility, while
+    # `exposed_to_end_user` + `ci_live_execute` define policy intent.
+    legacy_scope = _normalize_support_scope(record.get("support_scope"))
+    exposed_to_end_user = _coerce_manifest_bool(
+        record.get("exposed_to_end_user"),
+        default=legacy_scope != SUPPORT_SCOPE_UNSUPPORTED,
+    )
+    ci_live_execute = _coerce_manifest_bool(
+        record.get("ci_live_execute"),
+        default=legacy_scope == SUPPORT_SCOPE_EXECUTED,
+    )
+
+    if not exposed_to_end_user:
+        return SUPPORT_SCOPE_UNSUPPORTED
+    if ci_live_execute:
+        return SUPPORT_SCOPE_EXECUTED
+    return SUPPORT_SCOPE_BLOCKED
 
 
 def _first_non_empty(values: Mapping[str, str] | None, *keys: str) -> str | None:
