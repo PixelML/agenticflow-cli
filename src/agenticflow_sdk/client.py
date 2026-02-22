@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover - requests is a test dependency.
 from .resources.agents import AgentsResource
 from .resources.connections import ConnectionsResource
 from .resources.node_types import NodeTypesResource
+from .resources.uploads import UploadsResource
 from .resources.workflows import WorkflowsResource
 
 
@@ -212,6 +213,66 @@ _KNOWN_OPERATIONS: dict[str, _OperationSpec] = {
         method="POST",
         path="/v1/agents/anonymous/{agent_id}/stream",
     ),
+    "agents.upload_file": _OperationSpec(
+        operation_id="upload_file_public_v1_agents_anonymous__agent_id__upload_file_post",
+        method="POST",
+        path="/v1/agents/anonymous/{agent_id}/upload-file",
+    ),
+    "agents.upload_file.anonymous": _OperationSpec(
+        operation_id="upload_file_public_v1_agents_anonymous__agent_id__upload_file_post",
+        method="POST",
+        path="/v1/agents/anonymous/{agent_id}/upload-file",
+    ),
+    "public.agents.upload_file": _OperationSpec(
+        operation_id="upload_file_public_v1_agents_anonymous__agent_id__upload_file_post",
+        method="POST",
+        path="/v1/agents/anonymous/{agent_id}/upload-file",
+    ),
+    "agents.upload_status": _OperationSpec(
+        operation_id="get_upload_session_public_v1_agents_anonymous__agent_id__upload_sessions__session_id__get",
+        method="GET",
+        path="/v1/agents/anonymous/{agent_id}/upload-sessions/{session_id}",
+    ),
+    "agents.upload_status.anonymous": _OperationSpec(
+        operation_id="get_upload_session_public_v1_agents_anonymous__agent_id__upload_sessions__session_id__get",
+        method="GET",
+        path="/v1/agents/anonymous/{agent_id}/upload-sessions/{session_id}",
+    ),
+    "public.agents.upload_status": _OperationSpec(
+        operation_id="get_upload_session_public_v1_agents_anonymous__agent_id__upload_sessions__session_id__get",
+        method="GET",
+        path="/v1/agents/anonymous/{agent_id}/upload-sessions/{session_id}",
+    ),
+    "uploads.input_create": _OperationSpec(
+        operation_id="create_anonymous_input_upload_session_v1_uploads_inputs_anonymous_post",
+        method="POST",
+        path="/v1/uploads/inputs/anonymous",
+    ),
+    "uploads.input_create.anonymous": _OperationSpec(
+        operation_id="create_anonymous_input_upload_session_v1_uploads_inputs_anonymous_post",
+        method="POST",
+        path="/v1/uploads/inputs/anonymous",
+    ),
+    "public.uploads.input_create": _OperationSpec(
+        operation_id="create_anonymous_input_upload_session_v1_uploads_inputs_anonymous_post",
+        method="POST",
+        path="/v1/uploads/inputs/anonymous",
+    ),
+    "uploads.input_status": _OperationSpec(
+        operation_id="get_anonymous_upload_session_status_v1_uploads_sessions__session_id__anonymous_get",
+        method="GET",
+        path="/v1/uploads/sessions/{session_id}/anonymous",
+    ),
+    "uploads.input_status.anonymous": _OperationSpec(
+        operation_id="get_anonymous_upload_session_status_v1_uploads_sessions__session_id__anonymous_get",
+        method="GET",
+        path="/v1/uploads/sessions/{session_id}/anonymous",
+    ),
+    "public.uploads.input_status": _OperationSpec(
+        operation_id="get_anonymous_upload_session_status_v1_uploads_sessions__session_id__anonymous_get",
+        method="GET",
+        path="/v1/uploads/sessions/{session_id}/anonymous",
+    ),
     "node_types.list": _OperationSpec(
         operation_id="get_nodetype_models_v1_node_types__get",
         method="GET",
@@ -334,6 +395,7 @@ class AgenticFlowSDK:
         self.agents = AgentsResource(self)
         self.node_types = NodeTypesResource(self)
         self.connections = ConnectionsResource(self)
+        self.uploads = UploadsResource(self)
 
     def resolve_operation(
         self,

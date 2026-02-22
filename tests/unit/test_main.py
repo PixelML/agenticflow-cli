@@ -9,6 +9,7 @@ from agenticflow_cli.main import (
     AGENT_OPERATION_IDS,
     CONNECTION_OPERATION_IDS,
     NODE_TYPE_OPERATION_IDS,
+    UPLOAD_OPERATION_IDS,
     WORKFLOW_OPERATION_IDS,
     run_cli,
 )
@@ -185,6 +186,7 @@ def _hardcoded_main_operation_ids() -> set[str]:
         *AGENT_OPERATION_IDS.values(),
         *NODE_TYPE_OPERATION_IDS.values(),
         *CONNECTION_OPERATION_IDS.values(),
+        *UPLOAD_OPERATION_IDS.values(),
     }
 
 
@@ -256,6 +258,7 @@ def _build_sdk_client_spy(
             self.agents = _Resource("agents")
             self.node_types = _Resource("node_types")
             self.connections = _Resource("connections")
+            self.uploads = _Resource("uploads")
 
     return _SDKClient()
 
@@ -920,6 +923,253 @@ def test_workflow_run_routes_to_expected_operation(capsys, monkeypatch) -> None:
     assert "workflow" not in capsys.readouterr().err.lower()
 
 
+def test_workflow_run_defaults_to_empty_input_payload(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+
+    rc = run_cli(
+        [
+            "workflow",
+            "run",
+            "--workflow-id",
+            "wf-123",
+            "--dry-run",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert captured["resource"] == "workflows"
+    assert captured["resource_method"] == "run"
+    assert captured["kwargs"]["input_data"] == {}
+    assert payload["operation_id"] == WORKFLOW_OPERATION_IDS["run_anonymous"]
+
+
+def test_workflow_run_input_file_uploads_and_injects_reference(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    uploaded_requests: list[dict[str, Any]] = []
+    workflow_runs: list[dict[str, Any]] = []
+
+    def _handle_input_create(payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        uploaded_requests.append({"payload": payload, "kwargs": kwargs})
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-1",
+                "upload_url": "https://uploads.example/sess-1",
+                "output_url": "https://cdn.example/file-1",
+            },
+        }
+
+    def _handle_workflow_run(**kwargs: Any) -> dict[str, Any]:
+        workflow_runs.append(kwargs)
+        return {"status": 200, "body": {"workflow_run_id": "run-1"}}
+
+    fake_sdk = _build_sdk_client_spy(
+        captured,
+        handlers={
+            ("uploads", "input_create"): _handle_input_create,
+            ("workflows", "run"): _handle_workflow_run,
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_put_file_to_upload_url",
+        lambda **kwargs: (0, {"status": 200, "file": str(kwargs["file_path"])}),
+    )
+
+    attachment = tmp_path / "brief.txt"
+    attachment.write_text("hello", encoding="utf-8")
+
+    rc = run_cli(
+        [
+            "workflow",
+            "run",
+            "--workflow-id",
+            "wf-123",
+            "--input",
+            '{"topic":"agenticflow"}',
+            "--input-file",
+            f"document=@{attachment}",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert uploaded_requests
+    assert uploaded_requests[0]["payload"]["resource_type"] == "workflow"
+    assert uploaded_requests[0]["payload"]["resource_id"] == "wf-123"
+    assert workflow_runs
+    assert workflow_runs[0]["input_data"]["topic"] == "agenticflow"
+    assert workflow_runs[0]["input_data"]["document"] == "https://cdn.example/file-1"
+    assert payload["uploaded_inputs"][0]["input_key"] == "document"
+    assert payload["uploaded_inputs"][0]["upload_put"]["status"] == 200
+
+
+def test_workflow_run_input_file_queries_status_when_reference_missing_in_create(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    uploaded_requests: list[dict[str, Any]] = []
+    upload_status_calls: list[dict[str, Any]] = []
+    workflow_runs: list[dict[str, Any]] = []
+
+    def _handle_input_create(payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        uploaded_requests.append({"payload": payload, "kwargs": kwargs})
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-1",
+                "upload_url": "https://uploads.example/sess-1",
+            },
+        }
+
+    def _handle_input_status(**kwargs: Any) -> dict[str, Any]:
+        upload_status_calls.append(kwargs)
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-1",
+                "status": "completed",
+                "download_url": "https://cdn.example/file-from-status",
+            },
+        }
+
+    def _handle_workflow_run(**kwargs: Any) -> dict[str, Any]:
+        workflow_runs.append(kwargs)
+        return {"status": 200, "body": {"workflow_run_id": "run-1"}}
+
+    fake_sdk = _build_sdk_client_spy(
+        captured,
+        handlers={
+            ("uploads", "input_create"): _handle_input_create,
+            ("uploads", "input_status"): _handle_input_status,
+            ("workflows", "run"): _handle_workflow_run,
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_put_file_to_upload_url",
+        lambda **kwargs: (0, {"status": 200, "file": str(kwargs["file_path"])}),
+    )
+
+    attachment = tmp_path / "brief.txt"
+    attachment.write_text("hello", encoding="utf-8")
+
+    rc = run_cli(
+        [
+            "workflow",
+            "run",
+            "--workflow-id",
+            "wf-123",
+            "--input",
+            '{"topic":"agenticflow"}',
+            "--input-file",
+            f"document=@{attachment}",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert uploaded_requests
+    assert upload_status_calls
+    assert upload_status_calls[0]["session_id"] == "sess-1"
+    assert workflow_runs
+    assert workflow_runs[0]["input_data"]["topic"] == "agenticflow"
+    assert workflow_runs[0]["input_data"]["document"] == "https://cdn.example/file-from-status"
+    assert payload["uploaded_inputs"][0]["upload_status"]["body"]["status"] == "completed"
+
+
+def test_workflow_run_input_file_accepts_output_url_from_status_payload(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    workflow_runs: list[dict[str, Any]] = []
+    upload_status_calls: list[dict[str, Any]] = []
+
+    def _handle_input_create(payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-2",
+                "upload_url": "https://uploads.example/sess-2",
+            },
+        }
+
+    def _handle_input_status(**kwargs: Any) -> dict[str, Any]:
+        upload_status_calls.append(kwargs)
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-2",
+                "status": "completed",
+                "output_url": "https://cdn.example/status-output-file-2",
+            },
+        }
+
+    def _handle_workflow_run(**kwargs: Any) -> dict[str, Any]:
+        workflow_runs.append(kwargs)
+        return {"status": 200, "body": {"workflow_run_id": "run-2"}}
+
+    fake_sdk = _build_sdk_client_spy(
+        captured,
+        handlers={
+            ("uploads", "input_create"): _handle_input_create,
+            ("uploads", "input_status"): _handle_input_status,
+            ("workflows", "run"): _handle_workflow_run,
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_put_file_to_upload_url",
+        lambda **kwargs: (0, {"status": 200, "file": str(kwargs["file_path"])}),
+    )
+
+    attachment = tmp_path / "brief.txt"
+    attachment.write_text("hello", encoding="utf-8")
+
+    rc = run_cli(
+        [
+            "workflow",
+            "run",
+            "--workflow-id",
+            "wf-123",
+            "--input-file",
+            f"document=@{attachment}",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert upload_status_calls
+    assert upload_status_calls[0]["session_id"] == "sess-2"
+    assert workflow_runs
+    assert workflow_runs[0]["input_data"]["document"] == "https://cdn.example/status-output-file-2"
+    assert payload["uploaded_inputs"][0]["upload_status"]["body"]["output_url"] == "https://cdn.example/status-output-file-2"
+
+
 def test_workflow_create_routes_to_expected_operation(monkeypatch, capsys) -> None:
     captured: dict[str, object] = {}
 
@@ -1105,6 +1355,192 @@ def test_agent_list_routes_to_expected_operation(monkeypatch, capsys) -> None:
         "offset": 4,
         "dry_run": True,
     }
+
+
+def test_agent_upload_file_executes_session_put_and_status(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    upload_status_calls: list[dict[str, Any]] = []
+
+    def _handle_upload_file(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-agent-1",
+                "upload_url": "https://uploads.example/sess-agent-1",
+            },
+        }
+
+    def _handle_upload_status(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        upload_status_calls.append(kwargs)
+        return {
+            "status": 200,
+            "body": {
+                "session_id": "sess-agent-1",
+                "status": "completed",
+                "download_url": "https://cdn.example/agent-file",
+            },
+        }
+
+    fake_sdk = _build_sdk_client_spy(
+        captured,
+        handlers={
+            ("agents", "upload_file"): _handle_upload_file,
+            ("agents", "upload_status"): _handle_upload_status,
+        },
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_put_file_to_upload_url",
+        lambda **kwargs: (0, {"status": 200, "file": str(kwargs["file_path"])}),
+    )
+
+    image_path = tmp_path / "avatar.png"
+    image_path.write_bytes(b"not-a-real-png")
+
+    rc = run_cli(
+        [
+            "agent",
+            "upload-file",
+            "--agent-id",
+            "agent-1",
+            "--file",
+            str(image_path),
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["operation_id"] == AGENT_OPERATION_IDS["upload_file"]
+    assert payload["upload_put"]["status"] == 200
+    assert payload["upload_status"]["operation_id"] == AGENT_OPERATION_IDS["upload_status"]
+    assert upload_status_calls
+    assert upload_status_calls[0]["session_id"] == "sess-agent-1"
+
+
+def test_uploads_input_create_routes_to_expected_operation(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+
+    attachment = tmp_path / "input.txt"
+    attachment.write_text("demo", encoding="utf-8")
+
+    rc = run_cli(
+        [
+            "uploads",
+            "input-create",
+            "--resource-type",
+            "workflow",
+            "--resource-id",
+            "wf-1",
+            "--file",
+            str(attachment),
+            "--dry-run",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert captured["resource"] == "uploads"
+    assert captured["resource_method"] == "input_create"
+    kwargs = captured["kwargs"]
+    assert kwargs["dry_run"] is True
+    assert kwargs["payload"]["resource_type"] == "workflow"
+    assert kwargs["payload"]["resource_id"] == "wf-1"
+    assert kwargs["payload"]["name"] == "input.txt"
+    assert payload["operation_id"] == UPLOAD_OPERATION_IDS["input_create"]
+
+
+def test_uploads_status_routes_to_agent_or_generic_status(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+    fake_sdk = _build_sdk_client_spy(captured)
+    monkeypatch.setattr(
+        main_module,
+        "_build_sdk_client",
+        lambda *_: fake_sdk,  # noqa: ARG005
+    )
+
+    rc_agent = run_cli(
+        [
+            "uploads",
+            "status",
+            "--session-id",
+            "session-1",
+            "--agent-id",
+            "agent-1",
+            "--dry-run",
+        ],
+    )
+    payload_agent = json.loads(capsys.readouterr().out)
+    assert rc_agent == 0
+    assert captured["resource"] == "agents"
+    assert captured["resource_method"] == "upload_status"
+    assert payload_agent["operation_id"] == AGENT_OPERATION_IDS["upload_status"]
+
+    rc_generic = run_cli(
+        [
+            "uploads",
+            "status",
+            "--session-id",
+            "session-2",
+            "--dry-run",
+        ],
+    )
+    payload_generic = json.loads(capsys.readouterr().out)
+    assert rc_generic == 0
+    assert captured["resource"] == "uploads"
+    assert captured["resource_method"] == "input_status"
+    assert payload_generic["operation_id"] == UPLOAD_OPERATION_IDS["input_status"]
+
+
+def test_uploads_put_routes_through_put_helper(tmp_path: Path, monkeypatch, capsys) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_put(**kwargs: Any) -> tuple[int, dict[str, Any]]:
+        captured.update(kwargs)
+        return 0, {"status": 200, "ok": True, "file": str(kwargs["file_path"])}
+
+    monkeypatch.setattr(main_module, "_put_file_to_upload_url", _fake_put)
+
+    attachment = tmp_path / "upload.bin"
+    attachment.write_bytes(b"\x01\x02\x03")
+
+    rc = run_cli(
+        [
+            "uploads",
+            "put",
+            "--upload-url",
+            "https://uploads.example/sess-2",
+            "--file",
+            str(attachment),
+            "--content-type",
+            "application/octet-stream",
+            "--header",
+            "x-amz-acl=private",
+            "--dry-run",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["status"] == 200
+    assert captured["upload_url"] == "https://uploads.example/sess-2"
+    assert captured["dry_run"] is True
+    assert captured["headers"]["x-amz-acl"] == "private"
+    assert str(captured["file_path"]).endswith("upload.bin")
 
 
 @pytest.mark.parametrize(

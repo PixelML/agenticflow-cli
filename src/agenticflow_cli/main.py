@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import mimetypes
 import os
 import sys
 import re
@@ -25,6 +26,7 @@ from agenticflow_cli.operation_ids import (
     AGENT_OPERATION_IDS,
     CONNECTION_OPERATION_IDS,
     NODE_TYPE_OPERATION_IDS,
+    UPLOAD_OPERATION_IDS,
     WORKFLOW_OPERATION_IDS,
 )
 from agenticflow_cli.playbooks import get_playbook, list_playbooks
@@ -427,8 +429,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     workflow_run.add_argument("--workflow-id", required=True)
     workflow_run.add_argument(
         "--input",
-        required=True,
+        default=None,
         help="JSON payload or @/path/to/workflow-input.json",
+    )
+    workflow_run.add_argument(
+        "--input-file",
+        action="append",
+        default=[],
+        help=(
+            "Attach uploaded file input as key=@/path/to/file. "
+            "Can be repeated. Creates upload sessions and injects uploaded URLs."
+        ),
     )
     workflow_run.add_argument(
         "--response-type",
@@ -485,6 +496,41 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--body", required=True, help="JSON payload or @/path/to/stream.json"
     )
     _add_common_call_flags(agent_stream)
+
+    agent_upload = agent_sub.add_parser(
+        "upload-file",
+        help=(
+            "Create upload session for an agent attachment and upload local file "
+            "to the returned presigned URL."
+        ),
+    )
+    agent_upload.add_argument("--agent-id", required=True)
+    agent_upload.add_argument(
+        "--file",
+        required=True,
+        help="Path to local file to upload.",
+    )
+    agent_upload.add_argument(
+        "--name",
+        default=None,
+        help="Optional file name override (defaults to basename of --file).",
+    )
+    agent_upload.add_argument(
+        "--content-type",
+        default=None,
+        help="Optional MIME type override (defaults from file extension).",
+    )
+    agent_upload.add_argument(
+        "--thread-id",
+        default=None,
+        help="Optional agent thread id associated with the upload.",
+    )
+    agent_upload.add_argument(
+        "--no-status-check",
+        action="store_true",
+        help="Skip follow-up upload session status lookup after upload.",
+    )
+    _add_common_call_flags(agent_upload)
 
     node_types_parser = subparsers.add_parser(
         "node-types",
@@ -553,6 +599,74 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     connections_categories.add_argument("--limit", type=int, default=None)
     connections_categories.add_argument("--offset", type=int, default=None)
     _add_common_call_flags(connections_categories)
+
+    uploads_parser = subparsers.add_parser(
+        "uploads",
+        help="Upload-session helpers for file-backed workflow and agent inputs.",
+    )
+    uploads_sub = uploads_parser.add_subparsers(dest="uploads_command", required=True)
+
+    uploads_input_create = uploads_sub.add_parser(
+        "input-create",
+        help="Create an anonymous input upload session for workflow/agent/MAS.",
+    )
+    uploads_input_create.add_argument(
+        "--body",
+        default=None,
+        help="Optional full JSON payload. Overrides metadata flags when provided.",
+    )
+    uploads_input_create.add_argument(
+        "--resource-type",
+        choices=("workflow", "agent", "mas"),
+        default=None,
+    )
+    uploads_input_create.add_argument("--resource-id", default=None)
+    uploads_input_create.add_argument(
+        "--file",
+        default=None,
+        help="Local file path used to infer name/content-type/size.",
+    )
+    uploads_input_create.add_argument("--name", default=None)
+    uploads_input_create.add_argument("--content-type", default=None)
+    uploads_input_create.add_argument("--size", type=int, default=None)
+    _add_common_call_flags(uploads_input_create)
+
+    uploads_status = uploads_sub.add_parser(
+        "status",
+        help="Get upload session status (generic or agent-specific).",
+    )
+    uploads_status.add_argument("--session-id", required=True)
+    uploads_status.add_argument(
+        "--agent-id",
+        default=None,
+        help="When provided, query agent upload session status endpoint.",
+    )
+    _add_common_call_flags(uploads_status)
+
+    uploads_put = uploads_sub.add_parser(
+        "put",
+        help="Upload local file bytes to a presigned upload URL.",
+    )
+    uploads_put.add_argument("--upload-url", required=True)
+    uploads_put.add_argument("--file", required=True)
+    uploads_put.add_argument("--content-type", default=None)
+    uploads_put.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        help="Additional header in key=value format. Can be repeated.",
+    )
+    uploads_put.add_argument(
+        "--timeout",
+        type=float,
+        default=60.0,
+        help="Upload HTTP timeout in seconds.",
+    )
+    uploads_put.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print upload request metadata and skip network upload.",
+    )
 
     policy_parser = subparsers.add_parser(
         "policy",
@@ -1310,6 +1424,175 @@ def _load_input_payload(raw_input: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("Invalid --input: expected a JSON object.")
     return payload
+
+
+def _resolve_local_file(path_value: str, *, flag_name: str = "--file") -> Path:
+    file_path = Path(path_value).expanduser()
+    if not file_path.exists():
+        raise RuntimeError(f"Invalid {flag_name}: file not found: {file_path}")
+    if not file_path.is_file():
+        raise RuntimeError(f"Invalid {flag_name}: not a file: {file_path}")
+    return file_path
+
+
+def _guess_content_type(file_path: Path, content_type: str | None) -> str:
+    if isinstance(content_type, str) and content_type.strip():
+        return content_type.strip()
+    guessed, _ = mimetypes.guess_type(file_path.name)
+    if isinstance(guessed, str) and guessed:
+        return guessed
+    return "application/octet-stream"
+
+
+def _build_local_file_metadata(
+    *,
+    file_path: Path,
+    name: str | None = None,
+    content_type: str | None = None,
+    size: int | None = None,
+) -> dict[str, Any]:
+    file_name = name.strip() if isinstance(name, str) and name.strip() else file_path.name
+    if not file_name:
+        raise RuntimeError("Invalid --name: file name must not be empty.")
+
+    if size is None:
+        file_size = int(file_path.stat().st_size)
+    else:
+        file_size = int(size)
+    if file_size <= 0:
+        raise RuntimeError("Invalid --size: value must be a positive integer.")
+
+    return {
+        "name": file_name,
+        "content_type": _guess_content_type(file_path, content_type),
+        "size": file_size,
+    }
+
+
+def _extract_mapping_body(payload: Any) -> Mapping[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    body = payload.get("body")
+    if isinstance(body, Mapping):
+        return body
+    return payload
+
+
+def _extract_non_empty_str(payload: Mapping[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _parse_input_file_binding(raw_binding: str) -> tuple[str, Path]:
+    if "=" not in raw_binding:
+        raise RuntimeError(
+            "Invalid --input-file value. Expected key=@/path/to/file."
+        )
+    key, raw_path = raw_binding.split("=", 1)
+    input_key = key.strip()
+    if not input_key:
+        raise RuntimeError(
+            "Invalid --input-file value. Missing input key before '='."
+        )
+    file_value = raw_path.strip()
+    if file_value.startswith("@"):
+        file_value = file_value[1:]
+    if not file_value:
+        raise RuntimeError(
+            "Invalid --input-file value. Missing file path after '='."
+        )
+    return input_key, _resolve_local_file(file_value, flag_name="--input-file")
+
+
+def _resolve_upload_reference(
+    *,
+    session_payload: Mapping[str, Any],
+    status_payload: Mapping[str, Any] | None = None,
+    prefer_session_ids: bool = True,
+) -> Any | None:
+    if status_payload is not None:
+        for key in ("output_url", "download_url"):
+            candidate = _extract_non_empty_str(status_payload, key)
+            if candidate is not None:
+                return candidate
+    for key in ("output_url", "uri"):
+        value = _extract_non_empty_str(session_payload, key)
+        if value is not None:
+            return value
+    if not prefer_session_ids:
+        return None
+    fallback: dict[str, Any] = {}
+    for key in ("session_id", "item_id"):
+        value = _extract_non_empty_str(session_payload, key)
+        if value is not None:
+            fallback[key] = value
+    if fallback:
+        return fallback
+    return None
+
+
+def _put_file_to_upload_url(
+    *,
+    upload_url: str,
+    file_path: Path,
+    content_type: str | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 60.0,
+    dry_run: bool = False,
+) -> tuple[int, dict[str, Any]]:
+    request_headers: dict[str, str] = dict(headers or {})
+    if "Content-Type" not in request_headers:
+        request_headers["Content-Type"] = _guess_content_type(file_path, content_type)
+
+    payload: dict[str, Any] = {
+        "upload_url": upload_url,
+        "file": str(file_path),
+        "content_type": request_headers.get("Content-Type"),
+        "headers": request_headers,
+        "size": int(file_path.stat().st_size),
+    }
+
+    if dry_run:
+        payload["status"] = "dry_run"
+        return 0, payload
+
+    try:
+        import requests
+    except Exception as exc:  # noqa: BLE001
+        return 1, {
+            **payload,
+            "status": 0,
+            "error": f"HTTP transport unavailable: {exc}",
+        }
+
+    try:
+        with file_path.open("rb") as handle:
+            response = requests.put(
+                upload_url,
+                data=handle,
+                headers=request_headers,
+                timeout=timeout,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return 1, {
+            **payload,
+            "status": 0,
+            "error": str(exc),
+        }
+
+    status = int(getattr(response, "status_code", 0) or 0)
+    payload["status"] = status
+    try:
+        response_body: Any = response.json()
+    except Exception:  # noqa: BLE001
+        response_body = getattr(response, "text", "")
+    if status <= HTTP_OK_MAX:
+        payload["body"] = response_body
+        return 0, payload
+    payload["error"] = response_body
+    return 1, payload
 
 
 def _build_request_kwargs(
@@ -2133,10 +2416,20 @@ def _run_workflow_command(
 
     if args.workflow_command == "run":
         try:
-            input_payload = _load_input_payload(args.input)
+            input_payload = (
+                _load_input_payload(args.input) if args.input is not None else {}
+            )
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+
+        parsed_input_files: list[tuple[str, Path]] = []
+        for raw_binding in args.input_file:
+            try:
+                parsed_input_files.append(_parse_input_file_binding(raw_binding))
+            except RuntimeError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
 
         operation_id = _pick_operation_id(
             registry=registry,
@@ -2144,21 +2437,184 @@ def _run_workflow_command(
             anonymous_operation_id=WORKFLOW_OPERATION_IDS["run_anonymous"],
             token=token,
         )
-        rc, _ = _invoke_sdk_operation(
+        run_authenticated = (
+            operation_id == WORKFLOW_OPERATION_IDS["run_authenticated"]
+        )
+
+        if not parsed_input_files:
+            rc, _ = _invoke_sdk_operation(
+                registry=registry,
+                operation_id=operation_id,
+                invoke=lambda dry_run: sdk_client.workflows.run(
+                    workflow_id=args.workflow_id,
+                    input_data=input_payload,
+                    response_type=args.response_type,
+                    authenticated=run_authenticated,
+                    dry_run=dry_run,
+                ),
+                estimated_cost=args.estimated_cost,
+                dry_run=args.dry_run,
+            )
+            return rc
+
+        upload_records: list[dict[str, Any]] = []
+        for input_key, file_path in parsed_input_files:
+            metadata = _build_local_file_metadata(file_path=file_path)
+            upload_request = {
+                **metadata,
+                "resource_type": "workflow",
+                "resource_id": args.workflow_id,
+            }
+            create_rc, create_output = _invoke_sdk_operation(
+                registry=registry,
+                operation_id=UPLOAD_OPERATION_IDS["input_create"],
+                invoke=lambda dry_run, request=upload_request: sdk_client.uploads.input_create(
+                    payload=request,
+                    dry_run=dry_run,
+                ),
+                estimated_cost=args.estimated_cost,
+                dry_run=args.dry_run,
+                print_output=False,
+            )
+            record: dict[str, Any] = {
+                "input_key": input_key,
+                "file": str(file_path),
+                "upload_session": create_output,
+            }
+            upload_records.append(record)
+            if create_rc != 0:
+                _print_json(
+                    {
+                        "status": "error",
+                        "stage": "create_upload_session",
+                        "input_key": input_key,
+                        "uploaded_inputs": upload_records,
+                    }
+                )
+                return create_rc
+
+            if args.dry_run:
+                input_payload[input_key] = {
+                    "name": metadata["name"],
+                    "content_type": metadata["content_type"],
+                    "size": metadata["size"],
+                    "path": str(file_path),
+                }
+                continue
+
+            create_body = _extract_mapping_body(create_output)
+            upload_url = _extract_non_empty_str(create_body, "upload_url")
+            session_id = _extract_non_empty_str(create_body, "session_id")
+            if upload_url is None or session_id is None:
+                print(
+                    (
+                        "Upload session response missing required fields "
+                        "upload_url/session_id."
+                    ),
+                    file=sys.stderr,
+                )
+                _print_json(
+                    {
+                        "status": "error",
+                        "stage": "create_upload_session",
+                        "input_key": input_key,
+                        "upload_session": create_output,
+                    }
+                )
+                return 1
+
+            upload_rc, upload_result = _put_file_to_upload_url(
+                upload_url=upload_url,
+                file_path=file_path,
+                content_type=metadata["content_type"],
+                timeout=60.0,
+                dry_run=False,
+            )
+            record["upload_put"] = upload_result
+            if upload_rc != 0:
+                _print_json(
+                    {
+                        "status": "error",
+                        "stage": "upload_put",
+                        "input_key": input_key,
+                        "uploaded_inputs": upload_records,
+                    }
+                )
+                return upload_rc
+
+            status_payload: Mapping[str, Any] | None = None
+            reference = _resolve_upload_reference(
+                session_payload=create_body,
+                status_payload=None,
+                prefer_session_ids=False,
+            )
+            if reference is None:
+                status_rc, status_output = _invoke_sdk_operation(
+                    registry=registry,
+                    operation_id=UPLOAD_OPERATION_IDS["input_status"],
+                    invoke=lambda dry_run, current_session_id=session_id: sdk_client.uploads.input_status(
+                        session_id=current_session_id,
+                        dry_run=dry_run,
+                    ),
+                    estimated_cost=args.estimated_cost,
+                    dry_run=False,
+                    print_output=False,
+                )
+                record["upload_status"] = status_output
+                if status_rc != 0:
+                    _print_json(
+                        {
+                            "status": "error",
+                            "stage": "upload_status",
+                            "input_key": input_key,
+                            "uploaded_inputs": upload_records,
+                        }
+                    )
+                    return status_rc
+                status_payload = _extract_mapping_body(status_output)
+                reference = _resolve_upload_reference(
+                    session_payload=create_body,
+                    status_payload=status_payload,
+                )
+            if reference is None:
+                print(
+                    "Unable to derive uploaded file reference from upload session.",
+                    file=sys.stderr,
+                )
+                _print_json(
+                    {
+                        "status": "error",
+                        "stage": "resolve_input_reference",
+                        "input_key": input_key,
+                        "uploaded_inputs": upload_records,
+                    }
+                )
+                return 1
+
+            input_payload[input_key] = reference
+
+        run_rc, run_output = _invoke_sdk_operation(
             registry=registry,
             operation_id=operation_id,
             invoke=lambda dry_run: sdk_client.workflows.run(
                 workflow_id=args.workflow_id,
                 input_data=input_payload,
                 response_type=args.response_type,
-                authenticated=operation_id
-                == WORKFLOW_OPERATION_IDS["run_authenticated"],
+                authenticated=run_authenticated,
                 dry_run=dry_run,
             ),
             estimated_cost=args.estimated_cost,
             dry_run=args.dry_run,
+            print_output=False,
         )
-        return rc
+        combined_payload: dict[str, Any]
+        if isinstance(run_output, Mapping):
+            combined_payload = dict(run_output)
+        else:
+            combined_payload = {"body": run_output}
+        combined_payload["uploaded_inputs"] = upload_records
+        _print_json(combined_payload)
+        return run_rc
 
     if args.workflow_command == "run-status":
         operation_id = _pick_operation_id(
@@ -2309,6 +2765,98 @@ def _run_agent_command(
             dry_run=args.dry_run,
         )
         return rc
+
+    if args.agent_command == "upload-file":
+        try:
+            file_path = _resolve_local_file(args.file, flag_name="--file")
+            metadata = _build_local_file_metadata(
+                file_path=file_path,
+                name=args.name,
+                content_type=args.content_type,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        upload_request: dict[str, Any] = dict(metadata)
+        if args.thread_id is not None:
+            upload_request["thread_id"] = args.thread_id
+
+        session_rc, session_output = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=AGENT_OPERATION_IDS["upload_file"],
+            invoke=lambda dry_run: sdk_client.agents.upload_file(
+                agent_id=args.agent_id,
+                payload=upload_request,
+                dry_run=dry_run,
+            ),
+            estimated_cost=args.estimated_cost,
+            dry_run=args.dry_run,
+            print_output=False,
+        )
+        result_payload: dict[str, Any] = {
+            "operation_id": AGENT_OPERATION_IDS["upload_file"],
+            "agent_id": args.agent_id,
+            "file": str(file_path),
+            "upload_session": session_output,
+        }
+        if session_rc != 0:
+            _print_json(result_payload)
+            return session_rc
+
+        if args.dry_run:
+            _print_json(result_payload)
+            return 0
+
+        session_body = _extract_mapping_body(session_output)
+        upload_url = _extract_non_empty_str(session_body, "upload_url")
+        session_id = _extract_non_empty_str(session_body, "session_id")
+        if upload_url is None or session_id is None:
+            print(
+                "Upload session response missing required fields upload_url/session_id.",
+                file=sys.stderr,
+            )
+            result_payload["status"] = "error"
+            result_payload["stage"] = "create_upload_session"
+            _print_json(result_payload)
+            return 1
+
+        put_rc, put_output = _put_file_to_upload_url(
+            upload_url=upload_url,
+            file_path=file_path,
+            content_type=metadata["content_type"],
+            timeout=60.0,
+            dry_run=False,
+        )
+        result_payload["upload_put"] = put_output
+        if put_rc != 0:
+            result_payload["status"] = "error"
+            result_payload["stage"] = "upload_put"
+            _print_json(result_payload)
+            return put_rc
+
+        if not args.no_status_check:
+            status_rc, status_output = _invoke_sdk_operation(
+                registry=registry,
+                operation_id=AGENT_OPERATION_IDS["upload_status"],
+                invoke=lambda dry_run: sdk_client.agents.upload_status(
+                    agent_id=args.agent_id,
+                    session_id=session_id,
+                    dry_run=dry_run,
+                ),
+                estimated_cost=args.estimated_cost,
+                dry_run=False,
+                print_output=False,
+            )
+            result_payload["upload_status"] = status_output
+            if status_rc != 0:
+                result_payload["status"] = "error"
+                result_payload["stage"] = "upload_status"
+                _print_json(result_payload)
+                return status_rc
+
+        _print_json(result_payload)
+        return 0
 
     print(f"Unknown agent command: {args.agent_command}", file=sys.stderr)
     return 1
@@ -2802,6 +3350,131 @@ def _run_connections_command(
     return 1
 
 
+def _run_uploads_command(
+    args: argparse.Namespace,
+    registry: OperationRegistry,
+    sdk_client: AgenticFlowSDK,
+) -> int:
+    if args.uploads_command == "input-create":
+        if args.body is not None:
+            try:
+                payload = _load_body(args.body)
+            except RuntimeError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            if not isinstance(payload, Mapping):
+                print(
+                    "Invalid --body: expected a JSON object.",
+                    file=sys.stderr,
+                )
+                return 1
+            request_payload = dict(payload)
+        else:
+            if args.resource_type is None or args.resource_id is None:
+                print(
+                    (
+                        "uploads input-create requires --resource-type and --resource-id "
+                        "when --body is not provided."
+                    ),
+                    file=sys.stderr,
+                )
+                return 1
+            if args.file is not None:
+                try:
+                    file_path = _resolve_local_file(args.file, flag_name="--file")
+                    metadata = _build_local_file_metadata(
+                        file_path=file_path,
+                        name=args.name,
+                        content_type=args.content_type,
+                        size=args.size,
+                    )
+                except RuntimeError as exc:
+                    print(str(exc), file=sys.stderr)
+                    return 1
+            else:
+                if args.name is None or args.content_type is None or args.size is None:
+                    print(
+                        (
+                            "uploads input-create requires --file or "
+                            "all of --name --content-type --size."
+                        ),
+                        file=sys.stderr,
+                    )
+                    return 1
+                if args.size <= 0:
+                    print("Invalid --size: value must be a positive integer.", file=sys.stderr)
+                    return 1
+                metadata = {
+                    "name": args.name,
+                    "content_type": args.content_type,
+                    "size": args.size,
+                }
+            request_payload = {
+                **metadata,
+                "resource_type": args.resource_type,
+                "resource_id": args.resource_id,
+            }
+
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=UPLOAD_OPERATION_IDS["input_create"],
+            invoke=lambda dry_run: sdk_client.uploads.input_create(
+                payload=request_payload,
+                dry_run=dry_run,
+            ),
+            estimated_cost=args.estimated_cost,
+            dry_run=args.dry_run,
+        )
+        return rc
+
+    if args.uploads_command == "status":
+        if args.agent_id is not None:
+            rc, _ = _invoke_sdk_operation(
+                registry=registry,
+                operation_id=AGENT_OPERATION_IDS["upload_status"],
+                invoke=lambda dry_run: sdk_client.agents.upload_status(
+                    agent_id=args.agent_id,
+                    session_id=args.session_id,
+                    dry_run=dry_run,
+                ),
+                estimated_cost=args.estimated_cost,
+                dry_run=args.dry_run,
+            )
+            return rc
+        rc, _ = _invoke_sdk_operation(
+            registry=registry,
+            operation_id=UPLOAD_OPERATION_IDS["input_status"],
+            invoke=lambda dry_run: sdk_client.uploads.input_status(
+                session_id=args.session_id,
+                dry_run=dry_run,
+            ),
+            estimated_cost=args.estimated_cost,
+            dry_run=args.dry_run,
+        )
+        return rc
+
+    if args.uploads_command == "put":
+        try:
+            file_path = _resolve_local_file(args.file, flag_name="--file")
+            extra_headers = _coerce_mapping(args.header, "--header")
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        rc, output = _put_file_to_upload_url(
+            upload_url=args.upload_url,
+            file_path=file_path,
+            content_type=args.content_type,
+            headers=extra_headers,
+            timeout=args.timeout,
+            dry_run=args.dry_run,
+        )
+        _print_json(output)
+        return rc
+
+    print(f"Unknown uploads command: {args.uploads_command}", file=sys.stderr)
+    return 1
+
+
 def run_cli(argv: list[str] | None = None) -> int:
     try:
         args = _parse_args(argv)
@@ -2845,7 +3518,13 @@ def run_cli(argv: list[str] | None = None) -> int:
             return _run_code_execute_command(args, registry, base_url, token)
         print(f"Unknown code command: {args.code_command}", file=sys.stderr)
         return 1
-    if args.command not in {"workflow", "agent", "node-types", "connections"}:
+    if args.command not in {
+        "workflow",
+        "agent",
+        "node-types",
+        "connections",
+        "uploads",
+    }:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1
 
@@ -2859,6 +3538,8 @@ def run_cli(argv: list[str] | None = None) -> int:
         return _run_node_types_command(args, registry, sdk_client)
     if args.command == "connections":
         return _run_connections_command(args, registry, sdk_client, token)
+    if args.command == "uploads":
+        return _run_uploads_command(args, registry, sdk_client)
 
 
 

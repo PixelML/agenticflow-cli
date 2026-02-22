@@ -12,6 +12,7 @@ from agenticflow_cli.operation_ids import (
     AGENT_OPERATION_IDS,
     CONNECTION_OPERATION_IDS,
     NODE_TYPE_OPERATION_IDS,
+    UPLOAD_OPERATION_IDS,
     WORKFLOW_OPERATION_IDS,
 )
 from agenticflow_cli.spec import OperationRegistry, default_spec_path, load_openapi_spec
@@ -30,6 +31,7 @@ def collect_mapped_operation_ids() -> dict[str, str]:
         ("cli.agent", AGENT_OPERATION_IDS),
         ("cli.node_type", NODE_TYPE_OPERATION_IDS),
         ("cli.connection", CONNECTION_OPERATION_IDS),
+        ("cli.uploads", UPLOAD_OPERATION_IDS),
     )
     for source, bucket in mapping_buckets:
         for alias, operation_id in bucket.items():

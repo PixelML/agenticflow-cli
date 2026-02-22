@@ -225,6 +225,60 @@ def test_connections_list_or_categories_routes_through_sdk_call(monkeypatch: pyt
     assert _get_forwarded_param(captured, "workspace_id", 1) == "workspace-9"
 
 
+def test_agents_upload_file_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = _build_sdk("api-token-123")
+    agents = _get_resource(sdk, "agents")
+    if agents is None or not hasattr(agents, "upload_file"):
+        pytest.skip("agents.upload_file() is not available in this SDK revision.")
+
+    captured: dict[str, Any] = {}
+    _install_call_spy(sdk, monkeypatch, captured)
+    agents.upload_file(
+        agent_id="agent-123",
+        payload={"name": "image.png", "content_type": "image/png", "size": 10},
+    )
+
+    operation = _get_operation_from_call(captured)
+    assert operation
+    assert "upload" in operation.lower()
+    assert _get_forwarded_param(captured, "agent_id") == "agent-123"
+    assert _get_forwarded_param(captured, "name") == "image.png"
+
+
+def test_uploads_resource_routes_through_sdk_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = _build_sdk("api-token-123")
+    uploads = _get_resource(sdk, "uploads")
+    if uploads is None:
+        pytest.skip("uploads resource is not available in this SDK revision.")
+    if not hasattr(uploads, "input_create") or not hasattr(uploads, "input_status"):
+        pytest.skip("uploads resource methods are unavailable in this SDK revision.")
+
+    captured_create: dict[str, Any] = {}
+    _install_call_spy(sdk, monkeypatch, captured_create)
+    uploads.input_create(
+        payload={
+            "name": "input.txt",
+            "content_type": "text/plain",
+            "size": 5,
+            "resource_type": "workflow",
+            "resource_id": "wf-123",
+        }
+    )
+    create_operation = _get_operation_from_call(captured_create)
+    assert create_operation
+    assert "upload" in create_operation.lower()
+    assert _get_forwarded_param(captured_create, "resource_type") == "workflow"
+    assert _get_forwarded_param(captured_create, "resource_id") == "wf-123"
+
+    captured_status: dict[str, Any] = {}
+    _install_call_spy(sdk, monkeypatch, captured_status)
+    uploads.input_status(session_id="session-123")
+    status_operation = _get_operation_from_call(captured_status)
+    assert status_operation
+    assert "upload" in status_operation.lower()
+    assert _get_forwarded_param(captured_status, "session_id") == "session-123"
+
+
 def test_package_root_exports_resource_sdk() -> None:
     root_module = importlib.import_module("agenticflow_sdk")
     exported = getattr(root_module, "AgenticFlowSDK", None)

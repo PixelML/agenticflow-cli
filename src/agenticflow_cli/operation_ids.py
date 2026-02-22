@@ -23,6 +23,8 @@ AGENT_OPERATION_IDS = {
     "update": "update_v1_agents__agent_id__put",
     "stream_authenticated": "ai_sdk_stream_v2_v1_agents__agent_id__stream_post",
     "stream_anonymous": "anonymous_ai_sdk_stream_v2_v1_agents_anonymous__agent_id__stream_post",
+    "upload_file": "upload_file_public_v1_agents_anonymous__agent_id__upload_file_post",
+    "upload_status": "get_upload_session_public_v1_agents_anonymous__agent_id__upload_sessions__session_id__get",
 }
 
 NODE_TYPE_OPERATION_IDS = {
@@ -34,6 +36,11 @@ NODE_TYPE_OPERATION_IDS = {
 CONNECTION_OPERATION_IDS = {
     "list": "get_app_connections_v1_workspaces__workspace_id__app_connections__get",
     "categories": "get_app_connection_categories_v1_workspaces__workspace_id__app_connections_categories_get",
+}
+
+UPLOAD_OPERATION_IDS = {
+    "input_create": "create_anonymous_input_upload_session_v1_uploads_inputs_anonymous_post",
+    "input_status": "get_anonymous_upload_session_status_v1_uploads_sessions__session_id__anonymous_get",
 }
 
 # MCP-first authenticated surface for coverage/release gating.
@@ -52,6 +59,8 @@ COVERAGE_WRAPPER_ALIASES = {
         "create",
         "get_authenticated",
         "update",
+        "upload_file",
+        "upload_status",
     ),
     "node_type": (
         "list",
@@ -59,4 +68,8 @@ COVERAGE_WRAPPER_ALIASES = {
         "dynamic_options",
     ),
     "connection": ("list",),
+    "uploads": (
+        "input_create",
+        "input_status",
+    ),
 }

@@ -92,3 +92,32 @@ class AgentsResource:
             json_body=dict(payload),
             dry_run=dry_run,
         )
+
+    def upload_file(
+        self,
+        *,
+        agent_id: str,
+        payload: Mapping[str, Any],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        operation = self._client.resolve_operation("agents.upload_file")
+        return self._client.call(
+            operation,
+            path_params={"agent_id": agent_id},
+            json_body=dict(payload),
+            dry_run=dry_run,
+        )
+
+    def upload_status(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        operation = self._client.resolve_operation("agents.upload_status")
+        return self._client.call(
+            operation,
+            path_params={"agent_id": agent_id, "session_id": session_id},
+            dry_run=dry_run,
+        )

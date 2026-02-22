@@ -30,6 +30,7 @@ from agenticflow_cli.operation_ids import (
     COVERAGE_WRAPPER_ALIASES,
     CONNECTION_OPERATION_IDS,
     NODE_TYPE_OPERATION_IDS,
+    UPLOAD_OPERATION_IDS,
     WORKFLOW_OPERATION_IDS,
 )
 from agenticflow_cli.spec import OperationRegistry, default_spec_path, load_openapi_spec
@@ -299,6 +300,7 @@ def _collect_wrapper_sources() -> dict[str, list[str]]:
         "agent": AGENT_OPERATION_IDS,
         "node_type": NODE_TYPE_OPERATION_IDS,
         "connection": CONNECTION_OPERATION_IDS,
+        "uploads": UPLOAD_OPERATION_IDS,
     }
     for namespace, aliases in COVERAGE_WRAPPER_ALIASES.items():
         bucket = buckets.get(namespace, {})
