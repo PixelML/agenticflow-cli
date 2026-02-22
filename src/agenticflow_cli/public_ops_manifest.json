@@ -8,7 +8,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "run",
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "agent_threads",
+      "messages"
+    ]
   },
   {
     "operation_id": "get_anonymous_messages_v1_agent_threads_anonymous__thread_id__messages_get",
@@ -19,7 +28,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "run",
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "agent_threads",
+      "messages"
+    ]
   },
   {
     "operation_id": "get_anonymous_suggested_replies_v1_agent_threads__thread_id__anonymous_suggested_replies_post",
@@ -30,7 +48,15 @@
     ],
     "security_len": 0,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "agent_threads",
+      "messages"
+    ]
   },
   {
     "operation_id": "get_anonymous_by_id_v1_agents_anonymous__agent_id__get",
@@ -41,7 +67,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "run"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "agents",
+      "model_providers"
+    ]
   },
   {
     "operation_id": "create_v1_agents__post",
@@ -52,7 +87,16 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "build_agent"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "agents",
+      "model_providers",
+      "node_types"
+    ]
   },
   {
     "operation_id": "anonymous_ai_sdk_stream_v2_v1_agents_anonymous__agent_id__stream_post",
@@ -63,7 +107,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "agents",
+      "messages",
+      "streaming"
+    ]
   },
   {
     "operation_id": "upload_file_public_v1_agents_anonymous__agent_id__upload_file_post",
@@ -75,7 +128,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "agents",
+      "uploads",
+      "files"
+    ]
   },
   {
     "operation_id": "get_upload_session_public_v1_agents_anonymous__agent_id__upload_sessions__session_id__get",
@@ -87,7 +149,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "run",
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "agents",
+      "uploads"
+    ]
   },
   {
     "operation_id": "health_check_v1_health_get",
@@ -96,7 +167,14 @@
     "tags": [],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "service_health"
+    ]
   },
   {
     "operation_id": "get_providers_v1_model_providers__get",
@@ -107,7 +185,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "build_workflow"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "model_providers",
+      "models"
+    ]
   },
   {
     "operation_id": "get_all_v1_node_type_categories__get",
@@ -118,7 +205,17 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "build_workflow",
+      "build_workforce"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "node_types",
+      "categories"
+    ]
   },
   {
     "operation_id": "get_by_id_v1_node_type_categories__item_id__get",
@@ -129,7 +226,17 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "build_workflow",
+      "build_workforce"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "node_types",
+      "categories"
+    ]
   },
   {
     "operation_id": "get_nodetype_models_v1_node_types__get",
@@ -140,7 +247,18 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "build_workflow",
+      "build_workforce"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "node_types",
+      "tools",
+      "integrations"
+    ]
   },
   {
     "operation_id": "get_nodetype_model_by_name_v1_node_types_name__name__get",
@@ -151,7 +269,17 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "build_workflow",
+      "build_workforce"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "node_types",
+      "tools"
+    ]
   },
   {
     "operation_id": "create_anonymous_input_upload_session_v1_uploads_inputs_anonymous_post",
@@ -162,7 +290,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "uploads",
+      "inputs",
+      "files"
+    ]
   },
   {
     "operation_id": "get_anonymous_upload_session_status_v1_uploads_sessions__session_id__anonymous_get",
@@ -173,7 +310,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "run",
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "uploads",
+      "inputs"
+    ]
   },
   {
     "operation_id": "create_workflow_run_model_anonymous_v1_workflow_runs_anonymous_post",
@@ -184,7 +330,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "workflows",
+      "workflow_runs",
+      "inputs"
+    ]
   },
   {
     "operation_id": "get_workflow_run_model_anonymous_v1_workflow_runs_anonymous__workflow_run_id__get",
@@ -195,7 +350,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "run",
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "workflow_runs",
+      "outputs"
+    ]
   },
   {
     "operation_id": "get_anonymous_model_v1_workflows_anonymous__workflow_id__get",
@@ -206,7 +370,16 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_workflow",
+      "run"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "workflows",
+      "node_types"
+    ]
   },
   {
     "operation_id": "validate_create_workflow_model_v1_workflows_utils_validate_create_workflow_model_post",
@@ -217,7 +390,18 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_workflow",
+      "debug"
+    ],
+    "stage": "validate",
+    "dependencies": [
+      "workflows",
+      "schema",
+      "validation",
+      "node_types"
+    ]
   },
   {
     "operation_id": "get_supported_node_types_v1_workspaces__workspace_id__workforce_node_types_get",
@@ -228,7 +412,15 @@
     ],
     "security_len": 0,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_workforce"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "workforces",
+      "node_types"
+    ]
   },
   {
     "operation_id": "get_app_connections_v1_workspaces__workspace_id__app_connections__get",
@@ -238,8 +430,19 @@
       "app_connections"
     ],
     "security_len": 1,
+    "support_scope": "supported-executed",
     "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
-    "support_scope": "supported-executed"
+    "intents": [
+      "build_agent",
+      "build_workflow",
+      "build_workforce"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "app_connections",
+      "credentials",
+      "integrations"
+    ]
   },
   {
     "operation_id": "ai_sdk_stream_v2_v1_agents__agent_id__stream_post",
@@ -250,7 +453,16 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "agents",
+      "messages",
+      "streaming"
+    ]
   },
   {
     "operation_id": "create_workflow_run_model_v1_workflow_runs__post",
@@ -261,7 +473,16 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "run"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "workflow_runs",
+      "workflows",
+      "inputs"
+    ]
   },
   {
     "operation_id": "get_by_id_v1_agents__agent_id__get",
@@ -272,7 +493,17 @@
     ],
     "security_len": 1,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent",
+      "run"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "agents",
+      "model_providers",
+      "tools"
+    ]
   },
   {
     "operation_id": "get_all_v1_agents__get",
@@ -283,7 +514,15 @@
     ],
     "security_len": 1,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_agent"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "agents",
+      "workspaces"
+    ]
   },
   {
     "operation_id": "update_v1_agents__agent_id__put",
@@ -294,7 +533,17 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "build_agent"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "agents",
+      "model_providers",
+      "tools",
+      "app_connections"
+    ]
   },
   {
     "operation_id": "get_dynamic_options_v1_node_types_name__node_type_name__dynamic_options_post",
@@ -305,7 +554,19 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "build_agent",
+      "build_workflow",
+      "build_workforce"
+    ],
+    "stage": "validate",
+    "dependencies": [
+      "node_types",
+      "providers",
+      "credentials",
+      "integrations"
+    ]
   },
   {
     "operation_id": "get_workflow_model_v1_workflows__workflow_id__get",
@@ -316,7 +577,17 @@
     ],
     "security_len": 1,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_workflow",
+      "run"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "workflows",
+      "node_types",
+      "connections"
+    ]
   },
   {
     "operation_id": "get_workflow_models_v1_workspaces__workspace_id__workflows_get",
@@ -327,7 +598,15 @@
     ],
     "security_len": 1,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "build_workflow"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "workflows",
+      "workspaces"
+    ]
   },
   {
     "operation_id": "create_workflow_model_v1_workspaces__workspace_id__workflows_post",
@@ -338,7 +617,17 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "build_workflow"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "workflows",
+      "node_types",
+      "connections",
+      "app_connections"
+    ]
   },
   {
     "operation_id": "update_workflow_model_v1_workspaces__workspace_id__workflows__workflow_id__put",
@@ -349,7 +638,17 @@
     ],
     "security_len": 1,
     "support_scope": "supported-blocked-policy",
-    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage."
+    "support_rationale": "Supported command intent exists, but write/side-effectful operation is intentionally excluded from automated coverage.",
+    "intents": [
+      "build_workflow"
+    ],
+    "stage": "apply",
+    "dependencies": [
+      "workflows",
+      "node_types",
+      "connections",
+      "app_connections"
+    ]
   },
   {
     "operation_id": "get_workflow_run_model_v1_workflow_runs__workflow_run_id__get",
@@ -360,6 +659,15 @@
     ],
     "security_len": 1,
     "support_scope": "supported-executed",
-    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects."
+    "support_rationale": "Public read/query/validation path with stable CLI support and no side effects.",
+    "intents": [
+      "run",
+      "debug"
+    ],
+    "stage": "observe",
+    "dependencies": [
+      "workflow_runs",
+      "outputs"
+    ]
   }
 ]
