@@ -287,8 +287,10 @@ def test_ops_list_public_only_applies_curated_manifest_filter_when_enabled(
     )
     monkeypatch.setattr(
         main_module,
-        "_manifest_scope_by_operation_id",
-        lambda: {"op_a": "supported-executed"},
+        "_manifest_metadata_by_operation_id",
+        lambda: {
+            "op_a": {"operation_id": "op_a", "support_scope": "supported-executed"}
+        },
     )
 
     rc = run_cli(["--spec-file", str(spec_file), "ops", "list", "--public-only"])
@@ -777,7 +779,11 @@ def test_catalog_rank_json_applies_relevance_heuristic(
     assert payload["count"] == len(ranked)
     assert ranked[0]["operation_id"] == "get_public_item"
     assert ranked[0]["relevance"] >= ranked[1]["relevance"]
-    assert payload["heuristic"]["formula"] == "score = relevance*10 - cost - latency/200"
+    assert (
+        payload["heuristic"]["formula"]
+        == "score = relevance*10 - cost - latency/200 + "
+        "scope_bonus + intent_bonus + stage_bonus + dependency_bonus"
+    )
 
 
 def test_catalog_rank_prefers_executed_manifest_scope_for_builder_tasks(
@@ -794,10 +800,22 @@ def test_catalog_rank_prefers_executed_manifest_scope_for_builder_tasks(
     )
     monkeypatch.setattr(
         main_module,
-        "_manifest_scope_by_operation_id",
+        "_manifest_metadata_by_operation_id",
         lambda: {
-            "op_a": "supported-executed",
-            "op_b": "supported-blocked-policy",
+            "op_a": {
+                "operation_id": "op_a",
+                "support_scope": "supported-executed",
+                "intents": ["build_workflow"],
+                "stage": "discover",
+                "dependencies": ["node_types"],
+            },
+            "op_b": {
+                "operation_id": "op_b",
+                "support_scope": "supported-blocked-policy",
+                "intents": ["run"],
+                "stage": "apply",
+                "dependencies": [],
+            },
         },
     )
 
@@ -820,6 +838,8 @@ def test_catalog_rank_prefers_executed_manifest_scope_for_builder_tasks(
     assert ranked[0]["operation_id"] == "op_a"
     assert ranked[0]["support_scope"] == "supported-executed"
     assert ranked[0]["scope_bonus"] > ranked[1]["scope_bonus"]
+    assert ranked[0]["intent_bonus"] > ranked[1]["intent_bonus"]
+    assert ranked[0]["stage_bonus"] > ranked[1]["stage_bonus"]
 
 
 def test_workflow_run_routes_to_expected_operation(capsys, monkeypatch) -> None:

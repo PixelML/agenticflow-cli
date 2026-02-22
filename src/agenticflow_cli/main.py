@@ -648,7 +648,7 @@ def _catalog_operation_item(operation: Any) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=1)
-def _manifest_scope_by_operation_id() -> dict[str, str]:
+def _manifest_metadata_by_operation_id() -> dict[str, dict[str, Any]]:
     try:
         raw = json.loads(CURATED_MANIFEST_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -656,13 +656,22 @@ def _manifest_scope_by_operation_id() -> dict[str, str]:
     if not isinstance(raw, list):
         return {}
 
-    scopes: dict[str, str] = {}
+    records: dict[str, dict[str, Any]] = {}
     for item in raw:
         if not isinstance(item, Mapping):
             continue
         operation_id = item.get("operation_id")
-        support_scope = item.get("support_scope")
-        if isinstance(operation_id, str) and operation_id and isinstance(support_scope, str):
+        if not isinstance(operation_id, str) or not operation_id:
+            continue
+        records[operation_id] = dict(item)
+    return records
+
+
+def _manifest_scope_by_operation_id() -> dict[str, str]:
+    scopes: dict[str, str] = {}
+    for operation_id, metadata in _manifest_metadata_by_operation_id().items():
+        support_scope = metadata.get("support_scope")
+        if isinstance(support_scope, str):
             scopes[operation_id] = support_scope
     return scopes
 
@@ -685,15 +694,123 @@ def _apply_curated_manifest_filter(
     if not _should_use_curated_manifest(spec_file, public_only):
         return operations
 
-    manifest_scope = _manifest_scope_by_operation_id()
-    if not manifest_scope:
+    manifest_metadata = _manifest_metadata_by_operation_id()
+    if not manifest_metadata:
         return operations
-    allowed_operation_ids = set(manifest_scope)
+    allowed_operation_ids = set(manifest_metadata)
     return [
         operation
         for operation in operations
         if getattr(operation, "operation_id", None) in allowed_operation_ids
     ]
+
+
+def _normalize_manifest_intents(value: Any) -> set[str]:
+    intents: set[str] = set()
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            intents.add(cleaned)
+        return intents
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                cleaned = item.strip()
+                if cleaned:
+                    intents.add(cleaned)
+    return intents
+
+
+def _collect_manifest_intents(metadata: Mapping[str, Any]) -> set[str]:
+    intents = _normalize_manifest_intents(metadata.get("intent"))
+    intents.update(_normalize_manifest_intents(metadata.get("intents")))
+    return intents
+
+
+def _normalize_manifest_dependencies(value: Any) -> tuple[str, ...]:
+    dependencies: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item:
+                dependencies.append(item)
+    return tuple(sorted(set(dependencies)))
+
+
+def _infer_task_intents(task_terms: set[str]) -> set[str]:
+    inferred: set[str] = set()
+    if task_terms.intersection({"agent", "agents", "assistant"}):
+        inferred.add("build_agent")
+    if task_terms.intersection({"workflow", "workflows", "flow", "automation"}):
+        inferred.add("build_workflow")
+    if task_terms.intersection({"workforce", "workforces", "mas", "team"}):
+        inferred.add("build_workforce")
+    if task_terms.intersection({"run", "execute", "trigger", "invoke", "launch"}):
+        inferred.add("run")
+    if task_terms.intersection(
+        {"debug", "inspect", "status", "error", "errors", "trace", "validate", "diagnose"}
+    ):
+        inferred.add("debug")
+    if "build" in task_terms and not inferred:
+        inferred.add("build_workflow")
+    return inferred
+
+
+def _intent_bonus_for_operation(
+    operation_intents: set[str],
+    inferred_task_intents: set[str],
+) -> float:
+    if not operation_intents or not inferred_task_intents:
+        return 0.0
+    if operation_intents.intersection(inferred_task_intents):
+        return 5.0
+    return 0.0
+
+
+def _stage_bonus_for_operation(
+    *,
+    stage: str | None,
+    task_terms: set[str],
+    inferred_task_intents: set[str],
+) -> float:
+    if not stage:
+        return 0.0
+
+    stage = stage.strip().lower()
+    if not stage:
+        return 0.0
+
+    wants_dependency_context = bool(
+        task_terms.intersection(
+            {"build", "dependency", "dependencies", "configure", "design", "plan"}
+        )
+    )
+    wants_apply = bool(task_terms.intersection({"create", "update", "save"}))
+
+    if "run" in inferred_task_intents:
+        if stage in {"apply", "observe"}:
+            return 2.0
+        return 0.0
+
+    if "debug" in inferred_task_intents:
+        if stage in {"observe", "validate"}:
+            return 2.0
+        return 0.5 if stage == "discover" else 0.0
+
+    if inferred_task_intents.intersection({"build_workflow", "build_agent", "build_workforce"}):
+        if wants_dependency_context:
+            return {
+                "discover": 2.5,
+                "validate": 2.0,
+                "apply": 1.0,
+                "observe": 0.5,
+            }.get(stage, 0.0)
+        if wants_apply:
+            return {
+                "apply": 2.0,
+                "validate": 1.0,
+                "discover": 0.5,
+            }.get(stage, 0.0)
+    return 0.0
 
 
 def _catalog_records(
@@ -779,10 +896,32 @@ def _rank_catalog_operations(
     max_cost: float | None = None,
     max_latency_ms: float | None = None,
     manifest_scope_by_operation_id: Mapping[str, str] | None = None,
+    manifest_metadata_by_operation_id: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     task_terms = _tokenize_catalog_text(task)
     if not task_terms:
         return []
+
+    inferred_task_intents = _infer_task_intents(task_terms)
+    wants_dependency_context = bool(
+        task_terms.intersection(
+            {
+                "build",
+                "builder",
+                "create",
+                "workflow",
+                "workflows",
+                "agent",
+                "agents",
+                "workforce",
+                "dependency",
+                "dependencies",
+                "configure",
+                "design",
+                "plan",
+            }
+        )
+    )
 
     ranked: list[dict[str, Any]] = []
     for operation in operations:
@@ -804,8 +943,15 @@ def _rank_catalog_operations(
         if max_latency_ms is not None and latency > max_latency_ms:
             continue
 
+        metadata = (
+            manifest_metadata_by_operation_id.get(operation_record["operation_id"], {})
+            if manifest_metadata_by_operation_id is not None
+            else {}
+        )
         support_scope = None
-        if manifest_scope_by_operation_id is not None:
+        if isinstance(metadata.get("support_scope"), str):
+            support_scope = metadata["support_scope"]
+        elif manifest_scope_by_operation_id is not None:
             support_scope = manifest_scope_by_operation_id.get(
                 operation_record["operation_id"]
             )
@@ -815,21 +961,38 @@ def _rank_catalog_operations(
         elif support_scope == SUPPORT_SCOPE_BLOCKED:
             scope_bonus = 2.0
 
+        operation_intents = (
+            _collect_manifest_intents(metadata)
+            if isinstance(metadata, Mapping)
+            else set()
+        )
+        stage = metadata.get("stage") if isinstance(metadata.get("stage"), str) else None
+        manifest_dependencies = (
+            _normalize_manifest_dependencies(metadata.get("dependencies"))
+            if isinstance(metadata, Mapping)
+            else tuple()
+        )
+        manifest_dependency_tokens = _tokenize_catalog_text(
+            " ".join(manifest_dependencies)
+        )
+
+        intent_bonus = _intent_bonus_for_operation(
+            operation_intents,
+            inferred_task_intents,
+        )
+        stage_bonus = _stage_bonus_for_operation(
+            stage=stage,
+            task_terms=task_terms,
+            inferred_task_intents=inferred_task_intents,
+        )
+
         dependency_bonus = 0.0
-        builder_terms = {
-            "build",
-            "builder",
-            "create",
-            "workflow",
-            "workflows",
-            "agent",
-            "agents",
-            "workforce",
-            "dependencies",
-            "dependency",
-        }
-        if task_terms.intersection(builder_terms):
-            dependency_tokens = {
+        if wants_dependency_context:
+            if manifest_dependency_tokens:
+                overlap = len(task_terms.intersection(manifest_dependency_tokens))
+                dependency_bonus += 1.0 + min(2.0, float(overlap))
+
+            heuristic_dependency_tokens = {
                 "node",
                 "nodes",
                 "connection",
@@ -840,9 +1003,15 @@ def _rank_catalog_operations(
                 "templates",
                 "validate",
                 "schema",
+                "tool",
+                "tools",
+                "credential",
+                "credentials",
+                "integration",
+                "integrations",
             }
-            dependency_bonus = float(
-                min(3, len(operation_tokens.intersection(dependency_tokens)))
+            dependency_bonus += float(
+                min(2, len(operation_tokens.intersection(heuristic_dependency_tokens)))
             )
 
         score = round(
@@ -850,6 +1019,8 @@ def _rank_catalog_operations(
             - cost
             - (latency / 200)
             + scope_bonus
+            + intent_bonus
+            + stage_bonus
             + dependency_bonus,
             3,
         )
@@ -861,6 +1032,11 @@ def _rank_catalog_operations(
                 "estimated_latency_ms": latency,
                 "support_scope": support_scope,
                 "scope_bonus": scope_bonus,
+                "manifest_intents": sorted(operation_intents),
+                "manifest_stage": stage,
+                "manifest_dependencies": list(manifest_dependencies),
+                "intent_bonus": intent_bonus,
+                "stage_bonus": stage_bonus,
                 "dependency_bonus": dependency_bonus,
                 "score": score,
             }
@@ -1607,17 +1783,18 @@ def _run_catalog_command(
             public_only=args.public_only,
             spec_file=args.spec_file,
         )
-        manifest_scope = (
-            _manifest_scope_by_operation_id()
-            if _should_use_curated_manifest(args.spec_file, args.public_only)
-            else None
-        )
+        manifest_scope = None
+        manifest_metadata = None
+        if _should_use_curated_manifest(args.spec_file, args.public_only):
+            manifest_scope = _manifest_scope_by_operation_id()
+            manifest_metadata = _manifest_metadata_by_operation_id()
         ranked = _rank_catalog_operations(
             operations,
             task=args.task,
             max_cost=args.max_cost,
             max_latency_ms=args.max_latency_ms,
             manifest_scope_by_operation_id=manifest_scope,
+            manifest_metadata_by_operation_id=manifest_metadata,
         )
         if args.json:
             payload = {
@@ -1629,7 +1806,10 @@ def _run_catalog_command(
                 "count": len(ranked),
                 "heuristic": {
                     "name": "relevance-cost-latency",
-                    "formula": "score = relevance*10 - cost - latency/200",
+                    "formula": (
+                        "score = relevance*10 - cost - latency/200 + "
+                        "scope_bonus + intent_bonus + stage_bonus + dependency_bonus"
+                    ),
                 },
                 "items": ranked,
             }
@@ -2329,11 +2509,11 @@ def _run_code_search_command(
     registry: OperationRegistry,
     sdk_client: AgenticFlowSDK,
 ) -> int:
-    manifest_scope = (
-        _manifest_scope_by_operation_id()
-        if _should_use_curated_manifest(args.spec_file, args.public_only)
-        else None
-    )
+    manifest_scope = None
+    manifest_metadata = None
+    if _should_use_curated_manifest(args.spec_file, args.public_only):
+        manifest_scope = _manifest_scope_by_operation_id()
+        manifest_metadata = _manifest_metadata_by_operation_id()
     ranked = _rank_catalog_operations(
         _catalog_operations(
             registry,
@@ -2344,6 +2524,7 @@ def _run_code_search_command(
         max_cost=args.max_cost,
         max_latency_ms=args.max_latency_ms,
         manifest_scope_by_operation_id=manifest_scope,
+        manifest_metadata_by_operation_id=manifest_metadata,
     )
 
     if args.limit is not None and args.limit > 0:
