@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+dist/
+.env
+.env.*
+.agenticflow/
+*.tgz
+*.log
+.minion-runs/
+openapi.json
