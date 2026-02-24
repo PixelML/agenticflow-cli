@@ -53,8 +53,15 @@ jobs:
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
+      - name: Clean npmrc for OIDC
+        run: |
+          echo "registry=https://registry.npmjs.org/" > "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          cat "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+
       - name: Publish to npm (trusted publishing)
         working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ""
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
@@ -116,8 +123,15 @@ jobs:
         working-directory: packages/sdk
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
+      - name: Clean npmrc for OIDC
+        run: |
+          echo "registry=https://registry.npmjs.org/" > "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          cat "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+
       - name: Publish to npm (trusted publishing)
         working-directory: packages/sdk
+        env:
+          NODE_AUTH_TOKEN: ""
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
