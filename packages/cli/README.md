@@ -73,6 +73,18 @@ agenticflow logout --profile staging # remove a single profile
 
 ## Commands
 
+### Cold start
+
+```bash
+# Machine-discoverable first-touch path
+agenticflow discover --json
+agenticflow playbook first-touch
+
+# Prime local template cache for workflow/agent/workforce examples
+agenticflow templates sync --json
+agenticflow templates index --json
+```
+
 ### agent
 
 ```bash
@@ -97,7 +109,7 @@ agenticflow workflow run --workflow-id <id> [--input <json|@file>]
 agenticflow workflow run-status --workflow-run-id <id>
 agenticflow workflow list-runs --workflow-id <id> [--sort-order asc|desc]
 agenticflow workflow run-history --workflow-id <id>
-agenticflow workflow validate --body <json|@file>
+agenticflow workflow validate --body <json|@file> [--local-only]
 agenticflow workflow reference-impact --workflow-id <id>
 agenticflow workflow like-status --workflow-id <id>
 ```
@@ -156,6 +168,9 @@ agenticflow call --operation-id get_all_v1_agents__get --dry-run
 # Preflight diagnostics
 agenticflow doctor
 
+# Machine-readable capability discovery
+agenticflow discover --json
+
 # OpenAPI operation discovery
 agenticflow ops list [--public-only] [--tag <tag>] [--json]
 agenticflow ops show <operation-id>
@@ -170,6 +185,22 @@ agenticflow policy init [--spend-ceiling <amount>]
 
 # Built-in playbooks
 agenticflow playbook [topic] [--list]
+# First-touch onboarding for cold agents
+agenticflow playbook first-touch
+agenticflow playbook --list --json
+
+# Template bootstrap cache for cold agents
+agenticflow templates sync [--dir .agenticflow/templates] [--limit 100] [--strict] [--json]
+agenticflow templates index [--dir .agenticflow/templates] [--json]
+
+# Duplicate resources from templates (web-like flow)
+agenticflow templates duplicate workflow --template-id <workflow_template_id> --json
+agenticflow templates duplicate agent --template-id <agent_template_id> --json
+# Build payloads only (no create)
+agenticflow templates duplicate workflow --template-id <id> --dry-run --json
+# Resolve template IDs from local cache first (cold/sandbox-friendly)
+agenticflow templates duplicate workflow --template-id <id> --cache-dir .agenticflow/templates --json
+agenticflow templates duplicate agent --template-file .agenticflow/templates/agent/<file>.json --cache-dir .agenticflow/templates --dry-run --json
 ```
 
 ## Global Options
@@ -180,6 +211,7 @@ agenticflow playbook [topic] [--list]
 | `--workspace-id <id>` | Default workspace ID |
 | `--project-id <id>` | Default project ID |
 | `--spec-file <path>` | Path to OpenAPI spec JSON |
+| `--no-color` | Disable ANSI color output |
 | `--json` | Force JSON output |
 | `--version` | Show version |
 | `--help` | Show help |
@@ -187,6 +219,10 @@ agenticflow playbook [topic] [--list]
 ## Output
 
 Use `--json` for machine-readable output. In JSON mode, errors use a structured envelope and exit non-zero.
+
+Create/update/run/stream commands perform local payload validation first. This returns `local_schema_validation_failed` immediately for malformed inputs, before any API request is sent.
+
+`templates duplicate` can resolve workflow templates from a local `templates sync` cache via `--cache-dir` before attempting API fetches. This improves cold-start behavior in restricted environments.
 
 ```bash
 agenticflow agent list | jq '.[] | .name'

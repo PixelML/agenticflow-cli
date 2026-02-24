@@ -2,12 +2,12 @@
  * Main CLI program definition with Commander.js.
  * Resource commands (workflow, agent, node-types, connections, uploads)
  * use the SDK resource classes. Generic commands (call, ops, catalog,
- * doctor, auth, policy, playbook) remain spec-based.
+ * doctor, auth, policy, playbook, templates) remain spec-based.
  */
 
 import { Command } from "commander";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
-import { resolve, dirname, join } from "node:path";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
+import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -33,6 +33,29 @@ import {
   policyFilePath,
 } from "./policy.js";
 import { parseKeyValuePairs, loadJsonPayload, buildRequestSpec } from "./client.js";
+import {
+  TEMPLATE_CACHE_SCHEMA_VERSION,
+  readTemplateCacheManifest,
+  writeTemplateCache,
+  type TemplateDatasetInput,
+  type TemplateKind,
+  type TemplateSyncIssue,
+} from "./template-cache.js";
+import {
+  validateWorkflowCreatePayload,
+  validateWorkflowUpdatePayload,
+  validateWorkflowRunPayload,
+  validateAgentCreatePayload,
+  validateAgentUpdatePayload,
+  validateAgentStreamPayload,
+  type LocalValidationIssue,
+} from "./local-validation.js";
+import {
+  buildWorkflowCreatePayloadFromTemplate,
+  extractAgentTemplateWorkflowReferences,
+  buildAgentCreatePayloadFromTemplate,
+  indexTemplatesById,
+} from "./template-duplicate.js";
 
 // --- Constants ---
 const AUTH_ENV_API_KEY = "AGENTICFLOW_PUBLIC_API_KEY";
@@ -40,6 +63,13 @@ const DOCTOR_SCHEMA_VERSION = "agenticflow.doctor.v1";
 const CATALOG_EXPORT_SCHEMA_VERSION = "agenticflow.catalog.export.v1";
 const CATALOG_RANK_SCHEMA_VERSION = "agenticflow.catalog.rank.v1";
 const ERROR_SCHEMA_VERSION = "agenticflow.error.v1";
+const PLAYBOOK_LIST_SCHEMA_VERSION = "agenticflow.playbook.list.v1";
+const PLAYBOOK_SCHEMA_VERSION = "agenticflow.playbook.v1";
+const DISCOVER_SCHEMA_VERSION = "agenticflow.discover.v1";
+const TEMPLATE_SYNC_SCHEMA_VERSION = "agenticflow.templates.sync.v1";
+const TEMPLATE_INDEX_SCHEMA_VERSION = "agenticflow.templates.index.v1";
+const TEMPLATE_DUPLICATE_SCHEMA_VERSION = "agenticflow.templates.duplicate.v1";
+const LOCAL_VALIDATION_SCHEMA_VERSION = "agenticflow.local_validation.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Helpers
@@ -75,6 +105,20 @@ function fail(code: string, message: string, hint?: string, details?: unknown): 
   process.exit(1);
 }
 
+function ensureLocalValidation(target: string, issues: LocalValidationIssue[]): void {
+  if (issues.length === 0) return;
+  fail(
+    "local_schema_validation_failed",
+    `Local schema validation failed for ${target} payload (${issues.length} issue${issues.length === 1 ? "" : "s"}).`,
+    "Fix payload fields and retry. Use `agenticflow discover --json` and `agenticflow playbook first-touch` for payload guidance.",
+    {
+      schema: LOCAL_VALIDATION_SCHEMA_VERSION,
+      target,
+      issues,
+    },
+  );
+}
+
 function parseOptionalInteger(
   rawValue: string | undefined,
   optionName: string,
@@ -101,6 +145,71 @@ function parseOptionalInteger(
     );
   }
   return parsed;
+}
+
+interface LocalWorkflowTemplateCache {
+  cacheDir: string;
+  byId: Map<string, unknown>;
+  warnings: string[];
+}
+
+function readJsonFileWithWarnings(filePath: string, warnings: string[]): unknown | undefined {
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    return JSON.parse(raw);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnings.push(`${filePath}: ${message}`);
+    return undefined;
+  }
+}
+
+function loadLocalWorkflowTemplateCache(cacheDir: string): LocalWorkflowTemplateCache {
+  const resolvedCacheDir = resolve(cacheDir);
+  const warnings: string[] = [];
+  const items: unknown[] = [];
+
+  const collectionPath = join(resolvedCacheDir, "workflow_templates.json");
+  if (existsSync(collectionPath)) {
+    const collection = readJsonFileWithWarnings(collectionPath, warnings);
+    if (Array.isArray(collection)) {
+      items.push(...collection);
+    } else if (collection !== undefined) {
+      warnings.push(`${collectionPath}: expected array payload`);
+    }
+  }
+
+  const itemDir = join(resolvedCacheDir, "workflow");
+  if (existsSync(itemDir)) {
+    const files = readdirSync(itemDir, { withFileTypes: true });
+    for (const file of files) {
+      if (!file.isFile() || !file.name.endsWith(".json")) continue;
+      const itemPath = join(itemDir, file.name);
+      const item = readJsonFileWithWarnings(itemPath, warnings);
+      if (item !== undefined) items.push(item);
+    }
+  }
+
+  const byId = indexTemplatesById(items);
+  return {
+    cacheDir: resolvedCacheDir,
+    byId,
+    warnings,
+  };
+}
+
+function inferTemplateCacheDirFromTemplateFile(templateFile: string): string | undefined {
+  const absolute = resolve(templateFile);
+  const parent = dirname(absolute);
+  const parentName = basename(parent).toLowerCase();
+  if (parentName === "workflow" || parentName === "agent" || parentName === "workforce") {
+    return dirname(parent);
+  }
+  const fileName = basename(absolute).toLowerCase();
+  if (fileName.endsWith("_templates.json")) {
+    return parent;
+  }
+  return undefined;
 }
 
 function shouldUseColor(parentOpts: { color?: boolean }): boolean {
@@ -264,6 +373,50 @@ function formatOperationHint(suggestions: string[]): string | undefined {
   return `Try one of: ${suggestions.join(", ")}`;
 }
 
+function suggestPlaybookTopics(rawQuery: string): string[] {
+  const query = normalizeForMatch(rawQuery);
+  const topics = listPlaybooks().map((pb) => pb.topic);
+  if (!query) return topics.slice(0, 5);
+
+  const scored = topics.map((topic) => {
+    const normalizedTopic = normalizeForMatch(topic);
+    let score = 0;
+    if (normalizedTopic === query) score += 10_000;
+    if (normalizedTopic.startsWith(query)) score += 500;
+    if (normalizedTopic.includes(query)) score += 250;
+    for (const term of query.split(/\s+/)) {
+      if (term.length >= 2 && normalizedTopic.includes(term)) score += 25;
+    }
+    return { topic, score };
+  });
+
+  return scored
+    .sort((a, b) => b.score - a.score || a.topic.localeCompare(b.topic))
+    .slice(0, 5)
+    .map((item) => item.topic);
+}
+
+function describeCommand(cmd: Command, depth = 0): Record<string, unknown> {
+  const options = cmd.options
+    .filter((opt) => !opt.flags.includes("--help"))
+    .map((opt) => ({
+      flags: opt.flags,
+      description: opt.description ?? "",
+    }));
+
+  const description = cmd.description();
+  const descriptor: Record<string, unknown> = {
+    name: cmd.name(),
+    description: typeof description === "string" ? description : "",
+    options,
+  };
+
+  if (depth < 1 && cmd.commands.length > 0) {
+    descriptor["subcommands"] = cmd.commands.map((sub) => describeCommand(sub, depth + 1));
+  }
+  return descriptor;
+}
+
 // --- Auth helpers ---
 function defaultAuthConfigPath(): string {
   const envDir = process.env["AGENTICFLOW_CLI_DIR"];
@@ -300,6 +453,13 @@ function parseKeyValueEnv(line: string): [string, string] | null {
 export function createProgram(): Command {
   const program = new Command();
 
+  program.configureOutput({
+    outputError: (str, write) => {
+      if (isJsonFlagEnabled()) return;
+      write(str);
+    },
+  });
+
   // Read version from package.json so --version stays in sync
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const pkgPath = join(__dirname, "..", "..", "package.json");
@@ -309,8 +469,6 @@ export function createProgram(): Command {
     .name("agenticflow")
     .description("AgenticFlow CLI for agent-native API operations.")
     .version(pkgVersion)
-    .showHelpAfterError()
-    .showSuggestionAfterError(true)
     .option("--api-key <key>", "API key for authentication")
     .option("--workspace-id <id>", "Default workspace ID")
     .option("--project-id <id>", "Default project ID")
@@ -318,9 +476,61 @@ export function createProgram(): Command {
     .option("--no-color", "Disable ANSI colors in text output")
     .option("--json", "Force JSON output");
 
+  if (isJsonFlagEnabled()) {
+    program.showSuggestionAfterError(false);
+  } else {
+    program.showSuggestionAfterError(true);
+  }
+
+  program.exitOverride();
+
   // ═════════════════════════════════════════════════════════════════
   // doctor
   // ═════════════════════════════════════════════════════════════════
+  program
+    .command("discover")
+    .description("Machine-readable CLI capability index for autonomous agents.")
+    .option("--json", "JSON output")
+    .action((opts) => {
+      const parentOpts = program.opts();
+      const commands = program.commands
+        .filter((cmd) => cmd.name() !== "discover")
+        .map((cmd) => describeCommand(cmd));
+
+      const payload = {
+        schema: DISCOVER_SCHEMA_VERSION,
+        cli: {
+          name: program.name(),
+          version: program.version(),
+        },
+        entrypoints: {
+          first_touch: "agenticflow playbook first-touch",
+          discover_playbooks: "agenticflow playbook --list --json",
+          strict_preflight: "agenticflow doctor --json --strict",
+          seed_templates: "agenticflow templates sync --json",
+          duplicate_from_template: "agenticflow templates duplicate workflow --template-id <id> --json",
+        },
+        contracts: {
+          error_schema: ERROR_SCHEMA_VERSION,
+          playbook_list_schema: PLAYBOOK_LIST_SCHEMA_VERSION,
+          playbook_schema: PLAYBOOK_SCHEMA_VERSION,
+          doctor_schema: DOCTOR_SCHEMA_VERSION,
+          template_cache_schema: TEMPLATE_CACHE_SCHEMA_VERSION,
+          local_validation_schema: LOCAL_VALIDATION_SCHEMA_VERSION,
+        },
+        commands,
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        console.log("AgenticFlow CLI Capability Index");
+        console.log(`- Version: ${program.version()}`);
+        console.log(`- First touch: ${payload.entrypoints.first_touch}`);
+        console.log("- Use `agenticflow discover --json` for machine-readable capability metadata.");
+      }
+    });
+
   program
     .command("doctor")
     .description("Preflight checks for CLI configuration and connectivity.")
@@ -527,16 +737,41 @@ export function createProgram(): Command {
     .command("playbook [topic]")
     .description("View built-in playbooks for AgenticFlow workflows.")
     .option("--list", "List available playbooks")
+    .option("--json", "JSON output")
     .action((topic, opts) => {
+      const parentOpts = program.opts();
       if (opts.list || !topic) {
         const playbooks = listPlaybooks();
+        if (opts.json || parentOpts.json) {
+          printJson({
+            schema: PLAYBOOK_LIST_SCHEMA_VERSION,
+            count: playbooks.length,
+            playbooks: playbooks.map((pb) => ({
+              topic: pb.topic,
+              title: pb.title,
+              summary: pb.summary,
+            })),
+          });
+          return;
+        }
         for (const pb of playbooks) {
           console.log(`  ${pb.topic.padEnd(20)} ${pb.title} — ${pb.summary}`);
         }
         return;
       }
       const pb = getPlaybook(topic);
-      if (!pb) { console.error(`Playbook not found: ${topic}`); process.exit(1); }
+      if (!pb) {
+        const suggestions = suggestPlaybookTopics(topic);
+        const hint = suggestions.length > 0 ? `Available topics: ${suggestions.join(", ")}` : undefined;
+        fail("playbook_not_found", `Playbook not found: ${topic}`, hint);
+      }
+      if (opts.json || parentOpts.json) {
+        printJson({
+          schema: PLAYBOOK_SCHEMA_VERSION,
+          playbook: pb,
+        });
+        return;
+      }
       console.log(`# ${pb.title}\n`);
       console.log(pb.content);
     });
@@ -863,6 +1098,642 @@ export function createProgram(): Command {
     });
 
   // ═════════════════════════════════════════════════════════════════
+  // templates (spec-backed, local bootstrap cache)
+  // ═════════════════════════════════════════════════════════════════
+  const templatesCmd = program
+    .command("templates")
+    .description("Template bootstrap helpers for cold-start agents.");
+
+  templatesCmd
+    .command("sync")
+    .description("Fetch workflow/agent/workforce templates and serialize them to a local cache.")
+    .option("--dir <path>", "Output directory for template cache", ".agenticflow/templates")
+    .option("--limit <n>", "Template limit per source", "100")
+    .option("--offset <n>", "Template offset per source", "0")
+    .option("--sort-order <order>", "Workflow sort order: asc or desc", "desc")
+    .option("--workforce-id <id>", "Optional workforce ID filter for workforce template fetch")
+    .option("--strict", "Exit non-zero if any template source fails")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const baseUrl = DEFAULT_BASE_URL;
+      const token = resolveToken(parentOpts);
+      const limit = parseOptionalInteger(opts.limit as string | undefined, "--limit", 1) ?? 100;
+      const offset = parseOptionalInteger(opts.offset as string | undefined, "--offset", 0) ?? 0;
+
+      const sortOrder = String(opts.sortOrder ?? "desc").toLowerCase();
+      if (sortOrder !== "asc" && sortOrder !== "desc") {
+        fail(
+          "invalid_option_value",
+          `Invalid value for --sort-order: ${opts.sortOrder}`,
+          "Use either 'asc' or 'desc'.",
+        );
+      }
+
+      const specFile = parentOpts.specFile ?? defaultSpecPath();
+      const registry = loadRegistry(specFile);
+      if (!registry) fail("spec_load_failed", "Failed to load OpenAPI spec.");
+
+      const sourceConfigs: Array<{
+        kind: TemplateKind;
+        operationId: string;
+        query: Record<string, string | undefined>;
+      }> = [
+        {
+          kind: "workflow",
+          operationId: "get_workflow_templates_v1_workflow_templates__get",
+          query: {
+            limit: String(limit),
+            offset: String(offset),
+            sort_order: sortOrder,
+          },
+        },
+        {
+          kind: "agent",
+          operationId: "get_public_v1_agent_templates_public_get",
+          query: {
+            limit: String(limit),
+            offset: String(offset),
+          },
+        },
+        {
+          kind: "workforce",
+          operationId: "get_mas_templates_v1_mas_templates__get",
+          query: {
+            limit: String(limit),
+            offset: String(offset),
+            workforce_id: opts.workforceId as string | undefined,
+          },
+        },
+      ];
+
+      const datasets: TemplateDatasetInput[] = [];
+      const issues: TemplateSyncIssue[] = [];
+
+      for (const source of sourceConfigs) {
+        const operation = registry.getOperationById(source.operationId);
+        if (!operation) {
+          issues.push({
+            kind: source.kind,
+            code: "operation_not_found",
+            message: `Operation not found in spec: ${source.operationId}`,
+            hint: "Update the bundled OpenAPI spec or pass --spec-file with a newer spec.",
+          });
+          continue;
+        }
+
+        const queryParams: Record<string, string> = {};
+        for (const [key, value] of Object.entries(source.query)) {
+          if (typeof value === "string" && value.length > 0) queryParams[key] = value;
+        }
+
+        let requestSpec: ReturnType<typeof buildRequestSpec>;
+        try {
+          requestSpec = buildRequestSpec(operation, baseUrl, {}, queryParams, {}, token, undefined);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          issues.push({
+            kind: source.kind,
+            code: "invalid_request_options",
+            message,
+          });
+          continue;
+        }
+
+        const query = new URLSearchParams(requestSpec.params).toString();
+        const url = query ? `${requestSpec.url}?${query}` : requestSpec.url;
+
+        try {
+          const response = await fetch(url, {
+            method: requestSpec.method,
+            headers: requestSpec.headers,
+          });
+
+          const text = await response.text();
+          let data: unknown = text;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            // non-json responses are captured below
+          }
+
+          if (!response.ok) {
+            const hint = source.kind === "workforce" && !opts.workforceId && response.status === 400
+              ? "Retry with --workforce-id <id> if your backend requires a source workforce filter."
+              : undefined;
+            issues.push({
+              kind: source.kind,
+              code: "template_source_failed",
+              message: `Template fetch failed for ${source.kind} source (${response.status}).`,
+              status: response.status,
+              hint,
+            });
+            continue;
+          }
+
+          if (!Array.isArray(data)) {
+            issues.push({
+              kind: source.kind,
+              code: "unexpected_payload_shape",
+              message: `Expected an array response for ${source.kind} templates.`,
+              hint: "Validate response schema for this operation or inspect the endpoint manually with `agenticflow call`.",
+            });
+            continue;
+          }
+
+          datasets.push({
+            kind: source.kind,
+            operationId: source.operationId,
+            query: source.query,
+            items: data,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          issues.push({
+            kind: source.kind,
+            code: "request_failed",
+            message: `Template fetch request failed for ${source.kind}: ${message}`,
+          });
+        }
+      }
+
+      const manifest = writeTemplateCache(opts.dir as string, datasets, issues);
+      const fetchedCount = datasets.reduce((sum, dataset) => sum + dataset.items.length, 0);
+      const payload = {
+        schema: TEMPLATE_SYNC_SCHEMA_VERSION,
+        ok: issues.length === 0,
+        cache: manifest,
+        fetched_templates: fetchedCount,
+        source_count: sourceConfigs.length,
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        console.log("Template cache sync complete.");
+        console.log(`- Cache dir: ${manifest.cache_dir}`);
+        for (const dataset of manifest.datasets) {
+          console.log(`- ${dataset.kind}: ${dataset.count} templates`);
+        }
+        if (manifest.issues.length > 0) {
+          console.log(`- Issues: ${manifest.issues.length} (inspect ${manifest.cache_dir}/manifest.json)`);
+        }
+      }
+
+      if (opts.strict && issues.length > 0) {
+        process.exitCode = 1;
+      }
+
+      if (datasets.length === 0) {
+        process.exitCode = 1;
+      }
+    });
+
+  const templatesDuplicateCmd = templatesCmd
+    .command("duplicate")
+    .description("Create new resources from template samples.");
+
+  templatesDuplicateCmd
+    .command("workflow")
+    .description("Duplicate a workflow template into a new workflow.")
+    .option("--template-id <id>", "Workflow template ID")
+    .option("--template-file <path>", "Local workflow template JSON file")
+    .option("--cache-dir <path>", "Local template cache dir (from `templates sync`)")
+    .option("--workspace-id <id>", "Workspace ID override")
+    .option("--project-id <id>", "Project ID override")
+    .option("--name-suffix <suffix>", "Suffix for duplicated workflow name", " [Copy]")
+    .option("--dry-run", "Build and print create payload without creating workflow")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const client = buildClient(parentOpts);
+      const templateId = opts.templateId as string | undefined;
+      const templateFile = opts.templateFile as string | undefined;
+      const explicitCacheDir = opts.cacheDir as string | undefined;
+
+      if ((templateId == null || templateId.trim() === "") && !templateFile) {
+        fail(
+          "missing_required_option",
+          "Provide --template-id or --template-file.",
+          "Use `templates sync` to fetch templates locally, then pass --template-file.",
+        );
+      }
+      if (templateId && templateFile) {
+        fail("invalid_request_options", "Use either --template-id or --template-file, not both.");
+      }
+
+      if (explicitCacheDir && !existsSync(resolve(explicitCacheDir))) {
+        fail(
+          "template_cache_not_found",
+          `Template cache directory not found: ${resolve(explicitCacheDir)}`,
+          "Run `agenticflow templates sync --dir <path>` first or use an existing cache dir.",
+        );
+      }
+
+      const inferredCacheDir = templateFile ? inferTemplateCacheDirFromTemplateFile(templateFile) : undefined;
+      const cacheDir = explicitCacheDir ?? inferredCacheDir;
+      const localWorkflowCache = cacheDir ? loadLocalWorkflowTemplateCache(cacheDir) : null;
+
+      const projectId = resolveProjectId(opts.projectId as string | undefined);
+      if (!projectId) {
+        fail(
+          "missing_project_id",
+          "Project ID is required to duplicate templates.",
+          "Set AGENTICFLOW_PROJECT_ID or pass --project-id.",
+        );
+      }
+
+      let templateData: unknown;
+      let templateSource: "file" | "cache" | "api" = "api";
+      if (templateFile) {
+        templateData = loadJsonPayload(`@${templateFile}`);
+        templateSource = "file";
+      } else {
+        const localTemplate = localWorkflowCache?.byId.get(templateId as string);
+        if (localTemplate !== undefined) {
+          templateData = localTemplate;
+          templateSource = "cache";
+        } else {
+          try {
+            templateData = (await client.sdk.get(`/v1/workflow_templates/${templateId}`)).data;
+            templateSource = "api";
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            fail("request_failed", message);
+          }
+        }
+      }
+
+      let createPayload: Record<string, unknown>;
+      try {
+        createPayload = buildWorkflowCreatePayloadFromTemplate(
+          templateData,
+          projectId,
+          opts.nameSuffix as string | undefined,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("template_payload_invalid", message);
+      }
+
+      ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(createPayload));
+
+      if (opts.dryRun) {
+        const payload = {
+          schema: TEMPLATE_DUPLICATE_SCHEMA_VERSION,
+          kind: "workflow",
+          dry_run: true,
+          template_source: templateSource,
+          cache_dir: localWorkflowCache?.cacheDir ?? null,
+          cache_warnings: localWorkflowCache?.warnings ?? [],
+          create_payload: createPayload,
+        };
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log("Workflow template duplication dry-run payload:");
+          printJson(payload);
+        }
+        return;
+      }
+
+      const workspaceId = resolveWorkspaceId(opts.workspaceId as string | undefined);
+      if (!workspaceId) {
+        fail(
+          "missing_workspace_id",
+          "Workspace ID is required to create duplicated workflows.",
+          "Set AGENTICFLOW_WORKSPACE_ID or pass --workspace-id.",
+        );
+      }
+
+      try {
+        const created = await client.workflows.create(createPayload, workspaceId);
+        const payload = {
+          schema: TEMPLATE_DUPLICATE_SCHEMA_VERSION,
+          kind: "workflow",
+          dry_run: false,
+          template_source: templateSource,
+          cache_dir: localWorkflowCache?.cacheDir ?? null,
+          cache_warnings: localWorkflowCache?.warnings ?? [],
+          created,
+        };
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log("Workflow duplicated from template successfully.");
+          printJson(payload);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", message);
+      }
+    });
+
+  templatesDuplicateCmd
+    .command("agent")
+    .description("Duplicate an agent template and its workflow-template tools.")
+    .option("--template-id <id>", "Agent template ID")
+    .option("--template-file <path>", "Local agent template JSON file")
+    .option("--cache-dir <path>", "Local template cache dir (from `templates sync`)")
+    .option("--workspace-id <id>", "Workspace ID override")
+    .option("--project-id <id>", "Project ID override")
+    .option("--name-suffix <suffix>", "Suffix for duplicated agent name", " [Copy]")
+    .option(
+      "--workflow-name-suffix <suffix>",
+      "Suffix for duplicated tool workflows",
+      " [Tool Copy]",
+    )
+    .option("--skip-missing-tools", "Skip tools whose workflow templates cannot be duplicated")
+    .option("--dry-run", "Build and print create payloads without creating resources")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const client = buildClient(parentOpts);
+      const templateId = opts.templateId as string | undefined;
+      const templateFile = opts.templateFile as string | undefined;
+      const explicitCacheDir = opts.cacheDir as string | undefined;
+
+      if ((templateId == null || templateId.trim() === "") && !templateFile) {
+        fail(
+          "missing_required_option",
+          "Provide --template-id or --template-file.",
+          "Use `templates sync` to fetch templates locally, then pass --template-file.",
+        );
+      }
+      if (templateId && templateFile) {
+        fail("invalid_request_options", "Use either --template-id or --template-file, not both.");
+      }
+
+      if (explicitCacheDir && !existsSync(resolve(explicitCacheDir))) {
+        fail(
+          "template_cache_not_found",
+          `Template cache directory not found: ${resolve(explicitCacheDir)}`,
+          "Run `agenticflow templates sync --dir <path>` first or use an existing cache dir.",
+        );
+      }
+
+      const inferredCacheDir = templateFile ? inferTemplateCacheDirFromTemplateFile(templateFile) : undefined;
+      const cacheDir = explicitCacheDir ?? inferredCacheDir;
+      const localWorkflowCache = cacheDir ? loadLocalWorkflowTemplateCache(cacheDir) : null;
+
+      const projectId = resolveProjectId(opts.projectId as string | undefined);
+      if (!projectId) {
+        fail(
+          "missing_project_id",
+          "Project ID is required to duplicate templates.",
+          "Set AGENTICFLOW_PROJECT_ID or pass --project-id.",
+        );
+      }
+
+      const workspaceId = resolveWorkspaceId(opts.workspaceId as string | undefined);
+      if (!workspaceId && !opts.dryRun) {
+        fail(
+          "missing_workspace_id",
+          "Workspace ID is required to duplicate agent template tools.",
+          "Set AGENTICFLOW_WORKSPACE_ID or pass --workspace-id.",
+        );
+      }
+
+      let agentTemplate: unknown;
+      if (templateFile) {
+        agentTemplate = loadJsonPayload(`@${templateFile}`);
+      } else {
+        try {
+          agentTemplate = (await client.sdk.get(`/v1/agent-templates/${templateId}`)).data;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          fail("request_failed", message);
+        }
+      }
+
+      const toolRefs = extractAgentTemplateWorkflowReferences(agentTemplate);
+      const duplicatedTools: Array<{
+        workflowTemplateId: string;
+        workflowId: string;
+        runBehavior: "auto_run" | "request_confirmation";
+        description: string | null;
+        timeout: number;
+        inputConfig: Record<string, unknown> | null;
+      }> = [];
+      const createdWorkflows: Array<Record<string, unknown>> = [];
+      const skippedTools: Array<{ workflow_template_id: string; reason: string }> = [];
+      const toolTemplateResolution = {
+        from_cache: 0,
+        from_api: 0,
+      };
+
+      for (let i = 0; i < toolRefs.length; i++) {
+        const ref = toolRefs[i];
+        let workflowTemplate: unknown;
+        const localTemplate = localWorkflowCache?.byId.get(ref.workflowTemplateId);
+        if (localTemplate !== undefined) {
+          workflowTemplate = localTemplate;
+          toolTemplateResolution.from_cache += 1;
+        } else {
+          try {
+            workflowTemplate = (await client.sdk.get(`/v1/workflow_templates/${ref.workflowTemplateId}`)).data;
+            toolTemplateResolution.from_api += 1;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (opts.skipMissingTools) {
+              const reason = localWorkflowCache
+                ? `Not found in local cache and API fetch failed: ${message}`
+                : message;
+              skippedTools.push({
+                workflow_template_id: ref.workflowTemplateId,
+                reason,
+              });
+              continue;
+            }
+            fail(
+              "request_failed",
+              `Unable to fetch tool workflow template ${ref.workflowTemplateId}: ${message}`,
+              "Use --skip-missing-tools to proceed without unavailable tool templates.",
+            );
+          }
+        }
+
+        let workflowCreatePayload: Record<string, unknown>;
+        try {
+          workflowCreatePayload = buildWorkflowCreatePayloadFromTemplate(
+            workflowTemplate,
+            projectId,
+            opts.workflowNameSuffix as string | undefined,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (opts.skipMissingTools) {
+            skippedTools.push({
+              workflow_template_id: ref.workflowTemplateId,
+              reason: message,
+            });
+            continue;
+          }
+          fail("template_payload_invalid", message);
+        }
+
+        ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(workflowCreatePayload));
+
+        if (opts.dryRun) {
+          const placeholderWorkflowId = `__tool_workflow_${i + 1}__`;
+          duplicatedTools.push({
+            workflowTemplateId: ref.workflowTemplateId,
+            workflowId: placeholderWorkflowId,
+            runBehavior: ref.runBehavior,
+            description: ref.description,
+            timeout: ref.timeout,
+            inputConfig: ref.inputConfig,
+          });
+          createdWorkflows.push({
+            workflow_template_id: ref.workflowTemplateId,
+            dry_run_workflow_id: placeholderWorkflowId,
+            create_payload: workflowCreatePayload,
+          });
+          continue;
+        }
+
+        try {
+          const created = await client.workflows.create(workflowCreatePayload, workspaceId as string);
+          const createdRecord = (created && typeof created === "object")
+            ? (created as Record<string, unknown>)
+            : {};
+          const createdId = typeof createdRecord["id"] === "string" ? createdRecord["id"] : null;
+          if (!createdId) {
+            fail(
+              "template_duplicate_failed",
+              `Duplicated tool workflow from ${ref.workflowTemplateId} has no id in response.`,
+            );
+          }
+
+          duplicatedTools.push({
+            workflowTemplateId: ref.workflowTemplateId,
+            workflowId: createdId,
+            runBehavior: ref.runBehavior,
+            description: ref.description,
+            timeout: ref.timeout,
+            inputConfig: ref.inputConfig,
+          });
+          createdWorkflows.push({
+            workflow_template_id: ref.workflowTemplateId,
+            workflow: createdRecord,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (opts.skipMissingTools) {
+            skippedTools.push({
+              workflow_template_id: ref.workflowTemplateId,
+              reason: message,
+            });
+            continue;
+          }
+          fail(
+            "request_failed",
+            `Failed to create tool workflow for template ${ref.workflowTemplateId}: ${message}`,
+            "Use --skip-missing-tools to proceed without unavailable tool templates.",
+          );
+        }
+      }
+
+      let agentCreatePayload: Record<string, unknown>;
+      try {
+        agentCreatePayload = buildAgentCreatePayloadFromTemplate(
+          agentTemplate,
+          projectId,
+          duplicatedTools,
+          opts.nameSuffix as string | undefined,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("template_payload_invalid", message);
+      }
+      ensureLocalValidation("agent.create", validateAgentCreatePayload(agentCreatePayload));
+
+      if (opts.dryRun) {
+        const payload = {
+          schema: TEMPLATE_DUPLICATE_SCHEMA_VERSION,
+          kind: "agent",
+          dry_run: true,
+          cache_dir: localWorkflowCache?.cacheDir ?? null,
+          cache_warnings: localWorkflowCache?.warnings ?? [],
+          tool_template_resolution: toolTemplateResolution,
+          created_tool_workflows: createdWorkflows,
+          skipped_tools: skippedTools,
+          create_payload: agentCreatePayload,
+        };
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log("Agent template duplication dry-run payload:");
+          printJson(payload);
+        }
+        return;
+      }
+
+      try {
+        const createdAgent = await client.agents.create(agentCreatePayload);
+        const payload = {
+          schema: TEMPLATE_DUPLICATE_SCHEMA_VERSION,
+          kind: "agent",
+          dry_run: false,
+          cache_dir: localWorkflowCache?.cacheDir ?? null,
+          cache_warnings: localWorkflowCache?.warnings ?? [],
+          tool_template_resolution: toolTemplateResolution,
+          created_tool_workflows: createdWorkflows,
+          skipped_tools: skippedTools,
+          created_agent: createdAgent,
+        };
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log("Agent duplicated from template successfully.");
+          printJson(payload);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", message);
+      }
+    });
+
+  templatesCmd
+    .command("index")
+    .description("Inspect a local template cache manifest.")
+    .option("--dir <path>", "Template cache directory", ".agenticflow/templates")
+    .option("--json", "JSON output")
+    .action((opts) => {
+      const parentOpts = program.opts();
+      let manifest;
+      try {
+        manifest = readTemplateCacheManifest(opts.dir as string);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail(
+          "template_cache_not_found",
+          `Unable to read template cache manifest at ${resolve(opts.dir as string)}.`,
+          "Run `agenticflow templates sync --json` first.",
+          { error: message },
+        );
+      }
+
+      const payload = {
+        schema: TEMPLATE_INDEX_SCHEMA_VERSION,
+        cache: manifest,
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        console.log(`Template cache: ${manifest.cache_dir}`);
+        console.log(`Fetched at: ${manifest.fetched_at}`);
+        for (const dataset of manifest.datasets) {
+          console.log(`- ${dataset.kind}: ${dataset.count} templates`);
+        }
+        if (manifest.issues.length > 0) {
+          console.log(`Issues: ${manifest.issues.length} (see manifest.json for details)`);
+        }
+      }
+    });
+
+  // ═════════════════════════════════════════════════════════════════
   // workflow  (SDK-based)
   // ═════════════════════════════════════════════════════════════════
   const workflowCmd = program
@@ -910,6 +1781,7 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(body));
       await run(() => client.workflows.create(body, opts.workspaceId));
     });
 
@@ -922,6 +1794,7 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      ensureLocalValidation("workflow.update", validateWorkflowUpdatePayload(body));
       await run(() => client.workflows.update(opts.workflowId, body, opts.workspaceId));
     });
 
@@ -946,6 +1819,7 @@ export function createProgram(): Command {
       const token = resolveToken(program.opts());
       const body: Record<string, unknown> = { workflow_id: opts.workflowId };
       if (opts.input) body["input"] = loadJsonPayload(opts.input);
+      ensureLocalValidation("workflow.run", validateWorkflowRunPayload(body));
 
       const executeRun = () => token
         ? client.workflows.run(body)
@@ -1139,9 +2013,28 @@ export function createProgram(): Command {
     .command("validate")
     .description("Validate a workflow payload.")
     .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .option("--local-only", "Validate locally only (skip API validate endpoint)")
     .action(async (opts) => {
+      const parentOpts = program.opts();
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(body));
+
+      if (opts.localOnly) {
+        const payload = {
+          schema: LOCAL_VALIDATION_SCHEMA_VERSION,
+          target: "workflow.create",
+          valid: true,
+          issues: [],
+        };
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log("Local validation passed for workflow.create payload.");
+        }
+        return;
+      }
+
       await run(() => client.workflows.validate(body));
     });
 
@@ -1224,6 +2117,7 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      ensureLocalValidation("agent.create", validateAgentCreatePayload(body));
       await run(() => client.agents.create(body));
     });
 
@@ -1235,6 +2129,7 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      ensureLocalValidation("agent.update", validateAgentUpdatePayload(body));
       await run(() => client.agents.update(opts.agentId, body));
     });
 
@@ -1256,6 +2151,7 @@ export function createProgram(): Command {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
       const body = loadJsonPayload(opts.body);
+      ensureLocalValidation("agent.stream", validateAgentStreamPayload(body));
       if (token) {
         await run(() => client.agents.stream(opts.agentId, body));
       } else {
@@ -1424,5 +2320,26 @@ export function createProgram(): Command {
 
 export async function runCli(argv?: string[]): Promise<void> {
   const program = createProgram();
-  await program.parseAsync(argv ?? process.argv);
+  try {
+    await program.parseAsync(argv ?? process.argv);
+  } catch (err) {
+    const code = typeof err === "object" && err != null && "code" in err
+      ? String((err as { code: unknown }).code)
+      : "";
+    if (code.startsWith("commander.")) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (code === "commander.helpDisplayed" || code === "commander.version") {
+        process.exit(0);
+      }
+      if (isJsonFlagEnabled()) {
+        fail("cli_parse_error", message);
+      }
+      process.exit(
+        typeof err === "object" && err != null && "exitCode" in err
+          ? Number((err as { exitCode: unknown }).exitCode) || 1
+          : 1,
+      );
+    }
+    throw err;
+  }
 }

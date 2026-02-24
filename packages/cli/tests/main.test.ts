@@ -15,6 +15,7 @@ describe("CLI Main (Commander integration)", () => {
     it("has all expected top-level commands", () => {
       const program = createProgram();
       const commandNames = program.commands.map((c) => c.name());
+      expect(commandNames).toContain("discover");
       expect(commandNames).toContain("doctor");
       expect(commandNames).toContain("ops");
       expect(commandNames).toContain("catalog");
@@ -22,6 +23,7 @@ describe("CLI Main (Commander integration)", () => {
       expect(commandNames).toContain("auth");
       expect(commandNames).toContain("policy");
       expect(commandNames).toContain("call");
+      expect(commandNames).toContain("templates");
       expect(commandNames).toContain("workflow");
       expect(commandNames).toContain("agent");
       expect(commandNames).toContain("node-types");
@@ -52,6 +54,21 @@ describe("CLI Main (Commander integration)", () => {
       const optNames = listCmd.options.map((o) => o.long);
       expect(optNames).toContain("--json");
     });
+
+    it("playbook command supports json output", () => {
+      const program = createProgram();
+      const playbookCmd = program.commands.find((c) => c.name() === "playbook")!;
+      const optNames = playbookCmd.options.map((o) => o.long);
+      expect(optNames).toContain("--json");
+    });
+
+    it("workflow validate command supports local-only mode", () => {
+      const program = createProgram();
+      const workflowCmd = program.commands.find((c) => c.name() === "workflow")!;
+      const validateCmd = workflowCmd.commands.find((c) => c.name() === "validate")!;
+      const optNames = validateCmd.options.map((o) => o.long);
+      expect(optNames).toContain("--local-only");
+    });
   });
 
   describe("workflow subcommands", () => {
@@ -66,6 +83,39 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("run");
       expect(subNames).toContain("run-status");
       expect(subNames).toContain("validate");
+    });
+  });
+
+  describe("templates subcommands", () => {
+    it("has expected subcommands", () => {
+      const program = createProgram();
+      const templatesCmd = program.commands.find((c) => c.name() === "templates")!;
+      const subNames = templatesCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("sync");
+      expect(subNames).toContain("index");
+      expect(subNames).toContain("duplicate");
+    });
+
+    it("duplicate command has workflow and agent subcommands", () => {
+      const program = createProgram();
+      const templatesCmd = program.commands.find((c) => c.name() === "templates")!;
+      const duplicateCmd = templatesCmd.commands.find((c) => c.name() === "duplicate")!;
+      const subNames = duplicateCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("workflow");
+      expect(subNames).toContain("agent");
+    });
+
+    it("duplicate workflow/agent support cache-dir", () => {
+      const program = createProgram();
+      const templatesCmd = program.commands.find((c) => c.name() === "templates")!;
+      const duplicateCmd = templatesCmd.commands.find((c) => c.name() === "duplicate")!;
+      const workflowCmd = duplicateCmd.commands.find((c) => c.name() === "workflow")!;
+      const agentCmd = duplicateCmd.commands.find((c) => c.name() === "agent")!;
+
+      const workflowOptions = workflowCmd.options.map((o) => o.long);
+      const agentOptions = agentCmd.options.map((o) => o.long);
+      expect(workflowOptions).toContain("--cache-dir");
+      expect(agentOptions).toContain("--cache-dir");
     });
   });
 
