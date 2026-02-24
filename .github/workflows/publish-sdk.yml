@@ -1,12 +1,10 @@
 name: Publish SDK
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to publish (leave empty to use package.json version)"
-        required: false
-        type: string
       dry-run:
         description: "Dry run (skip actual publish)"
         required: false
@@ -15,7 +13,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write  # Required for npm provenance (trusted publishing)
+  id-token: write
 
 defaults:
   run:
@@ -24,6 +22,8 @@ defaults:
 jobs:
   publish-sdk:
     runs-on: ubuntu-latest
+    # Only run for SDK releases (tags starting with sdk-v)
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'sdk-v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,15 +43,18 @@ jobs:
       - name: Run tests
         run: npm test --workspace=packages/sdk
 
-      - name: Set version (if provided)
-        if: ${{ inputs.version != '' }}
+      - name: Set version from release tag
+        if: ${{ github.event_name == 'release' }}
         working-directory: packages/sdk
-        run: npm version "${{ inputs.version }}" --no-git-tag-version
+        run: |
+          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          echo "Publishing version: $VERSION"
+          npm version "$VERSION" --no-git-tag-version
 
       - name: Read version
         id: version
         working-directory: packages/sdk
-        run: echo "version=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
 
       - name: Publish to npm
         if: ${{ !inputs.dry-run }}
