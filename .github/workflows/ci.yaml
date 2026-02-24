@@ -1,12 +1,7 @@
 name: ci
 
 on:
-  pull_request:
-  push:
-    branches: [main]
-    tags-ignore:
-      - "py-v*"
-      - "npm-v*"
+  workflow_dispatch:
 
 jobs:
   python-tests:

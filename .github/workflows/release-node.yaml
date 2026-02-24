@@ -1,9 +1,6 @@
 name: release-node
 
 on:
-  push:
-    tags:
-      - "npm-v*"
   workflow_dispatch:
     inputs:
       version_tag:
