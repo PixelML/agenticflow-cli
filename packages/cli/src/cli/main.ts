@@ -959,8 +959,7 @@ export function createProgram(): Command {
         // Detect "Connection X not found" pattern
         const connMatch = errMsg.match(/[Cc]onnection\s+([0-9a-f-]{36})\s+not\s+found/);
         if (!connMatch) {
-          console.error(`Error: ${errMsg}`);
-          process.exit(1);
+          fail("request_failed", errMsg);
         }
 
         const missingConnId = connMatch[1];
