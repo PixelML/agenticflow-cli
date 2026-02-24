@@ -5,7 +5,6 @@
  * Note: API uses underscore `app_connections`, NOT hyphen.
  */
 import type { AgenticFlowSDK } from "../core.js";
-import type { APIResponse } from "../types.js";
 
 export class ConnectionsResource {
   constructor(private client: AgenticFlowSDK) { }
@@ -30,7 +29,7 @@ export class ConnectionsResource {
     projectId?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<APIResponse> {
+  } = {}): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(options.workspaceId);
     const projectId = this.resolveProjectId(options.projectId);
     const queryParams: Record<string, unknown> = {
@@ -38,16 +37,16 @@ export class ConnectionsResource {
     };
     if (options.limit != null) queryParams["limit"] = options.limit;
     if (options.offset != null) queryParams["offset"] = options.offset;
-    return this.client.get(
+    return (await this.client.get(
       `/v1/workspaces/${wsId}/app_connections/`,
       { queryParams },
-    );
+    )).data;
   }
 
   // ── Create ─────────────────────────────────────────────────────────
-  async create(payload: unknown, workspaceId?: string): Promise<APIResponse> {
+  async create(payload: unknown, workspaceId?: string): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(workspaceId);
-    return this.client.post(`/v1/workspaces/${wsId}/app_connections/`, { json: payload });
+    return (await this.client.post(`/v1/workspaces/${wsId}/app_connections/`, { json: payload })).data;
   }
 
   // ── Get Default ────────────────────────────────────────────────────
@@ -55,32 +54,32 @@ export class ConnectionsResource {
     categoryName: string;
     workspaceId?: string;
     projectId?: string;
-  }): Promise<APIResponse> {
+  }): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(options.workspaceId);
     const projectId = this.resolveProjectId(options.projectId);
     const queryParams: Record<string, unknown> = {
       category_name: options.categoryName,
       project_id: projectId,
     };
-    return this.client.get(
+    return (await this.client.get(
       `/v1/workspaces/${wsId}/app_connections/default`,
       { queryParams },
-    );
+    )).data;
   }
 
   // ── Update ─────────────────────────────────────────────────────────
-  async update(connectionId: string, payload: unknown, workspaceId?: string): Promise<APIResponse> {
+  async update(connectionId: string, payload: unknown, workspaceId?: string): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(workspaceId);
-    return this.client.put(
+    return (await this.client.put(
       `/v1/workspaces/${wsId}/app_connections/${connectionId}`,
       { json: payload },
-    );
+    )).data;
   }
 
   // ── Delete ─────────────────────────────────────────────────────────
-  async delete(connectionId: string, workspaceId?: string): Promise<APIResponse> {
+  async delete(connectionId: string, workspaceId?: string): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(workspaceId);
-    return this.client.delete(`/v1/workspaces/${wsId}/app_connections/${connectionId}`);
+    return (await this.client.delete(`/v1/workspaces/${wsId}/app_connections/${connectionId}`)).data;
   }
 
   // ── Categories ─────────────────────────────────────────────────────
@@ -88,24 +87,14 @@ export class ConnectionsResource {
     workspaceId?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<APIResponse> {
+  } = {}): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(options.workspaceId);
     const queryParams: Record<string, unknown> = {};
     if (options.limit != null) queryParams["limit"] = options.limit;
     if (options.offset != null) queryParams["offset"] = options.offset;
-    return this.client.get(
+    return (await this.client.get(
       `/v1/workspaces/${wsId}/app_connections/categories`,
       { queryParams },
-    );
-  }
-
-  // ── Health Check Pre-Create ────────────────────────────────────────
-  async healthCheckPreCreate(payload: unknown): Promise<APIResponse> {
-    return this.client.post("/v1/app_connections/health-check", { json: payload });
-  }
-
-  // ── Health Check Post-Create ───────────────────────────────────────
-  async healthCheckPostCreate(connectionId: string): Promise<APIResponse> {
-    return this.client.post(`/v1/app_connections/${connectionId}/health-check`);
+    )).data;
   }
 }

@@ -1,9 +1,9 @@
-# AgenticFlow CLI
+# @pixelml/agenticflow-cli
 
-A command-line interface for the [AgenticFlow](https://agenticflow.ai) platform.
-Manage agents, workflows, connections, and more — directly from your terminal.
+Command-line interface for the [AgenticFlow](https://agenticflow.ai) platform.
+Manage agents, workflows, connections and more — directly from your terminal.
 
-Built on the `@pixelml/agenticflow-sdk`.
+Built on [`@pixelml/agenticflow-sdk`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
 
 ## Installation
 
@@ -19,7 +19,16 @@ npx @pixelml/agenticflow-cli --help
 
 ## Authentication
 
-### Option 1: Environment variables
+### Interactive login
+
+```bash
+agenticflow login
+```
+
+Prompts for API key, workspace ID and project ID, then saves them to
+`~/.agenticflow/auth.json`.
+
+### Environment variables
 
 ```bash
 export AGENTICFLOW_API_KEY="sk-..."
@@ -27,27 +36,24 @@ export AGENTICFLOW_WORKSPACE_ID="ws-..."
 export AGENTICFLOW_PROJECT_ID="proj-..."
 ```
 
-### Option 2: Import from `.env` file
+### Import from `.env` file
 
 ```bash
 agenticflow auth import-env --file .env
 ```
 
-This writes credentials to `~/.agenticflow/auth.json` and they are used
-automatically for all commands.
-
-### Option 3: CLI flags
+### CLI flags
 
 ```bash
 agenticflow --api-key sk-... --workspace-id ws-... agent list
 ```
 
-**Priority order**: CLI flag → environment variable → `~/.agenticflow/auth.json`
+**Resolution order:** CLI flag → environment variable → `~/.agenticflow/auth.json`
 
-### Verify credentials
+### Verify
 
 ```bash
-agenticflow auth whoami
+agenticflow whoami
 ```
 
 ```
@@ -58,129 +64,76 @@ Project ID:   proj-xyz789
 Config:       ~/.agenticflow/auth.json
 ```
 
-## Usage
-
-### Agents
+### Logout
 
 ```bash
-# List agents
-agenticflow agent list
-
-# Get agent details
-agenticflow agent get <agent-id>
-
-# Create an agent
-agenticflow agent create --body '{"name": "My Agent"}'
-
-# Update an agent
-agenticflow agent update <agent-id> --body '{"name": "Updated"}'
-
-# Delete an agent
-agenticflow agent delete <agent-id>
-
-# Stream a message to an agent
-agenticflow agent stream <agent-id> --body '{"input": "Hello"}'
-
-# Publishing
-agenticflow agent publish-info <agent-id>
-agenticflow agent publish <agent-id> --body '{"platform": "web"}'
-agenticflow agent unpublish <agent-id> --body '{"platform": "web"}'
-
-# Reference impact
-agenticflow agent reference-impact <agent-id>
-
-# Save as template
-agenticflow agent save-as-template <agent-id> --body '{...}'
+agenticflow logout                   # remove all credentials
+agenticflow logout --profile staging # remove a single profile
 ```
 
-### Workflows
+## Commands
+
+### agent
 
 ```bash
-# List workflows
-agenticflow workflow list
-
-# Get workflow details
-agenticflow workflow get <workflow-id>
-
-# Create / update / delete
-agenticflow workflow create --body '{...}'
-agenticflow workflow update <workflow-id> --body '{...}'
-agenticflow workflow delete <workflow-id>
-
-# Run a workflow
-agenticflow workflow run --body '{"workflow_id": "wf-123", "input": {}}'
-
-# Check run status
-agenticflow workflow run-status <run-id>
-
-# List runs for a workflow
-agenticflow workflow list-runs <workflow-id>
-
-# Run history
-agenticflow workflow run-history <workflow-id>
-
-# Validate a workflow definition
-agenticflow workflow validate --body '{...}'
-
-# Like / unlike
-agenticflow workflow like <workflow-id>
-agenticflow workflow unlike <workflow-id>
-agenticflow workflow like-status <workflow-id>
+agenticflow agent list [--project-id <id>] [--search <q>] [--limit <n>] [--offset <n>]
+agenticflow agent get --agent-id <id>
+agenticflow agent create --body <json|@file>
+agenticflow agent update --agent-id <id> --body <json|@file>
+agenticflow agent delete --agent-id <id>
+agenticflow agent stream --agent-id <id> --body <json|@file>
+agenticflow agent reference-impact --agent-id <id>
 ```
 
-### Connections
+### workflow
 
 ```bash
-# List connections
-agenticflow connections list
-
-# Create a connection
-agenticflow connections create --body '{...}'
-
-# Get default connection for a category
-agenticflow connections get-default --category <name>
-
-# Update / delete
-agenticflow connections update <connection-id> --body '{...}'
-agenticflow connections delete <connection-id>
-
-# List connection categories
-agenticflow connections categories
-
-# Health checks
-agenticflow connections health-check-pre --body '{...}'
-agenticflow connections health-check-post <connection-id>
+agenticflow workflow list [--workspace-id <id>] [--project-id <id>] [--search <q>] [--limit <n>]
+agenticflow workflow get --workflow-id <id>
+agenticflow workflow create --body <json|@file> [--workspace-id <id>]
+agenticflow workflow update --workflow-id <id> --body <json|@file> [--workspace-id <id>]
+agenticflow workflow delete --workflow-id <id> [--workspace-id <id>]
+agenticflow workflow run --workflow-id <id> [--input <json|@file>]
+agenticflow workflow run-status --workflow-run-id <id>
+agenticflow workflow list-runs --workflow-id <id> [--sort-order asc|desc]
+agenticflow workflow run-history --workflow-id <id>
+agenticflow workflow validate --body <json|@file>
+agenticflow workflow reference-impact --workflow-id <id>
+agenticflow workflow like --workflow-id <id>
+agenticflow workflow unlike --workflow-id <id>
+agenticflow workflow like-status --workflow-id <id>
 ```
 
-### Node Types
+### connections
 
 ```bash
-# List all node types
+agenticflow connections list [--workspace-id <id>] [--project-id <id>]
+agenticflow connections create --body <json|@file> [--workspace-id <id>]
+agenticflow connections get-default --category <name> [--workspace-id <id>] [--project-id <id>]
+agenticflow connections update --connection-id <id> --body <json|@file> [--workspace-id <id>]
+agenticflow connections delete --connection-id <id> [--workspace-id <id>]
+agenticflow connections categories [--workspace-id <id>]
+```
+
+### node-types
+
+```bash
 agenticflow node-types list
-
-# Get a specific node type
-agenticflow node-types get <name>
-
-# Search node types
-agenticflow node-types search <query>
-
-# Get dynamic options
-agenticflow node-types dynamic-options --name <name> --field-name <field>
+agenticflow node-types get --name <name>
+agenticflow node-types search --query <q>
+agenticflow node-types dynamic-options --name <name> --field-name <field> [--connection <name>]
 ```
 
-### Uploads
+### uploads
 
 ```bash
-# Create an upload session
-agenticflow uploads create --body '{...}'
-
-# Check upload session status
-agenticflow uploads status <session-id>
+agenticflow uploads create --body <json|@file>
+agenticflow uploads status --session-id <id>
 ```
 
-### Generic API Calls
+### Generic API call
 
-For any API endpoint not covered by resource commands:
+For any endpoint not covered by resource commands:
 
 ```bash
 # By operation ID
@@ -189,51 +142,38 @@ agenticflow call --operation-id getAgentModel
 # By method + path
 agenticflow call --method GET --path /v1/agents/
 
-# With parameters
+# With parameters and body
 agenticflow call --operation-id updateAgent \
   -P agent_id=abc123 \
   --body '{"name": "Updated"}'
 
-# With query parameters
-agenticflow call --method GET --path /v1/agents/ \
-  -Q limit=10 -Q offset=0
+# Query parameters
+agenticflow call --method GET --path /v1/agents/ -Q limit=10
 
-# Dry run (show request without executing)
+# Dry run (shows request without executing)
 agenticflow call --operation-id listAgents --dry-run
 ```
 
-### Operations Discovery
+### Utilities
 
 ```bash
-# List all available operations
-agenticflow ops list
-
-# Show details of an operation
-agenticflow ops show <operation-id>
-```
-
-### Preflight Check
-
-```bash
+# Preflight diagnostics
 agenticflow doctor
-```
 
-Runs connectivity checks, validates API key, and verifies the OpenAPI spec.
+# OpenAPI operation discovery
+agenticflow ops list [--public-only] [--tag <tag>]
+agenticflow ops show <operation-id>
 
-### Other Commands
+# Operation catalog
+agenticflow catalog export [--public-only]
+agenticflow catalog rank --task "send a message" [--top <n>]
 
-```bash
-# Catalog management
-agenticflow catalog export
-agenticflow catalog rank
-
-# Policy management
+# Policy guardrails
 agenticflow policy show
-agenticflow policy init
+agenticflow policy init [--spend-ceiling <amount>]
 
-# Playbook management
-agenticflow playbook list
-agenticflow playbook export
+# Built-in playbooks
+agenticflow playbook [topic] [--list]
 ```
 
 ## Global Options
@@ -243,29 +183,17 @@ agenticflow playbook export
 | `--api-key <key>` | API key for authentication |
 | `--workspace-id <id>` | Default workspace ID |
 | `--project-id <id>` | Default project ID |
-| `--spec-file <path>` | Path to OpenAPI spec JSON file |
+| `--spec-file <path>` | Path to OpenAPI spec JSON |
 | `--json` | Force JSON output |
 | `--version` | Show version |
 | `--help` | Show help |
 
 ## Output
 
-All commands output JSON by default:
+All commands output JSON to stdout. Errors set a non-zero exit code.
 
-```json
-{
-  "status": 200,
-  "body": { ... }
-}
-```
-
-Error responses set a non-zero exit code:
-
-```json
-{
-  "status": 404,
-  "body": { "detail": "Not found" }
-}
+```bash
+agenticflow agent list | jq '.[] | .name'
 ```
 
 ## License

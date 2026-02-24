@@ -5,7 +5,6 @@
  * Get by ID does NOT require workspace_id.
  */
 import type { AgenticFlowSDK } from "../core.js";
-import type { APIResponse } from "../types.js";
 
 export class WorkflowsResource {
   constructor(private client: AgenticFlowSDK) { }
@@ -24,7 +23,7 @@ export class WorkflowsResource {
     searchQuery?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<APIResponse> {
+  } = {}): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(options.workspaceId);
     const projectId = options.projectId ?? this.client.projectId;
     const queryParams: Record<string, unknown> = {};
@@ -32,55 +31,55 @@ export class WorkflowsResource {
     if (options.searchQuery != null) queryParams["search_query"] = options.searchQuery;
     if (options.limit != null) queryParams["limit"] = options.limit;
     if (options.offset != null) queryParams["offset"] = options.offset;
-    return this.client.get(`/v1/workspaces/${wsId}/workflows`, { queryParams });
+    return (await this.client.get(`/v1/workspaces/${wsId}/workflows`, { queryParams })).data;
   }
 
   // ── Create Workflow Model ───────────────────────────────────────────
-  async create(payload: unknown, workspaceId?: string): Promise<APIResponse> {
+  async create(payload: unknown, workspaceId?: string): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(workspaceId);
-    return this.client.post(`/v1/workspaces/${wsId}/workflows`, { json: payload });
+    return (await this.client.post(`/v1/workspaces/${wsId}/workflows`, { json: payload })).data;
   }
 
   // ── Get Workflow Model ─────────────────────────────────────────────
-  async get(workflowId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/workflows/${workflowId}`);
+  async get(workflowId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/workflows/${workflowId}`)).data;
   }
 
   // ── Get Anonymous Model ────────────────────────────────────────────
-  async getAnonymous(workflowId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/workflows/anonymous/${workflowId}`);
+  async getAnonymous(workflowId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/workflows/anonymous/${workflowId}`)).data;
   }
 
   // ── Update Workflow Model ──────────────────────────────────────────
-  async update(workflowId: string, payload: unknown, workspaceId?: string): Promise<APIResponse> {
+  async update(workflowId: string, payload: unknown, workspaceId?: string): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(workspaceId);
-    return this.client.put(`/v1/workspaces/${wsId}/workflows/${workflowId}`, { json: payload });
+    return (await this.client.put(`/v1/workspaces/${wsId}/workflows/${workflowId}`, { json: payload })).data;
   }
 
   // ── Delete Workflow Model ──────────────────────────────────────────
-  async delete(workflowId: string, workspaceId?: string): Promise<APIResponse> {
+  async delete(workflowId: string, workspaceId?: string): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(workspaceId);
-    return this.client.delete(`/v1/workspaces/${wsId}/workflows/${workflowId}`);
+    return (await this.client.delete(`/v1/workspaces/${wsId}/workflows/${workflowId}`)).data;
   }
 
   // ── Create Workflow Run Model ──────────────────────────────────────
-  async run(payload: unknown): Promise<APIResponse> {
-    return this.client.post("/v1/workflow_runs/", { json: payload });
+  async run(payload: unknown): Promise<unknown> {
+    return (await this.client.post("/v1/workflow_runs/", { json: payload })).data;
   }
 
   // ── Get Workflow Run Model ─────────────────────────────────────────
-  async getRun(workflowRunId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/workflow_runs/${workflowRunId}`);
+  async getRun(workflowRunId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/workflow_runs/${workflowRunId}`)).data;
   }
 
   // ── Create Workflow Run Model Anonymous ─────────────────────────────
-  async runAnonymous(payload: unknown): Promise<APIResponse> {
-    return this.client.post("/v1/workflow_runs/anonymous", { json: payload });
+  async runAnonymous(payload: unknown): Promise<unknown> {
+    return (await this.client.post("/v1/workflow_runs/anonymous", { json: payload })).data;
   }
 
   // ── Get Workflow Run Model Anonymous ────────────────────────────────
-  async getRunAnonymous(workflowRunId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/workflow_runs/anonymous/${workflowRunId}`);
+  async getRunAnonymous(workflowRunId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/workflow_runs/anonymous/${workflowRunId}`)).data;
   }
 
   // ── List Runs ─────────────────────────────────────────────────────
@@ -89,46 +88,46 @@ export class WorkflowsResource {
     limit?: number;
     offset?: number;
     sortOrder?: "asc" | "desc";
-  } = {}): Promise<APIResponse> {
+  } = {}): Promise<unknown> {
     const wsId = this.resolveWorkspaceId(options.workspaceId);
     const queryParams: Record<string, unknown> = {};
     if (options.limit != null) queryParams["limit"] = options.limit;
     if (options.offset != null) queryParams["offset"] = options.offset;
     if (options.sortOrder != null) queryParams["sort_order"] = options.sortOrder;
-    return this.client.get(`/v1/workspaces/${wsId}/workflows/${workflowId}/runs`, { queryParams });
+    return (await this.client.get(`/v1/workspaces/${wsId}/workflows/${workflowId}/runs`, { queryParams })).data;
   }
 
   // ── Run History ──────────────────────────────────────────────────
   async runHistory(workflowId: string, options: {
     limit?: number;
     offset?: number;
-  } = {}): Promise<APIResponse> {
+  } = {}): Promise<unknown> {
     const queryParams: Record<string, unknown> = {};
     if (options.limit != null) queryParams["limit"] = options.limit;
     if (options.offset != null) queryParams["offset"] = options.offset;
-    return this.client.get(`/v1/workflows/${workflowId}/run_history`, { queryParams });
+    return (await this.client.get(`/v1/workflows/${workflowId}/run_history`, { queryParams })).data;
   }
 
   // ── Validate ─────────────────────────────────────────────────────
-  async validate(payload: unknown): Promise<APIResponse> {
-    return this.client.post("/v1/workflows/utils/validate_create_workflow_model", { json: payload });
+  async validate(payload: unknown): Promise<unknown> {
+    return (await this.client.post("/v1/workflows/utils/validate_create_workflow_model", { json: payload })).data;
   }
 
   // ── Get Reference Impact ───────────────────────────────────────────
-  async getReferenceImpact(workflowId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/workflows/${workflowId}/reference-impact`);
+  async getReferenceImpact(workflowId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/workflows/${workflowId}/reference-impact`)).data;
   }
 
   // ── Like / Unlike / Like Status ────────────────────────────────────
-  async like(workflowId: string): Promise<APIResponse> {
-    return this.client.post(`/v1/workflows/${workflowId}/like`);
+  async like(workflowId: string): Promise<unknown> {
+    return (await this.client.post(`/v1/workflows/${workflowId}/like`)).data;
   }
 
-  async unlike(workflowId: string): Promise<APIResponse> {
-    return this.client.post(`/v1/workflows/${workflowId}/unlike`);
+  async unlike(workflowId: string): Promise<unknown> {
+    return (await this.client.post(`/v1/workflows/${workflowId}/unlike`)).data;
   }
 
-  async getLikeStatus(workflowId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/workflows/${workflowId}/like_status`);
+  async getLikeStatus(workflowId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/workflows/${workflowId}/like_status`)).data;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@pixelml/agenticflow-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AgenticFlow CLI for agent-native API operations.",
   "license": "Apache-2.0",
   "type": "module",
@@ -26,9 +26,6 @@
   },
   "dependencies": {
     "commander": "^13.1.0",
-    "@pixelml/agenticflow-sdk": ">= 0.0.1"
-  },
-  "peerDependencies": {
-    "@pixelml/agenticflow-sdk": ">= 0.0.1"
+    "@pixelml/agenticflow-sdk": "*"
   }
 }

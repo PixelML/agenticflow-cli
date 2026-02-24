@@ -1,8 +1,8 @@
-# AgenticFlow JavaScript SDK
+# @pixelml/agenticflow-sdk
 
-A typed JavaScript/TypeScript SDK for building applications with
-the [AgenticFlow](https://agenticflow.ai) platform. Manage agents, workflows,
-connections, and more — all from a single client.
+Typed JavaScript / TypeScript SDK for the [AgenticFlow](https://agenticflow.ai) API.
+Manage agents, workflows, connections, node types and uploads from a single client
+object — with automatic auth, path-parameter resolution and structured error classes.
 
 ## Installation
 
@@ -13,6 +13,8 @@ yarn add @pixelml/agenticflow-sdk
 # or
 pnpm add @pixelml/agenticflow-sdk
 ```
+
+**Requirements:** Node.js ≥ 18
 
 ## Quick Start
 
@@ -25,104 +27,89 @@ const client = createClient({
   projectId: process.env.AGENTICFLOW_PROJECT_ID,
 });
 
-// List all agents
+// List agents
 const agents = await client.agents.list();
-console.log(agents.data);
 
 // Run a workflow
 const run = await client.workflows.run({
   workflow_id: "wf-abc123",
   input: { prompt: "Hello!" },
 });
-console.log(run.data);
 ```
-
-## Authentication
-
-The SDK uses API key authentication via the `Authorization: Bearer` header.
-
-```typescript
-const client = createClient({
-  apiKey: "sk-...",
-});
-```
-
-The `apiKey` can also be read automatically from the `AGENTICFLOW_API_KEY`
-environment variable if not provided explicitly.
 
 ## Configuration
 
 | Option | Env Variable | Description |
 |---|---|---|
-| `apiKey` | `AGENTICFLOW_API_KEY` | API key for authentication |
+| `apiKey` | `AGENTICFLOW_API_KEY` | API key (sent as `Bearer` token) |
 | `workspaceId` | `AGENTICFLOW_WORKSPACE_ID` | Default workspace ID |
 | `projectId` | `AGENTICFLOW_PROJECT_ID` | Default project ID |
 | `baseUrl` | — | API base URL (default: `https://api.agenticflow.ai/`) |
-| `timeout` | — | Request timeout |
-| `defaultHeaders` | — | Custom headers for all requests |
+| `timeout` | — | Request timeout in milliseconds |
+| `defaultHeaders` | — | Extra headers sent with every request |
+
+> **Note:** If `apiKey` is omitted, the SDK reads `AGENTICFLOW_API_KEY` from the
+> environment automatically.
 
 ## Resources
+
+All resource methods return the response **data** directly (the parsed JSON body),
+not a wrapper object.
 
 ### Agents
 
 ```typescript
-// List agents (with optional filters)
-await client.agents.list({ limit: 20, offset: 0 });
+// List
+await client.agents.list({ projectId, searchQuery, limit, offset });
 
 // CRUD
-await client.agents.create({ name: "My Agent", ... });
+await client.agents.create(payload);
 await client.agents.get("agent-id");
-await client.agents.update("agent-id", { name: "Updated" });
+await client.agents.update("agent-id", payload);
 await client.agents.delete("agent-id");
 
-// Streaming
-await client.agents.stream("agent-id", { input: "Hello" });
+// Anonymous access (no API key required)
+await client.agents.getAnonymous("agent-id");
 
-// Publishing
-await client.agents.getPublishInfo("agent-id", { platform: "telegram" });
-await client.agents.publish("agent-id", { platform: "web" });
-await client.agents.unpublish("agent-id", { platform: "web" });
+// Streaming
+await client.agents.stream("agent-id", payload);
+await client.agents.streamAnonymous("agent-id", payload);
 
 // File uploads
-await client.agents.uploadFile("agent-id", filePayload);
+await client.agents.uploadFile("agent-id", payload);
 await client.agents.getUploadSession("agent-id", "session-id");
+await client.agents.uploadFileAnonymous("agent-id", payload);
+await client.agents.getUploadSessionAnonymous("agent-id", "session-id");
 
-// Misc
+// Reference impact
 await client.agents.getReferenceImpact("agent-id");
-await client.agents.saveAsTemplate("agent-id", templatePayload);
 ```
 
 ### Workflows
 
 ```typescript
-// List workflows in a workspace
-await client.workflows.list({ limit: 10, searchQuery: "my flow" });
+// List (requires workspaceId)
+await client.workflows.list({ workspaceId, projectId, searchQuery, limit, offset });
 
 // CRUD
-await client.workflows.create({ name: "New Workflow", ... });
+await client.workflows.create(payload, workspaceId);
 await client.workflows.get("workflow-id");
-await client.workflows.update("workflow-id", updatePayload);
-await client.workflows.delete("workflow-id");
+await client.workflows.getAnonymous("workflow-id");
+await client.workflows.update("workflow-id", payload, workspaceId);
+await client.workflows.delete("workflow-id", workspaceId);
 
-// Run a workflow
-const run = await client.workflows.run({
-  workflow_id: "workflow-id",
-  input: { key: "value" },
-});
-
-// Check run status
+// Runs
+await client.workflows.run(payload);
+await client.workflows.runAnonymous(payload);
 await client.workflows.getRun("run-id");
+await client.workflows.getRunAnonymous("run-id");
+await client.workflows.listRuns("workflow-id", { workspaceId, limit, offset, sortOrder });
+await client.workflows.runHistory("workflow-id", { limit, offset });
 
-// List runs for a workflow
-await client.workflows.listRuns("workflow-id", { limit: 50 });
+// Validation
+await client.workflows.validate(payload);
 
-// Run history
-await client.workflows.runHistory("workflow-id");
-
-// Validate a workflow definition
-await client.workflows.validate(workflowPayload);
-
-// Reference impact analysis
+// Reference impact
 await client.workflows.getReferenceImpact("workflow-id");
 
 // Like / Unlike
@@ -134,118 +121,105 @@ await client.workflows.getLikeStatus("workflow-id");
 ### Connections
 
 ```typescript
-// List connections (requires projectId)
-await client.connections.list();
+// List (requires projectId)
+await client.connections.list({ workspaceId, projectId, limit, offset });
 
 // CRUD
-await client.connections.create(connectionPayload);
-await client.connections.update("conn-id", updatePayload);
-await client.connections.delete("conn-id");
+await client.connections.create(payload, workspaceId);
+await client.connections.update("conn-id", payload, workspaceId);
+await client.connections.delete("conn-id", workspaceId);
 
-// Get default connection for a category
-await client.connections.getDefault({ categoryName: "llm" });
+// Default connection for a category
+await client.connections.getDefault({ categoryName: "llm", workspaceId, projectId });
 
-// List connection categories
-await client.connections.categories();
-
-// Health checks
-await client.connections.healthCheckPreCreate(configPayload);
-await client.connections.healthCheckPostCreate("conn-id");
+// List categories
+await client.connections.categories({ workspaceId, limit, offset });
 ```
 
 ### Node Types
 
 ```typescript
-// List all node types
+// List & get
 await client.nodeTypes.list();
-
-// Get a specific node type by name
 await client.nodeTypes.get("node-type-name");
 
-// Search node types
+// Search (client-side text match)
 await client.nodeTypes.search("text generation");
 
-// Get dynamic options for a node type field
+// Dynamic field options
 await client.nodeTypes.dynamicOptions({
   name: "node-type-name",
   fieldName: "model",
   connection: "conn-id",
+  projectId: "proj-id",
+  searchTerm: "gpt",
 });
 ```
 
 ### Uploads
 
 ```typescript
-// Create an anonymous upload session
-await client.uploads.inputCreate({ filename: "data.csv", ... });
-
-// Check upload session status
+// Anonymous upload sessions
+await client.uploads.inputCreate({ filename: "data.csv" });
 await client.uploads.inputStatus("session-id");
 ```
 
 ## Error Handling
 
-The SDK throws typed errors for different HTTP status codes:
+The SDK throws structured errors for every non-2xx response:
 
 ```typescript
 import {
   AuthenticationError,
-  AuthorizationError,
   NotFoundError,
-  ValidationError,
   RateLimitError,
-  ServerError,
 } from "@pixelml/agenticflow-sdk";
 
 try {
   await client.agents.get("invalid-id");
 } catch (err) {
   if (err instanceof NotFoundError) {
-    console.log("Agent not found:", err.message);
-  } else if (err instanceof AuthenticationError) {
-    console.log("Invalid API key");
-  } else if (err instanceof RateLimitError) {
-    console.log("Rate limited, retry later");
+    console.log(err.statusCode); // 404
+    console.log(err.message);
+    console.log(err.payload);    // raw response body
+    console.log(err.requestId);  // X-Request-Id if present
   }
 }
 ```
 
 | Error Class | HTTP Status |
 |---|---|
-| `ValidationError` | 400, 422 |
+| `ValidationError` | 400 / 422 |
 | `AuthenticationError` | 401 |
 | `AuthorizationError` | 403 |
 | `NotFoundError` | 404 |
 | `ConflictError` | 409 |
 | `RateLimitError` | 429 |
 | `ServerError` | 5xx |
+| `NetworkError` | Connection / DNS failures |
+| `RequestTimeoutError` | Timeout exceeded |
+
+All API errors extend `APIError`, which extends `AgenticFlowError` (→ `Error`).
 
 ## Low-Level Access
 
-For endpoints not covered by resource classes, use the underlying SDK instance:
+For endpoints not covered by resource classes, use the SDK instance directly:
 
 ```typescript
-const response = await client.sdk.get("/v1/custom/endpoint");
-const response = await client.sdk.post("/v1/custom/endpoint", {
-  json: { key: "value" },
+// HTTP convenience methods
+const data = await client.sdk.get("/v1/health");
+const data = await client.sdk.post("/v1/custom", { json: { key: "value" } });
+const data = await client.sdk.put("/v1/custom/123", { json: payload });
+const data = await client.sdk.patch("/v1/custom/123", { json: patch });
+const data = await client.sdk.delete("/v1/custom/123");
+
+// Full control
+const data = await client.sdk.request("POST", "/v1/agents/{agent_id}/run", {
+  pathParams: { agent_id: "abc" },
+  queryParams: { verbose: true },
+  json: { input: "Hello" },
+  headers: { "X-Custom": "value" },
 });
-```
-
-Available methods: `get`, `post`, `put`, `patch`, `delete`.
-
-## Response Format
-
-All resource methods return an `APIResponse` object:
-
-```typescript
-interface APIResponse {
-  ok: boolean;
-  statusCode: number;
-  data: unknown;
-  text: string;
-  headers: Record<string, string>;
-  requestId: string | null;
-}
 ```
 
 ## License

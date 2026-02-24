@@ -5,7 +5,6 @@
  * project_id is an optional query param on list/versions.
  */
 import type { AgenticFlowSDK } from "../core.js";
-import type { APIResponse } from "../types.js";
 
 export class AgentsResource {
   constructor(private client: AgenticFlowSDK) { }
@@ -16,95 +15,73 @@ export class AgentsResource {
     searchQuery?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<APIResponse> {
+  } = {}): Promise<unknown> {
     const projectId = options.projectId ?? this.client.projectId;
     const queryParams: Record<string, unknown> = {};
     if (projectId != null) queryParams["project_id"] = projectId;
     if (options.searchQuery != null) queryParams["search_query"] = options.searchQuery;
     if (options.limit != null) queryParams["limit"] = options.limit;
     if (options.offset != null) queryParams["offset"] = options.offset;
-    return this.client.get("/v1/agents/", { queryParams });
+    return (await this.client.get("/v1/agents/", { queryParams })).data;
   }
 
   // ── Create ─────────────────────────────────────────────────────────
-  async create(payload: unknown): Promise<APIResponse> {
-    return this.client.post("/v1/agents/", { json: payload });
+  async create(payload: unknown): Promise<unknown> {
+    return (await this.client.post("/v1/agents/", { json: payload })).data;
   }
 
   // ── Get by ID ──────────────────────────────────────────────────────
-  async get(agentId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/agents/${agentId}`);
+  async get(agentId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/agents/${agentId}`)).data;
   }
 
   // ── Update ─────────────────────────────────────────────────────────
-  async update(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.put(`/v1/agents/${agentId}`, { json: payload });
+  async update(agentId: string, payload: unknown): Promise<unknown> {
+    return (await this.client.put(`/v1/agents/${agentId}`, { json: payload })).data;
   }
 
   // ── Delete ─────────────────────────────────────────────────────────
-  async delete(agentId: string): Promise<APIResponse> {
-    return this.client.delete(`/v1/agents/${agentId}`);
+  async delete(agentId: string): Promise<unknown> {
+    return (await this.client.delete(`/v1/agents/${agentId}`)).data;
   }
 
   // ── Get Anonymous ──────────────────────────────────────────────────
-  async getAnonymous(agentId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/agents/anonymous/${agentId}`);
+  async getAnonymous(agentId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/agents/anonymous/${agentId}`)).data;
   }
 
   // ── Stream (authenticated) ─────────────────────────────────────────
-  async stream(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/${agentId}/stream`, { json: payload });
+  async stream(agentId: string, payload: unknown): Promise<unknown> {
+    return (await this.client.post(`/v1/agents/${agentId}/stream`, { json: payload })).data;
   }
 
   // ── Stream Anonymous ───────────────────────────────────────────────
-  async streamAnonymous(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/anonymous/${agentId}/stream`, { json: payload });
+  async streamAnonymous(agentId: string, payload: unknown): Promise<unknown> {
+    return (await this.client.post(`/v1/agents/anonymous/${agentId}/stream`, { json: payload })).data;
   }
 
   // ── Upload File (authenticated) ────────────────────────────────────
-  async uploadFile(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/${agentId}/upload-file`, { json: payload });
+  async uploadFile(agentId: string, payload: unknown): Promise<unknown> {
+    return (await this.client.post(`/v1/agents/${agentId}/upload-file`, { json: payload })).data;
   }
 
   // ── Get Upload Session ─────────────────────────────────────────────
-  async getUploadSession(agentId: string, sessionId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/agents/${agentId}/upload-sessions/${sessionId}`);
+  async getUploadSession(agentId: string, sessionId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/agents/${agentId}/upload-sessions/${sessionId}`)).data;
   }
 
   // ── Upload File Anonymous ──────────────────────────────────────────
-  async uploadFileAnonymous(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/anonymous/${agentId}/upload-file`, { json: payload });
+  async uploadFileAnonymous(agentId: string, payload: unknown): Promise<unknown> {
+    return (await this.client.post(`/v1/agents/anonymous/${agentId}/upload-file`, { json: payload })).data;
   }
 
   // ── Get Upload Session Anonymous ───────────────────────────────────
-  async getUploadSessionAnonymous(agentId: string, sessionId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/agents/anonymous/${agentId}/upload-sessions/${sessionId}`);
-  }
-
-  // ── Publish Info ───────────────────────────────────────────────────
-  async getPublishInfo(agentId: string, options: { platform?: string } = {}): Promise<APIResponse> {
-    const queryParams: Record<string, unknown> = {};
-    if (options.platform != null) queryParams["platform"] = options.platform;
-    return this.client.get(`/v1/agents/${agentId}/publish-info`, { queryParams });
-  }
-
-  // ── Publish ────────────────────────────────────────────────────────
-  async publish(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/${agentId}/publish`, { json: payload });
-  }
-
-  // ── Unpublish ──────────────────────────────────────────────────────
-  async unpublish(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/${agentId}/unpublish`, { json: payload });
+  async getUploadSessionAnonymous(agentId: string, sessionId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/agents/anonymous/${agentId}/upload-sessions/${sessionId}`)).data;
   }
 
   // ── Reference Impact ───────────────────────────────────────────────
-  async getReferenceImpact(agentId: string): Promise<APIResponse> {
-    return this.client.get(`/v1/agents/${agentId}/reference-impact`);
-  }
-
-  // ── Save As Template ───────────────────────────────────────────────
-  async saveAsTemplate(agentId: string, payload: unknown): Promise<APIResponse> {
-    return this.client.post(`/v1/agents/${agentId}/save-as-template`, { json: payload });
+  async getReferenceImpact(agentId: string): Promise<unknown> {
+    return (await this.client.get(`/v1/agents/${agentId}/reference-impact`)).data;
   }
 }

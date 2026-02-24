@@ -16,7 +16,6 @@ import {
   DEFAULT_BASE_URL,
   AGENTICFLOW_API_KEY,
   type AgenticFlowClient,
-  type APIResponse,
 } from "@pixelml/agenticflow-sdk";
 import {
   OperationRegistry,
@@ -48,10 +47,9 @@ function printJson(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
 }
 
-/** Print an SDK APIResponse in CLI-friendly format. */
-function printResult(response: APIResponse): void {
-  printJson({ status: response.statusCode, body: response.data });
-  if (response.statusCode >= 400) process.exitCode = 1;
+/** Print an SDK result in CLI-friendly format. */
+function printResult(data: unknown): void {
+  printJson(data);
 }
 
 /** Load the active auth profile from ~/.agenticflow/auth.json */
@@ -104,7 +102,7 @@ function buildClient(parentOpts: {
 }
 
 /** Wrap an async SDK call with error handling. */
-async function run(fn: () => Promise<APIResponse>): Promise<void> {
+async function run(fn: () => Promise<unknown>): Promise<void> {
   try {
     const result = await fn();
     printResult(result);
@@ -973,55 +971,12 @@ export function createProgram(): Command {
     });
 
   agentCmd
-    .command("publish-info")
-    .description("Get publish info for an agent.")
-    .requiredOption("--agent-id <id>", "Agent ID")
-    .option("--platform <platform>", "Filter by platform")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.agents.getPublishInfo(opts.agentId, { platform: opts.platform }));
-    });
-
-  agentCmd
-    .command("publish")
-    .description("Publish an agent.")
-    .requiredOption("--agent-id <id>", "Agent ID")
-    .requiredOption("--body <body>", "JSON body (inline or @file)")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      const body = loadJsonPayload(opts.body);
-      await run(() => client.agents.publish(opts.agentId, body));
-    });
-
-  agentCmd
-    .command("unpublish")
-    .description("Unpublish an agent.")
-    .requiredOption("--agent-id <id>", "Agent ID")
-    .requiredOption("--body <body>", "JSON body (inline or @file)")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      const body = loadJsonPayload(opts.body);
-      await run(() => client.agents.unpublish(opts.agentId, body));
-    });
-
-  agentCmd
     .command("reference-impact")
     .description("Get reference impact analysis for an agent.")
     .requiredOption("--agent-id <id>", "Agent ID")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       await run(() => client.agents.getReferenceImpact(opts.agentId));
-    });
-
-  agentCmd
-    .command("save-as-template")
-    .description("Save an agent as a template.")
-    .requiredOption("--agent-id <id>", "Agent ID")
-    .requiredOption("--body <body>", "JSON body (inline or @file)")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      const body = loadJsonPayload(opts.body);
-      await run(() => client.agents.saveAsTemplate(opts.agentId, body));
     });
 
   // ═════════════════════════════════════════════════════════════════
@@ -1164,26 +1119,6 @@ export function createProgram(): Command {
         offset: opts.offset ? parseInt(opts.offset) : undefined,
       }));
     });
-
-  connectionsCmd
-    .command("health-check-pre")
-    .description("Pre-create health check for a connection.")
-    .requiredOption("--body <body>", "JSON body (inline or @file)")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      const body = loadJsonPayload(opts.body);
-      await run(() => client.connections.healthCheckPreCreate(body));
-    });
-
-  connectionsCmd
-    .command("health-check-post")
-    .description("Post-create health check for a connection.")
-    .requiredOption("--connection-id <id>", "Connection ID")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.connections.healthCheckPostCreate(opts.connectionId));
-    });
-
   // ═════════════════════════════════════════════════════════════════
   // uploads  (SDK-based)
   // ═════════════════════════════════════════════════════════════════

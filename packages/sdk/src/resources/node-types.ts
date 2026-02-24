@@ -3,7 +3,6 @@
  */
 
 import type { AgenticFlowSDK } from "../core.js";
-import type { APIResponse } from "../types.js";
 
 function compactDict(values?: Record<string, unknown> | null): Record<string, unknown> {
   if (!values) return {};
@@ -14,10 +13,10 @@ function compactDict(values?: Record<string, unknown> | null): Record<string, un
   return result;
 }
 
-function coerceNodes(response: APIResponse): Record<string, unknown>[] {
-  const data = response.data as Record<string, unknown> | null;
-  if (!data) return [];
-  const body = data["body"];
+function coerceNodes(data: unknown): Record<string, unknown>[] {
+  if (!data || typeof data !== "object") return [];
+  const obj = data as Record<string, unknown>;
+  const body = obj["body"];
   if (Array.isArray(body)) {
     return body.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null);
   }
@@ -33,31 +32,28 @@ function coerceNodes(response: APIResponse): Record<string, unknown>[] {
 export class NodeTypesResource {
   constructor(private client: AgenticFlowSDK) { }
 
-  async list(queryParams?: Record<string, unknown>): Promise<APIResponse> {
-    return this.client.get("/v1/node-types", {
+  async list(queryParams?: Record<string, unknown>): Promise<unknown> {
+    return (await this.client.get("/v1/node-types", {
       queryParams: compactDict(queryParams),
-    });
+    })).data;
   }
 
-  async get(name: string): Promise<APIResponse> {
-    return this.client.get(`/v1/node-types/name/${name}`);
+  async get(name: string): Promise<unknown> {
+    return (await this.client.get(`/v1/node-types/name/${name}`)).data;
   }
 
-  async search(query: string, queryParams?: Record<string, unknown>): Promise<APIResponse> {
-    const response = await this.list(queryParams);
-    const nodes = coerceNodes(response);
+  async search(query: string, queryParams?: Record<string, unknown>): Promise<unknown> {
+    const data = await this.list(queryParams);
+    const nodes = coerceNodes(data);
     const needle = query.toLowerCase();
     const matches = nodes.filter((node) =>
       JSON.stringify(node).toLowerCase().includes(needle),
     );
     return {
-      ...response,
-      data: {
-        status: (response.data as Record<string, unknown>)?.["status"],
-        query,
-        count: matches.length,
-        body: matches,
-      },
+      status: (data as Record<string, unknown>)?.["status"],
+      query,
+      count: matches.length,
+      body: matches,
     };
   }
 
@@ -68,7 +64,7 @@ export class NodeTypesResource {
     inputConfig?: Record<string, unknown>;
     connection?: string;
     searchTerm?: string;
-  }): Promise<APIResponse> {
+  }): Promise<unknown> {
     const projectId = options.projectId ?? this.client.projectId;
     const body: Record<string, unknown> = {
       field_name: options.fieldName,
@@ -77,8 +73,8 @@ export class NodeTypesResource {
       project_id: projectId ?? null,
     };
     if (options.searchTerm != null) body["search_term"] = options.searchTerm;
-    return this.client.post(`/v1/node-types/name/${options.name}/dynamic-options`, {
+    return (await this.client.post(`/v1/node-types/name/${options.name}/dynamic-options`, {
       json: body,
-    });
+    })).data;
   }
 }

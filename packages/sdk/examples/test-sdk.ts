@@ -29,9 +29,8 @@ async function main() {
   // ── Agents ──────────────────────────────────────────────────────
   try {
     console.log("📋 Listing agents...");
-    const agentList = await client.agents.list({ limit: 5 });
-    console.log("   status:", agentList.statusCode);
-    console.log("   data:", JSON.stringify(agentList.data, null, 2).slice(0, 200));
+    const agents = await client.agents.list({ limit: 5 });
+    console.log("   data:", JSON.stringify(agents, null, 2).slice(0, 200));
   } catch (err) {
     console.error("   ❌ agents.list failed:", (err as Error).message);
   }
@@ -39,9 +38,8 @@ async function main() {
   // ── Workflows ───────────────────────────────────────────────────
   try {
     console.log("\n📋 Listing workflows...");
-    const workflowList = await client.workflows.list({ limit: 5 });
-    console.log("   status:", workflowList.statusCode);
-    console.log("   data:", JSON.stringify(workflowList.data, null, 2).slice(0, 200));
+    const workflows = await client.workflows.list({ limit: 5 });
+    console.log("   data:", JSON.stringify(workflows, null, 2).slice(0, 200));
   } catch (err) {
     console.error("   ❌ workflows.list failed:", (err as Error).message);
   }
@@ -49,9 +47,8 @@ async function main() {
   // ── Connections ─────────────────────────────────────────────────
   try {
     console.log("\n📋 Listing connections...");
-    const connList = await client.connections.list({ limit: 5 });
-    console.log("   status:", connList.statusCode);
-    console.log("   data:", JSON.stringify(connList.data, null, 2).slice(0, 200));
+    const connections = await client.connections.list({ limit: 5 });
+    console.log("   data:", JSON.stringify(connections, null, 2).slice(0, 200));
   } catch (err) {
     console.error("   ❌ connections.list failed:", (err as Error).message);
   }
@@ -60,8 +57,7 @@ async function main() {
   try {
     console.log("\n📋 Listing connection categories...");
     const cats = await client.connections.categories({ limit: 5 });
-    console.log("   status:", cats.statusCode);
-    console.log("   data:", JSON.stringify(cats.data, null, 2).slice(0, 200));
+    console.log("   data:", JSON.stringify(cats, null, 2).slice(0, 200));
   } catch (err) {
     console.error("   ❌ connections.categories failed:", (err as Error).message);
   }
