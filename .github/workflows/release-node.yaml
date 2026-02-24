@@ -34,7 +34,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: npm ci
@@ -51,9 +52,6 @@ jobs:
       - name: Set package version
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
-
-      - name: Upgrade npm for trusted publishing
-        run: npm i -g npm@latest && npm --version
 
       - name: Publish to npm (trusted publishing)
         working-directory: packages/cli
@@ -102,7 +100,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: npm ci
@@ -116,9 +115,6 @@ jobs:
       - name: Set package version
         working-directory: packages/sdk
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
-
-      - name: Upgrade npm for trusted publishing
-        run: npm i -g npm@latest && npm --version
 
       - name: Publish to npm (trusted publishing)
         working-directory: packages/sdk
