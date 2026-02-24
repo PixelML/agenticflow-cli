@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: write   # Create GitHub Release
-  id-token: write   # npm trusted publishing (OIDC — no token needed)
+  id-token: write   # npm provenance attestation
 
 defaults:
   run:
@@ -34,7 +34,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
@@ -53,15 +53,10 @@ jobs:
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
-      - name: Clean npmrc for OIDC
-        run: |
-          echo "registry=https://registry.npmjs.org/" > "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          cat "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-
-      - name: Publish to npm (trusted publishing)
+      - name: Publish to npm
         working-directory: packages/cli
         env:
-          NODE_AUTH_TOKEN: ""
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
@@ -86,7 +81,6 @@ jobs:
           echo "## ✅ CLI v${{ steps.meta.outputs.version }} released" >> "$GITHUB_STEP_SUMMARY"
           echo "- Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
           echo "- GitHub Release created with auto-generated notes" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 🔒 Trusted publishing (OIDC, no token)" >> "$GITHUB_STEP_SUMMARY"
 
   release-sdk:
     if: startsWith(github.ref_name, 'sdk-v')
@@ -107,7 +101,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
@@ -123,15 +117,10 @@ jobs:
         working-directory: packages/sdk
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
-      - name: Clean npmrc for OIDC
-        run: |
-          echo "registry=https://registry.npmjs.org/" > "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          cat "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-
-      - name: Publish to npm (trusted publishing)
+      - name: Publish to npm
         working-directory: packages/sdk
         env:
-          NODE_AUTH_TOKEN: ""
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
@@ -156,4 +145,3 @@ jobs:
           echo "## ✅ SDK v${{ steps.meta.outputs.version }} released" >> "$GITHUB_STEP_SUMMARY"
           echo "- Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
           echo "- GitHub Release created with auto-generated notes" >> "$GITHUB_STEP_SUMMARY"
-          echo "- 🔒 Trusted publishing (OIDC, no token)" >> "$GITHUB_STEP_SUMMARY"
