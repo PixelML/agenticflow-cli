@@ -39,6 +39,7 @@ const AUTH_ENV_API_KEY = "AGENTICFLOW_PUBLIC_API_KEY";
 const DOCTOR_SCHEMA_VERSION = "agenticflow.doctor.v1";
 const CATALOG_EXPORT_SCHEMA_VERSION = "agenticflow.catalog.export.v1";
 const CATALOG_RANK_SCHEMA_VERSION = "agenticflow.catalog.rank.v1";
+const ERROR_SCHEMA_VERSION = "agenticflow.error.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Helpers
@@ -46,6 +47,64 @@ const CATALOG_RANK_SCHEMA_VERSION = "agenticflow.catalog.rank.v1";
 
 function printJson(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
+}
+
+function isJsonFlagEnabled(): boolean {
+  return process.argv.includes("--json");
+}
+
+function printError(code: string, message: string, hint?: string, details?: unknown): void {
+  if (isJsonFlagEnabled()) {
+    const payload: Record<string, unknown> = {
+      schema: ERROR_SCHEMA_VERSION,
+      code,
+      message,
+    };
+    if (hint) payload["hint"] = hint;
+    if (details !== undefined) payload["details"] = details;
+    printJson(payload);
+    return;
+  }
+
+  console.error(`Error: ${message}`);
+  if (hint) console.error(`Hint: ${hint}`);
+}
+
+function fail(code: string, message: string, hint?: string, details?: unknown): never {
+  printError(code, message, hint, details);
+  process.exit(1);
+}
+
+function parseOptionalInteger(
+  rawValue: string | undefined,
+  optionName: string,
+  minimum: number,
+): number | undefined {
+  if (rawValue == null) return undefined;
+  const value = rawValue.trim();
+  if (!/^-?\d+$/.test(value)) {
+    const floor = minimum === 0 ? "0 or higher" : `${minimum} or higher`;
+    fail(
+      "invalid_option_value",
+      `Invalid value for ${optionName}: ${rawValue}`,
+      `Use an integer ${floor}.`,
+    );
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < minimum) {
+    const floor = minimum === 0 ? "0 or higher" : `${minimum} or higher`;
+    fail(
+      "invalid_option_value",
+      `Invalid value for ${optionName}: ${rawValue}`,
+      `Use an integer ${floor}.`,
+    );
+  }
+  return parsed;
+}
+
+function shouldUseColor(parentOpts: { color?: boolean }): boolean {
+  return process.stdout.isTTY && process.stderr.isTTY && parentOpts.color !== false && !("NO_COLOR" in process.env);
 }
 
 /** Print an SDK result in CLI-friendly format. */
@@ -108,8 +167,8 @@ async function run(fn: () => Promise<unknown>): Promise<void> {
     const result = await fn();
     printResult(result);
   } catch (err) {
-    console.error(`Error: ${err instanceof Error ? err.message : err}`);
-    process.exit(1);
+    const message = err instanceof Error ? err.message : String(err);
+    fail("request_failed", message);
   }
 }
 

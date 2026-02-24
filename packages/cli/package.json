@@ -14,7 +14,8 @@
   },
   "type": "module",
   "bin": {
-    "agenticflow": "dist/bin/agenticflow.js"
+    "agenticflow": "dist/bin/agenticflow.js",
+    "af": "dist/bin/agenticflow.js"
   },
   "files": [
     "dist/",
