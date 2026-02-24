@@ -7,7 +7,8 @@
 
 import { Command } from "commander";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 
@@ -173,10 +174,15 @@ function parseKeyValueEnv(line: string): [string, string] | null {
 export function createProgram(): Command {
   const program = new Command();
 
+  // Read version from package.json so --version stays in sync
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const pkgPath = join(__dirname, "..", "..", "package.json");
+  const pkgVersion = JSON.parse(readFileSync(pkgPath, "utf-8")).version as string;
+
   program
     .name("agenticflow")
     .description("AgenticFlow CLI for agent-native API operations.")
-    .version("1.0.0")
+    .version(pkgVersion)
     .option("--api-key <key>", "API key for authentication")
     .option("--workspace-id <id>", "Default workspace ID")
     .option("--project-id <id>", "Default project ID")
@@ -414,16 +420,6 @@ export function createProgram(): Command {
       if (parentOpts.projectId) console.log(`  Project ID: ${parentOpts.projectId}`);
 
       rl.close();
-
-      // Validate the API key by calling the health endpoint
-      console.log("\n  Verifying credentials...");
-      try {
-        const client = createClient({ apiKey });
-        await client.sdk.get("/health");
-        console.log("  ✓ API key is valid.\n");
-      } catch {
-        console.error("  ✗ Could not verify API key. Saving anyway.\n");
-      }
 
       const configPath = defaultAuthConfigPath();
       const config = loadAuthFile(configPath);
