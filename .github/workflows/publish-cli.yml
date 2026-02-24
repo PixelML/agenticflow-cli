@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # Required for npm provenance (trusted publishing)
 
 defaults:
   run:
@@ -58,7 +59,7 @@ jobs:
       - name: Publish to npm
         if: ${{ !inputs.dry-run }}
         working-directory: packages/cli
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -76,4 +77,5 @@ jobs:
             echo "🏃 **Dry run** — nothing was published" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "✅ Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.version.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
+            echo "🔒 Published with **provenance** (trusted publishing)" >> "$GITHUB_STEP_SUMMARY"
           fi

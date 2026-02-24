@@ -2,16 +2,16 @@
 
 Command-line interface for AI agents and developers to interact with the [AgenticFlow](https://agenticflow.ai) platform.
 
-[![npm](https://img.shields.io/npm/v/agenticflow)](https://www.npmjs.com/package/agenticflow)
+[![npm](https://img.shields.io/npm/v/@pixelml/agenticflow-cli)](https://www.npmjs.com/package/@pixelml/agenticflow-cli)
 
 ## Install
 
 ```bash
 # Run without installing
-npx agenticflow doctor
+npx @pixelml/agenticflow-cli doctor
 
 # Or install globally
-npm install -g agenticflow
+npm install -g @pixelml/agenticflow-cli
 ```
 
 Requires Node.js 18+.
@@ -207,4 +207,5 @@ const status = await sdk.workflows.runStatus("run_id");
 - [AgenticFlow Platform](https://agenticflow.ai)
 - [API Documentation](https://docs.agenticflow.ai/developers/api)
 - [CLI Documentation](https://docs.agenticflow.ai/developers/cli)
-- [npm Package](https://www.npmjs.com/package/agenticflow)
+- [npm Package](https://www.npmjs.com/package/@pixelml/agenticflow-cli)
+- [GitHub](https://github.com/PixelML/agenticflow-cli)

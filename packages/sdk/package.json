@@ -3,6 +3,15 @@
   "version": "1.0.2",
   "description": "AgenticFlow SDK — typed HTTP client for the AgenticFlow API.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PixelML/agenticflow-cli.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/PixelML/agenticflow-cli#readme",
+  "bugs": {
+    "url": "https://github.com/PixelML/agenticflow-cli/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
