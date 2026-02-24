@@ -55,11 +55,16 @@ jobs:
 
       - name: Publish to npm (trusted publishing)
         working-directory: packages/cli
-        env:
-          NODE_AUTH_TOKEN: ""
-          NPM_CONFIG_USERCONFIG: ""
         run: |
           echo "Node: $(node --version) / npm: $(npm --version)"
+          # Strip token auth from .npmrc so npm uses OIDC instead
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$NPMRC" ]; then
+            sed -i '/_authToken/d' "$NPMRC"
+            sed -i '/always-auth/d' "$NPMRC"
+            echo "Cleaned .npmrc:"
+            cat "$NPMRC"
+          fi
           npm publish --access public --provenance
 
       - name: Create GitHub Release
@@ -123,11 +128,15 @@ jobs:
 
       - name: Publish to npm (trusted publishing)
         working-directory: packages/sdk
-        env:
-          NODE_AUTH_TOKEN: ""
-          NPM_CONFIG_USERCONFIG: ""
         run: |
           echo "Node: $(node --version) / npm: $(npm --version)"
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$NPMRC" ]; then
+            sed -i '/_authToken/d' "$NPMRC"
+            sed -i '/always-auth/d' "$NPMRC"
+            echo "Cleaned .npmrc:"
+            cat "$NPMRC"
+          fi
           npm publish --access public --provenance
 
       - name: Create GitHub Release
