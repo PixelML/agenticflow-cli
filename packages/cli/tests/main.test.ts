@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { createProgram } from "../src/cli/main.js";
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 
 describe("CLI Main (Commander integration)", () => {
   describe("program structure", () => {
     it("program has correct name and version", () => {
       const program = createProgram();
       expect(program.name()).toBe("agenticflow");
-      expect(program.version()).toBe("1.0.0");
+      expect(program.version()).toBe(pkg.version);
     });
 
     it("has all expected top-level commands", () => {
