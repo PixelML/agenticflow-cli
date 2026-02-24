@@ -7,4 +7,4 @@ dist/
 *.tgz
 *.log
 .minion-runs/
-openapi.json
+/openapi.json
