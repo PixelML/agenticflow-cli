@@ -58,21 +58,21 @@ jobs:
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "CLI v${{ steps.meta.outputs.version }}"
-          generate_release_notes: true
-          body: |
-            ## 📦 @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "CLI v${{ steps.meta.outputs.version }}" \
+            --generate-notes \
+            --notes "## 📦 @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
 
-            ```bash
-            npm install -g @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
-            ```
+          \`\`\`bash
+          npm install -g @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
+          \`\`\`
 
-            [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})
+          [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})
 
-            ---
+          ---"
 
       - name: Summary
         run: |
@@ -121,21 +121,21 @@ jobs:
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "SDK v${{ steps.meta.outputs.version }}"
-          generate_release_notes: true
-          body: |
-            ## 📦 @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "SDK v${{ steps.meta.outputs.version }}" \
+            --generate-notes \
+            --notes "## 📦 @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
 
-            ```bash
-            npm install @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
-            ```
+          \`\`\`bash
+          npm install @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
+          \`\`\`
 
-            [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})
+          [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})
 
-            ---
+          ---"
 
       - name: Summary
         run: |
