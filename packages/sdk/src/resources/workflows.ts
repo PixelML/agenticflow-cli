@@ -83,8 +83,23 @@ export class WorkflowsResource {
     return this.client.get(`/v1/workflow_runs/anonymous/${workflowRunId}`);
   }
 
-  // ── Get Workflow Runs (History) ────────────────────────────────────────────────
-  async getRuns(workflowId: string, options: {
+  // ── List Runs ─────────────────────────────────────────────────────
+  async listRuns(workflowId: string, options: {
+    workspaceId?: string;
+    limit?: number;
+    offset?: number;
+    sortOrder?: "asc" | "desc";
+  } = {}): Promise<APIResponse> {
+    const wsId = this.resolveWorkspaceId(options.workspaceId);
+    const queryParams: Record<string, unknown> = {};
+    if (options.limit != null) queryParams["limit"] = options.limit;
+    if (options.offset != null) queryParams["offset"] = options.offset;
+    if (options.sortOrder != null) queryParams["sort_order"] = options.sortOrder;
+    return this.client.get(`/v1/workspaces/${wsId}/workflows/${workflowId}/runs`, { queryParams });
+  }
+
+  // ── Run History ──────────────────────────────────────────────────
+  async runHistory(workflowId: string, options: {
     limit?: number;
     offset?: number;
   } = {}): Promise<APIResponse> {
@@ -94,8 +109,13 @@ export class WorkflowsResource {
     return this.client.get(`/v1/workflows/${workflowId}/run_history`, { queryParams });
   }
 
+  // ── Validate ─────────────────────────────────────────────────────
+  async validate(payload: unknown): Promise<APIResponse> {
+    return this.client.post("/v1/workflows/utils/validate_create_workflow_model", { json: payload });
+  }
+
   // ── Get Reference Impact ───────────────────────────────────────────
-  async getWorkflowReferenceImpact(workflowId: string): Promise<APIResponse> {
+  async getReferenceImpact(workflowId: string): Promise<APIResponse> {
     return this.client.get(`/v1/workflows/${workflowId}/reference-impact`);
   }
 

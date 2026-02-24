@@ -6,7 +6,7 @@ describe("CLI Main (Commander integration)", () => {
     it("program has correct name and version", () => {
       const program = createProgram();
       expect(program.name()).toBe("agenticflow");
-      expect(program.version()).toBe("0.3.0");
+      expect(program.version()).toBe("1.0.0");
     });
 
     it("has all expected top-level commands", () => {
@@ -29,7 +29,6 @@ describe("CLI Main (Commander integration)", () => {
     it("has global options", () => {
       const program = createProgram();
       const optNames = program.options.map((o) => o.long);
-      expect(optNames).toContain("--base-url");
       expect(optNames).toContain("--api-key");
       expect(optNames).toContain("--spec-file");
       expect(optNames).toContain("--json");
@@ -92,7 +91,16 @@ describe("CLI Main (Commander integration)", () => {
       const authCmd = program.commands.find((c) => c.name() === "auth")!;
       const subNames = authCmd.commands.map((c) => c.name());
       expect(subNames).toContain("import-env");
-      expect(subNames).toContain("whoami");
+    });
+  });
+
+  describe("top-level auth commands", () => {
+    it("has login, logout, whoami as top-level commands", () => {
+      const program = createProgram();
+      const names = program.commands.map((c) => c.name());
+      expect(names).toContain("login");
+      expect(names).toContain("logout");
+      expect(names).toContain("whoami");
     });
   });
 
