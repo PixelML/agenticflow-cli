@@ -1,0 +1,151 @@
+name: Release & Publish
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+      - "sdk-v*"
+
+permissions:
+  contents: write   # Create GitHub Release
+  id-token: write   # npm provenance
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  release-cli:
+    if: startsWith(github.ref_name, 'cli-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for release notes
+
+      - name: Extract version
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package=@pixelml/agenticflow-cli" >> "$GITHUB_OUTPUT"
+          echo "📦 CLI v$VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK (dependency)
+        run: npm run build --workspace=packages/sdk
+
+      - name: Build CLI
+        run: npm run build --workspace=packages/cli
+
+      - name: Run tests
+        run: npm test --workspace=packages/cli
+
+      - name: Set package version
+        working-directory: packages/cli
+        run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
+
+      - name: Publish to npm
+        working-directory: packages/cli
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "CLI v${{ steps.meta.outputs.version }}"
+          generate_release_notes: true
+          body: |
+            ## 📦 @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
+
+            ```bash
+            npm install -g @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
+            ```
+
+            [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})
+
+            ---
+
+      - name: Summary
+        run: |
+          echo "## ✅ CLI v${{ steps.meta.outputs.version }} released" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub Release created with auto-generated notes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 🔒 Published with provenance" >> "$GITHUB_STEP_SUMMARY"
+
+  release-sdk:
+    if: startsWith(github.ref_name, 'sdk-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package=@pixelml/agenticflow-sdk" >> "$GITHUB_OUTPUT"
+          echo "📦 SDK v$VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK
+        run: npm run build --workspace=packages/sdk
+
+      - name: Run tests
+        run: npm test --workspace=packages/sdk
+
+      - name: Set package version
+        working-directory: packages/sdk
+        run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
+
+      - name: Publish to npm
+        working-directory: packages/sdk
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "SDK v${{ steps.meta.outputs.version }}"
+          generate_release_notes: true
+          body: |
+            ## 📦 @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
+
+            ```bash
+            npm install @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
+            ```
+
+            [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})
+
+            ---
+
+      - name: Summary
+        run: |
+          echo "## ✅ SDK v${{ steps.meta.outputs.version }} released" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub Release created with auto-generated notes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 🔒 Published with provenance" >> "$GITHUB_STEP_SUMMARY"
