@@ -33,13 +33,13 @@ export class NodeTypesResource {
   constructor(private client: AgenticFlowSDK) { }
 
   async list(queryParams?: Record<string, unknown>): Promise<unknown> {
-    return (await this.client.get("/v1/node-types", {
+    return (await this.client.get("/v1/node_types", {
       queryParams: compactDict(queryParams),
     })).data;
   }
 
   async get(name: string): Promise<unknown> {
-    return (await this.client.get(`/v1/node-types/name/${name}`)).data;
+    return (await this.client.get(`/v1/node_types/name/${name}`)).data;
   }
 
   async search(query: string, queryParams?: Record<string, unknown>): Promise<unknown> {
@@ -73,7 +73,7 @@ export class NodeTypesResource {
       project_id: projectId ?? null,
     };
     if (options.searchTerm != null) body["search_term"] = options.searchTerm;
-    return (await this.client.post(`/v1/node-types/name/${options.name}/dynamic-options`, {
+    return (await this.client.post(`/v1/node_types/name/${options.name}/dynamic-options`, {
       json: body,
     })).data;
   }

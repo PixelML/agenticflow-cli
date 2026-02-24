@@ -1,6 +1,6 @@
 {
   "name": "@pixelml/agenticflow-cli",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "AgenticFlow CLI for agent-native API operations.",
   "license": "Apache-2.0",
   "type": "module",

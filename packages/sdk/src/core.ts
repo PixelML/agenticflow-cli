@@ -214,10 +214,19 @@ function extractErrorMessage(payload: unknown, fallback: string): string {
     for (const key of ["detail", "message", "error", "errors", "description"]) {
       const value = obj[key];
       if (typeof value === "string" && value.trim()) return value.trim();
+      if (Array.isArray(value) || (value && typeof value === "object")) {
+        return JSON.stringify(value);
+      }
     }
   }
 
   if (payload != null) {
+    try {
+      const asJson = JSON.stringify(payload);
+      if (asJson && asJson !== "{}") return asJson;
+    } catch {
+      // fall through
+    }
     const asText = String(payload).trim();
     if (asText) return asText;
   }

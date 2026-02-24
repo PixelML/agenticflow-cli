@@ -10,7 +10,7 @@ export class DeterministicHTTPClient {
   private timeout: Timeout;
 
   constructor(options?: { timeout?: Timeout }) {
-    this.timeout = options?.timeout ?? 30_000;
+    this.timeout = options?.timeout ?? 120_000;
   }
 
   async request(options: {

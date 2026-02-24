@@ -778,15 +778,167 @@ export function createProgram(): Command {
     .description("Run a workflow.")
     .requiredOption("--workflow-id <id>", "Workflow ID")
     .option("--input <input>", "JSON input (inline or @file)")
+    .option("--auto-fix-connections", "Automatically prompt to fix missing connections")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
       const body: Record<string, unknown> = { workflow_id: opts.workflowId };
       if (opts.input) body["input"] = loadJsonPayload(opts.input);
-      if (token) {
-        await run(() => client.workflows.run(body));
-      } else {
-        await run(() => client.workflows.runAnonymous(body));
+
+      const executeRun = () => token
+        ? client.workflows.run(body)
+        : client.workflows.runAnonymous(body);
+
+      try {
+        const result = await executeRun();
+        printResult(result);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // Detect "Connection X not found" pattern
+        const connMatch = errMsg.match(/[Cc]onnection\s+([0-9a-f-]{36})\s+not\s+found/);
+        if (!connMatch) {
+          console.error(`Error: ${errMsg}`);
+          process.exit(1);
+        }
+
+        const missingConnId = connMatch[1];
+        console.error(`\n⚠  Connection ${missingConnId} not found.`);
+        console.error("   Attempting smart connection resolution...\n");
+
+        try {
+          // 1. Fetch the workflow to find which nodes use the missing connection
+          const workflow = await client.workflows.get(opts.workflowId) as Record<string, unknown>;
+          const nodesWrapper = workflow["nodes"] as Record<string, unknown> | undefined;
+          const nodes = (Array.isArray(nodesWrapper)
+            ? nodesWrapper
+            : (nodesWrapper?.["nodes"] as unknown[] ?? [])) as Record<string, unknown>[];
+
+          const affectedNodes = nodes.filter(
+            (n) => n["connection"] === missingConnId,
+          );
+          if (affectedNodes.length === 0) {
+            console.error("Could not identify which nodes use this connection.");
+            process.exit(1);
+          }
+
+          // 2. Determine the node type(s) that need connections
+          const nodeTypeNames = [...new Set(affectedNodes.map((n) => n["node_type_name"] as string))];
+          console.error(`   Affected nodes:`);
+          for (const n of affectedNodes) {
+            console.error(`     • ${n["name"]} (${n["node_type_name"]})`);
+          }
+
+          // 3. Get node type info to determine expected connection category
+          let expectedCategory: string | null = null;
+          for (const ntName of nodeTypeNames) {
+            try {
+              const nodeType = await client.nodeTypes.get(ntName) as Record<string, unknown>;
+              const connInfo = nodeType["connection"] as Record<string, unknown> | undefined;
+              const cat = connInfo?.["connection_category"]
+                ?? nodeType["connection_category"]
+                ?? nodeType["category"]
+                ?? ntName;
+              expectedCategory = cat as string;
+              break;
+            } catch {
+              expectedCategory = ntName; // fallback: use node type name as category guess
+            }
+          }
+
+          // 4. Fetch available connections
+          const wsId = resolveWorkspaceId(program.opts().workspaceId);
+          const projId = resolveProjectId(program.opts().projectId);
+          const connections = await client.connections.list({
+            workspaceId: wsId,
+            projectId: projId,
+            limit: 200,
+          }) as Record<string, unknown>[];
+
+          if (!Array.isArray(connections) || connections.length === 0) {
+            console.error("\n   No connections available in this workspace/project.");
+            console.error("   Create a connection first, then re-run.");
+            process.exit(1);
+          }
+
+          // 5. Filter by matching category (if known)
+          const matching = expectedCategory
+            ? connections.filter((c) => {
+              const cat = (c["category"] as string ?? "").toLowerCase();
+              return cat === expectedCategory!.toLowerCase()
+                || cat.includes(expectedCategory!.toLowerCase())
+                || expectedCategory!.toLowerCase().includes(cat);
+            })
+            : connections;
+
+          const candidates = matching.length > 0 ? matching : connections;
+          const showAll = matching.length === 0;
+
+          console.error(`\n   Available connections${showAll ? "" : ` (category: ${expectedCategory})`}:`);
+          console.error("");
+          for (let i = 0; i < candidates.length; i++) {
+            const c = candidates[i];
+            const status = c["status"] === "active" ? "✓" : "○";
+            console.error(
+              `     [${i + 1}] ${status} ${c["name"] ?? c["id"]}  (${c["category"]})  id: ${c["id"]}`,
+            );
+          }
+          if (showAll) {
+            console.error(`\n   (No exact category match for "${expectedCategory}" — showing all connections)`);
+          }
+
+          // 6. Prompt user to pick
+          const rl = createInterface({ input: process.stdin, output: process.stderr });
+          const answer = await new Promise<string>((res) =>
+            rl.question("\n   Select connection # (or 's' to skip): ", (a) => {
+              res(a.trim());
+              rl.close();
+            }),
+          );
+
+          if (answer.toLowerCase() === "s" || answer === "") {
+            console.error("   Skipped. Run aborted.");
+            process.exit(1);
+          }
+
+          const idx = parseInt(answer, 10) - 1;
+          if (isNaN(idx) || idx < 0 || idx >= candidates.length) {
+            console.error("   Invalid selection. Run aborted.");
+            process.exit(1);
+          }
+
+          const selectedConn = candidates[idx];
+          const newConnId = selectedConn["id"] as string;
+          console.error(`\n   ✓ Selected: ${selectedConn["name"]} (${newConnId})`);
+
+          // 7. Update the workflow with the new connection
+          const updatedNodes = nodes.map((n) =>
+            n["connection"] === missingConnId
+              ? { ...n, connection: newConnId }
+              : n,
+          );
+
+          const updatePayload: Record<string, unknown> = {
+            name: workflow["name"],
+            description: workflow["description"],
+            nodes: updatedNodes,
+            output_mapping: workflow["output_mapping"],
+            input_schema: workflow["input_schema"],
+            public_runnable: workflow["public_runnable"] ?? false,
+            public_clone: workflow["public_clone"] ?? false,
+          };
+
+          console.error("   Updating workflow with new connection...");
+          await client.workflows.update(opts.workflowId, updatePayload, wsId);
+          console.error("   ✓ Workflow updated.\n");
+
+          // 8. Re-attempt the run
+          console.error("   Re-running workflow...\n");
+          const result = await executeRun();
+          printResult(result);
+        } catch (resolveErr) {
+          console.error(`\n   Connection resolution failed: ${resolveErr instanceof Error ? resolveErr.message : resolveErr}`);
+          process.exit(1);
+        }
       }
     });
 
@@ -846,23 +998,7 @@ export function createProgram(): Command {
       }));
     });
 
-  workflowCmd
-    .command("like")
-    .description("Like a workflow.")
-    .requiredOption("--workflow-id <id>", "Workflow ID")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.workflows.like(opts.workflowId));
-    });
 
-  workflowCmd
-    .command("unlike")
-    .description("Unlike a workflow.")
-    .requiredOption("--workflow-id <id>", "Workflow ID")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.workflows.unlike(opts.workflowId));
-    });
 
   workflowCmd
     .command("like-status")
@@ -985,9 +1121,14 @@ export function createProgram(): Command {
   nodeTypesCmd
     .command("list")
     .description("List available node types.")
-    .action(async () => {
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.nodeTypes.list());
+      const queryParams: Record<string, unknown> = {};
+      if (opts.limit) queryParams["limit"] = parseInt(opts.limit);
+      if (opts.offset) queryParams["offset"] = parseInt(opts.offset);
+      await run(() => client.nodeTypes.list(queryParams));
     });
 
   nodeTypesCmd
@@ -1064,20 +1205,7 @@ export function createProgram(): Command {
       await run(() => client.connections.create(body, opts.workspaceId));
     });
 
-  connectionsCmd
-    .command("get-default")
-    .description("Get default connection for a category.")
-    .requiredOption("--category <name>", "Category name")
-    .option("--workspace-id <id>", "Workspace ID")
-    .option("--project-id <id>", "Project ID")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.connections.getDefault({
-        categoryName: opts.category,
-        workspaceId: opts.workspaceId,
-        projectId: opts.projectId,
-      }));
-    });
+
 
   connectionsCmd
     .command("update")
@@ -1101,20 +1229,7 @@ export function createProgram(): Command {
       await run(() => client.connections.delete(opts.connectionId, opts.workspaceId));
     });
 
-  connectionsCmd
-    .command("categories")
-    .description("List connection categories.")
-    .option("--workspace-id <id>", "Workspace ID")
-    .option("--limit <n>", "Limit")
-    .option("--offset <n>", "Offset")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.connections.categories({
-        workspaceId: opts.workspaceId,
-        limit: opts.limit ? parseInt(opts.limit) : undefined,
-        offset: opts.offset ? parseInt(opts.offset) : undefined,
-      }));
-    });
+
   // ═════════════════════════════════════════════════════════════════
   // uploads  (SDK-based)
   // ═════════════════════════════════════════════════════════════════

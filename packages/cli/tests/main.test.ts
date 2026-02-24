@@ -84,7 +84,9 @@ describe("CLI Main (Commander integration)", () => {
       const connCmd = program.commands.find((c) => c.name() === "connections")!;
       const subNames = connCmd.commands.map((c) => c.name());
       expect(subNames).toContain("list");
-      expect(subNames).toContain("categories");
+      expect(subNames).toContain("create");
+      expect(subNames).toContain("update");
+      expect(subNames).toContain("delete");
     });
   });
 
