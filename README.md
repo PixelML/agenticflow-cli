@@ -1,177 +1,210 @@
 # AgenticFlow CLI
 
-AgenticFlow CLI for AgenticFlow public APIs (anonymous + authenticated).
+Command-line interface for AI agents and developers to interact with the [AgenticFlow](https://agenticflow.ai) platform.
 
-## Reliable command entrypoint
+[![npm](https://img.shields.io/npm/v/agenticflow)](https://www.npmjs.com/package/agenticflow)
 
-Use one of these paths in this repository:
-
-- Installed command (packaged): `agenticflow`
-- Local wrapper script: `python scripts/agenticflow_cli.py`
-- Module fallback: `python -m agenticflow_cli.main`
-
-In shared docs, prefer the module/venv path for deterministic resolution:
-
-- `.venv/bin/python -m agenticflow_cli.main`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py`
-
-## Features
-
-- Thin UX wrapper over `agenticflow_sdk` for high-level commands: `workflow`, `agent`, `node-types`, `connections`.
-- OpenAPI-backed discovery helpers: `ops`, `catalog`
-- Agent-native execution path: `code search`, `code execute`
-- Low-level OpenAPI transport via `call`
-- `call` resolves explicit `--operation-id` or raw `--method`/`--path` and executes the API request directly (not a high-level wrapper).
-- Preflight checks (`doctor`) and local policy guardrails (`policy`).
-- Built-in playbooks and command guidance.
-
-## API boundary (important)
-
-This CLI should be documented against the bundled curated snapshot only.
-
-High-level commands in this section are SDK-driven. `call` is the only raw transport command that executes an operation directly from the loaded OpenAPI catalog.
-
-`public_ops_manifest.json` is MCP-first and policy-lean:
-
-- 33 operations total
-- `support_scope` is user-facing support intent for ranking/discovery.
-- `exposed_to_end_user` controls CLI catalog exposure.
-- `ci_live_execute` controls whether live release coverage executes the operation.
-- CI blocking does not imply end-user CLI blocking.
-
-- Supported by snapshot-backed commands:
-  - `catalog export --public-only --json`
-  - `ops list --public-only`
-  - `call --method GET --path /v1/health --dry-run`
-  - `call --operation-id get_nodetype_models_v1_node_types__get --dry-run`
-  - `workflow list --workspace-id <workspace_id> --dry-run`
-  - `workflow get --workflow-id <id> --dry-run`
-  - `workflow validate --body '{\"nodes\":[]}' --dry-run`
-  - `workflow run-status --workflow-run-id <id> --dry-run`
-  - `agent get --agent-id <id> --dry-run`
-  - `node-types list --dry-run`
-  - `connections list --workspace-id <workspace_id> --project-id <project_id> --dry-run`
-  - `get_nodetype_models_v1_node_types__get` and `get_anonymous_messages_v1_agent_threads_anonymous__thread_id__messages_get` are available as anonymous MCP discovery/ops through `call`.
-  - Side-effectful operations can still be exposed to end users while remaining `ci_live_execute=false` for safe release gating.
-
-Admin/internal endpoints are intentionally not included in the bundled snapshot.
-
-## Install (Python)
+## Install
 
 ```bash
-pip install agenticflow-cli
+# Run without installing
+npx agenticflow doctor
+
+# Or install globally
+npm install -g agenticflow
 ```
 
-Then run:
+Requires Node.js 18+.
+
+## Quick Start
 
 ```bash
-agenticflow --help
-```
+# 1. Set your API key
+export AGENTICFLOW_API_KEY=your_key
 
-## Python SDK
-
-Install the same package and import the SDK module:
-
-```bash
-pip install agenticflow-cli
-```
-
-```python
-from agenticflow_sdk import AgenticFlowSDK
-
-sdk = AgenticFlowSDK(api_key="...")
-health = sdk.call("public.health.get")
-print(health)
-```
-
-See [`docs/sdk.md`](docs/sdk.md) for additional usage examples.
-
-## Install (from source)
-
-```bash
-python -m pip install -e .
-agenticflow --help
-```
-
-## Auth
-
-Use API key only:
-
-```bash
-export AGENTICFLOW_PUBLIC_API_KEY=...
+# 2. Verify setup
 agenticflow doctor --json
+
+# 3. List your workflows
+agenticflow workflow list --json
+
+# 4. Run a workflow
+agenticflow workflow run --workflow-id <id> --input '{"query": "hello"}'
 ```
 
-Or import from env file:
+## Authentication
+
+| Method | Usage | Best For |
+|--------|-------|----------|
+| Environment variable | `export AGENTICFLOW_API_KEY=<key>` | CI/CD, automated agents |
+| CLI flag | `--api-key <key>` | One-off scripts |
+| Config file | `agenticflow auth import-env --file .env` | Persistent dev setup |
 
 ```bash
-agenticflow auth import-env --file ./.env --profile default
-agenticflow auth whoami --json
+# Import API key from .env file (saves to ~/.agenticflow/auth.json)
+agenticflow auth import-env --file /path/to/.env
+
+# Verify
+agenticflow whoami --json
 ```
 
-`--token` bearer override is intentionally unsupported.
+### Environment Variables
 
-Compatibility note:
-- `connections categories` maps to a server endpoint that currently requires user JWT bearer auth.
-- With API-key-only auth, use `connections list` and `node-types` discovery flows.
+| Variable | Purpose |
+|----------|---------|
+| `AGENTICFLOW_API_KEY` | API key (primary) |
+| `AGENTICFLOW_PUBLIC_API_KEY` | Public API key (fallback) |
+| `AGENTICFLOW_WORKSPACE_ID` | Default workspace ID |
+| `AGENTICFLOW_PROJECT_ID` | Default project ID |
 
-## Release docs smoke checks
+## Commands
 
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py --help`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py catalog export --public-only --json`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py call --method GET --path /v1/health --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py ops show get_workflow_model_v1_workflows__workflow_id__get`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow get --workflow-id wf_demo --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py workflow validate --body '{\"nodes\":[]}' --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py agent get --agent-id ag_demo --dry-run`
-- `PYTHONPATH=. .venv/bin/python scripts/agenticflow_cli.py connections list --workspace-id ws_demo --project-id proj_demo --dry-run`
-
-## Release Readiness Gate
-
-Run the full local gate before tagging a release:
+### Diagnostics
 
 ```bash
-bash scripts/release_readiness.sh
+agenticflow doctor --json          # Preflight check (auth, health, config)
+agenticflow whoami --json          # Show current auth profile
 ```
 
-This validates operation-id mappings, runs unit tests, executes CLI dry-run smoke checks, and verifies the Node wrapper.
-
-Optional live API coverage gate (manifest-scoped public surface) with real key:
+### Workflows
 
 ```bash
-bash scripts/release_readiness.sh --live-ops-gate --env-file /path/to/.env
+# CRUD
+agenticflow workflow list [--limit N] [--offset N] --json
+agenticflow workflow get --workflow-id <id> --json
+agenticflow workflow create --body @workflow.json
+agenticflow workflow update --workflow-id <id> --body @update.json
+agenticflow workflow delete --workflow-id <id>
+
+# Execution
+agenticflow workflow run --workflow-id <id> --input @input.json
+agenticflow workflow run-status --workflow-run-id <run_id> --json
+agenticflow workflow list-runs --workflow-id <id> [--limit N] --json
+agenticflow workflow run-history --workflow-id <id> [--limit N] --json
+
+# Validation & Metadata
+agenticflow workflow validate --body @workflow.json
+agenticflow workflow like-status --workflow-id <id> --json
+agenticflow workflow reference-impact --workflow-id <id> --json
 ```
 
-Release workflows (`release-python`, `release-node`) run this live gate automatically when GitHub secret `AGENTICFLOW_PUBLIC_API_KEY` is configured (optional `AGENTICFLOW_BASE_URL` for custom base URL).
+#### Smart Connection Resolution
 
-## Unattended Minion Flow
+When `workflow run` encounters "Connection not found", the CLI automatically:
+1. Identifies affected nodes and their required connection category
+2. Lists available connections matching that category
+3. Prompts you to select a replacement
+4. Updates the workflow and retries the run
 
-This repository includes a tmux-based one-shot multi-agent workflow for `gpt-5.3-codex-spark`.
-
-- Runbook: `docs/minion_runbook.md`
-- Launcher: `scripts/minion_orchestrator.sh`
-- Worker runner: `scripts/minion_worker.sh`
-
-## Node Wrapper (npm)
-
-This repo also ships a thin npm wrapper package (`@pixelml/agenticflow-cli`) that invokes the Python CLI.
+### Agents
 
 ```bash
-npm i -g @pixelml/agenticflow-cli
-agenticflow --help
+agenticflow agent list [--limit N] --json
+agenticflow agent get --agent-id <id> --json
+agenticflow agent create --body @agent.json
+agenticflow agent update --agent-id <id> --body @update.json
+agenticflow agent delete --agent-id <id>
+agenticflow agent stream --agent-id <id> --body @stream.json
+agenticflow agent reference-impact --agent-id <id> --json
 ```
 
-The wrapper requires:
-- Node.js 18+
-- Python 3.10+ with `agenticflow-cli` installed or importable.
+### Node Types
 
-## Release Tags
+```bash
+agenticflow node-types get --name <name> --json        # Get specific node type
+agenticflow node-types search --query <query> --json   # Search by keyword
+agenticflow node-types list [--limit N] --json         # List all (large response)
+agenticflow node-types dynamic-options --name <name> --field-name <field> --json
+```
 
-- Python release: `py-vX.Y.Z`
-- npm wrapper release: `npm-vX.Y.Z`
+> **Tip**: Prefer `get` or `search` over `list`. The full list is very large.
 
-## OSS Hygiene
+### Connections
 
-- No hardcoded secrets in CLI code path.
-- `.env*` and `.agenticflow/` are ignored.
-- Users provide their own `AGENTICFLOW_PUBLIC_API_KEY`.
+```bash
+agenticflow connections list [--limit N] --json    # Default limit=10, use --limit 200
+agenticflow connections create --body @conn.json
+agenticflow connections update --connection-id <id> --body @update.json
+agenticflow connections delete --connection-id <id>
+```
+
+> **Important**: Default limit is 10. Always use `--limit 200` to see all connections.
+
+### Uploads
+
+```bash
+agenticflow uploads create --body @upload.json
+agenticflow uploads status --session-id <id> --json
+```
+
+### API Discovery
+
+```bash
+agenticflow ops list                              # List all API operations
+agenticflow ops show <operation_id>               # Show operation details
+agenticflow catalog export --json                 # Export operation catalog
+agenticflow catalog rank --task "description"     # Rank operations for a task
+agenticflow playbook list                         # List available playbooks
+```
+
+### Raw API Call
+
+```bash
+# Call any endpoint directly
+agenticflow call --method GET --path /v1/health --json
+agenticflow call --method POST --path /v1/echo/ --body '{"message": "test"}' --json
+```
+
+### Policy
+
+```bash
+agenticflow policy show    # Show current policy
+agenticflow policy init    # Initialize policy config
+```
+
+## Global Options
+
+| Flag | Purpose |
+|------|---------|
+| `--api-key <key>` | Override API key |
+| `--workspace-id <id>` | Override workspace |
+| `--project-id <id>` | Override project |
+| `--json` | Force JSON output |
+| `--spec-file <path>` | Custom OpenAPI spec |
+| `--dry-run` | Preview without executing |
+
+## SDK
+
+The CLI is built on the `@pixelml/agenticflow-sdk` TypeScript SDK:
+
+```typescript
+import { AgenticFlowSDK } from "@pixelml/agenticflow-sdk";
+
+const sdk = new AgenticFlowSDK({ apiKey: "your_key" });
+
+// List workflows
+const workflows = await sdk.workflows.list({ workspaceId: "ws_id" });
+
+// Run a workflow
+const run = await sdk.workflows.run("workflow_id", { query: "hello" });
+
+// Check run status
+const status = await sdk.workflows.runStatus("run_id");
+```
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `Connection X not found` | Run the workflow — CLI auto-resolves via smart connection resolution |
+| `401 Error decoding token` | Endpoint requires session token, not API key. Use the web UI |
+| `422 validation error` | Read the `detail` array for missing required fields |
+| `Network request failed` | Response too large. Use `node-types get --name X` instead of `list` |
+| Connections list too few | Default limit is 10. Use `--limit 200` |
+
+## Links
+
+- [AgenticFlow Platform](https://agenticflow.ai)
+- [API Documentation](https://docs.agenticflow.ai/developers/api)
+- [CLI Documentation](https://docs.agenticflow.ai/developers/cli)
+- [npm Package](https://www.npmjs.com/package/agenticflow)
