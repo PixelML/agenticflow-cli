@@ -53,23 +53,14 @@ jobs:
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
-      - name: Debug environment
-        working-directory: packages/cli
-        run: |
-          echo "Node: $(node --version)"
-          echo "npm: $(npm --version)"
-          echo "--- ~/.npmrc ---"
-          cat ~/.npmrc 2>/dev/null || echo "(none)"
-          echo "--- .npmrc ---"
-          cat .npmrc 2>/dev/null || echo "(none)"
-          echo "--- npm config ---"
-          npm config list
-          echo "--- registry ---"
-          npm config get registry
-
       - name: Publish to npm (trusted publishing)
         working-directory: packages/cli
-        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ""
+          NPM_CONFIG_USERCONFIG: ""
+        run: |
+          echo "Node: $(node --version) / npm: $(npm --version)"
+          npm publish --access public --provenance
 
       - name: Create GitHub Release
         env:
@@ -132,7 +123,12 @@ jobs:
 
       - name: Publish to npm (trusted publishing)
         working-directory: packages/sdk
-        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ""
+          NPM_CONFIG_USERCONFIG: ""
+        run: |
+          echo "Node: $(node --version) / npm: $(npm --version)"
+          npm publish --access public --provenance
 
       - name: Create GitHub Release
         env:
