@@ -53,6 +53,9 @@ jobs:
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
+      - name: Upgrade npm for trusted publishing
+        run: npm i -g npm@latest && npm --version
+
       - name: Publish to npm (trusted publishing)
         working-directory: packages/cli
         run: npm publish --access public --provenance
@@ -115,6 +118,9 @@ jobs:
       - name: Set package version
         working-directory: packages/sdk
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
+
+      - name: Upgrade npm for trusted publishing
+        run: npm i -g npm@latest && npm --version
 
       - name: Publish to npm (trusted publishing)
         working-directory: packages/sdk
