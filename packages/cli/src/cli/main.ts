@@ -197,6 +197,73 @@ function catalogOperationItem(op: Operation): Record<string, unknown> {
   };
 }
 
+function normalizeForMatch(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a) return b.length;
+  if (!b) return a.length;
+
+  const previousRow = new Array<number>(b.length + 1);
+  const currentRow = new Array<number>(b.length + 1);
+
+  for (let j = 0; j <= b.length; j++) previousRow[j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    currentRow[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      currentRow[j] = Math.min(
+        currentRow[j - 1] + 1,
+        previousRow[j] + 1,
+        previousRow[j - 1] + cost,
+      );
+    }
+
+    for (let j = 0; j <= b.length; j++) previousRow[j] = currentRow[j];
+  }
+
+  return previousRow[b.length];
+}
+
+function suggestOperationIds(registry: OperationRegistry, rawQuery: string): string[] {
+  const query = normalizeForMatch(rawQuery);
+  if (!query) return [];
+
+  const scored = registry.listOperations().map((op) => {
+    const id = op.operationId;
+    const normalizedId = normalizeForMatch(id);
+    let score = 0;
+
+    if (normalizedId === query) score += 10_000;
+    if (normalizedId.startsWith(query)) score += 500;
+    if (normalizedId.includes(query)) score += 250;
+    if (query.includes(normalizedId)) score += 100;
+
+    for (const term of query.split(/\s+/)) {
+      if (term.length >= 3 && normalizedId.includes(term)) score += 25;
+    }
+
+    const distance = levenshteinDistance(query, normalizedId);
+    const similarity = 1 - distance / Math.max(query.length, normalizedId.length);
+    score += Math.round(similarity * 100);
+
+    return { id, score };
+  });
+
+  return scored
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .slice(0, 5)
+    .map((item) => item.id);
+}
+
+function formatOperationHint(suggestions: string[]): string | undefined {
+  if (suggestions.length === 0) return undefined;
+  return `Try one of: ${suggestions.join(", ")}`;
+}
+
 // --- Auth helpers ---
 function defaultAuthConfigPath(): string {
   const envDir = process.env["AGENTICFLOW_CLI_DIR"];
@@ -242,10 +309,13 @@ export function createProgram(): Command {
     .name("agenticflow")
     .description("AgenticFlow CLI for agent-native API operations.")
     .version(pkgVersion)
+    .showHelpAfterError()
+    .showSuggestionAfterError(true)
     .option("--api-key <key>", "API key for authentication")
     .option("--workspace-id <id>", "Default workspace ID")
     .option("--project-id <id>", "Default project ID")
     .option("--spec-file <path>", "Path to OpenAPI spec JSON file")
+    .option("--no-color", "Disable ANSI colors in text output")
     .option("--json", "Force JSON output");
 
   // ═════════════════════════════════════════════════════════════════
@@ -255,6 +325,7 @@ export function createProgram(): Command {
     .command("doctor")
     .description("Preflight checks for CLI configuration and connectivity.")
     .option("--json", "JSON output")
+    .option("--strict", "Exit non-zero when any required check fails")
     .action(async (opts) => {
       const parentOpts = program.opts();
       const baseUrl = DEFAULT_BASE_URL;
@@ -293,11 +364,13 @@ export function createProgram(): Command {
         operationsLoaded: registry?.listOperations().length ?? 0,
       };
 
+      const hasFailures = !checks.token || !checks.health || checks.operationsLoaded <= 0;
+
       if (opts.json || parentOpts.json) {
         printJson({ schema: DOCTOR_SCHEMA_VERSION, ...checks });
       } else {
         const ok = (v: boolean) => v ? "✓" : "✗";
-        const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+        const dim = (s: string) => shouldUseColor(parentOpts) ? `\x1b[2m${s}\x1b[0m` : s;
 
         console.log("");
         console.log(" Environment");
@@ -320,6 +393,8 @@ export function createProgram(): Command {
         console.log(` └ Operations: ${checks.operationsLoaded} loaded`);
         console.log("");
       }
+
+      if (opts.strict && hasFailures) process.exitCode = 1;
     });
 
   // ═════════════════════════════════════════════════════════════════
@@ -334,17 +409,26 @@ export function createProgram(): Command {
     .description("List available operations.")
     .option("--public-only", "Show only public operations")
     .option("--tag <tag>", "Filter by tag")
+    .option("--json", "JSON output")
     .action((opts) => {
       const parentOpts = program.opts();
       const specFile = parentOpts.specFile ?? defaultSpecPath();
       const registry = loadRegistry(specFile);
-      if (!registry) { console.error("Failed to load OpenAPI spec."); process.exit(1); }
+      if (!registry) fail("spec_load_failed", "Failed to load OpenAPI spec.");
 
       const operations = registry.listOperations({ publicOnly: opts.publicOnly, tag: opts.tag });
-      console.log(`${operations.length} operations found:\n`);
-      for (const op of operations) {
-        console.log(`  ${op.method.padEnd(7)} ${op.path}`);
-        console.log(`         ${op.operationId}`);
+      if (opts.json || parentOpts.json) {
+        printJson({
+          schema: CATALOG_EXPORT_SCHEMA_VERSION,
+          count: operations.length,
+          operations: operations.map(catalogOperationItem),
+        });
+      } else {
+        console.log(`${operations.length} operations found:\n`);
+        for (const op of operations) {
+          console.log(`  ${op.method.padEnd(7)} ${op.path}`);
+          console.log(`         ${op.operationId}`);
+        }
       }
     });
 
@@ -355,10 +439,13 @@ export function createProgram(): Command {
       const parentOpts = program.opts();
       const specFile = parentOpts.specFile ?? defaultSpecPath();
       const registry = loadRegistry(specFile);
-      if (!registry) { console.error("Failed to load OpenAPI spec."); process.exit(1); }
+      if (!registry) fail("spec_load_failed", "Failed to load OpenAPI spec.");
 
       const operation = registry.getOperationById(operationId);
-      if (!operation) { console.error(`Operation not found: ${operationId}`); process.exit(1); }
+      if (!operation) {
+        const hint = formatOperationHint(suggestOperationIds(registry, operationId));
+        fail("operation_not_found", `Operation not found: ${operationId}`, hint);
+      }
       printJson(catalogOperationItem(operation));
     });
 
@@ -378,7 +465,7 @@ export function createProgram(): Command {
       const parentOpts = program.opts();
       const specFile = parentOpts.specFile ?? defaultSpecPath();
       const registry = loadRegistry(specFile);
-      if (!registry) { console.error("Failed to load OpenAPI spec."); process.exit(1); }
+      if (!registry) fail("spec_load_failed", "Failed to load OpenAPI spec.");
 
       const operations = registry.listOperations({ publicOnly: opts.publicOnly });
       const items = operations.map(catalogOperationItem);
@@ -404,7 +491,7 @@ export function createProgram(): Command {
       const parentOpts = program.opts();
       const specFile = parentOpts.specFile ?? defaultSpecPath();
       const registry = loadRegistry(specFile);
-      if (!registry) { console.error("Failed to load OpenAPI spec."); process.exit(1); }
+      if (!registry) fail("spec_load_failed", "Failed to load OpenAPI spec.");
 
       const operations = registry.listOperations({ publicOnly: opts.publicOnly });
       const task = (opts.task as string).toLowerCase();
@@ -417,7 +504,8 @@ export function createProgram(): Command {
         return { op, score };
       });
       scored.sort((a, b) => b.score - a.score);
-      const top = scored.slice(0, parseInt(opts.top, 10));
+      const topCount = parseOptionalInteger(opts.top as string, "--top", 1) ?? 10;
+      const top = scored.slice(0, topCount);
 
       if (opts.json || parentOpts.json) {
         printJson({
@@ -693,12 +781,16 @@ export function createProgram(): Command {
       const token = resolveToken(parentOpts);
       const specFile = parentOpts.specFile ?? defaultSpecPath();
       const registry = loadRegistry(specFile);
-      if (!registry) { console.error("Failed to load OpenAPI spec."); process.exit(1); }
+      if (!registry) fail("spec_load_failed", "Failed to load OpenAPI spec.");
 
       // Resolve operation
       let operation: Operation | null = null;
       if (opts.operationId) {
         operation = registry.getOperationById(opts.operationId);
+        if (!operation) {
+          const hint = formatOperationHint(suggestOperationIds(registry, opts.operationId));
+          fail("operation_not_found", `Operation not found: ${opts.operationId}`, hint);
+        }
       } else if (opts.method && opts.path) {
         operation = registry.getOperationByMethodPath(opts.method, opts.path);
       }
@@ -711,14 +803,25 @@ export function createProgram(): Command {
           requestBody: null, summary: null, description: null, raw: {},
         };
       }
-      if (!operation) { console.error("Unable to resolve operation."); process.exit(1); }
+      if (!operation) {
+        fail(
+          "operation_unresolved",
+          "Unable to resolve operation.",
+          "Provide --operation-id, or both --method and --path.",
+        );
+      }
 
-      const pathParams = opts.pathParam ? parseKeyValuePairs(opts.pathParam) : {};
-      const queryParams = opts.queryParam ? parseKeyValuePairs(opts.queryParam) : {};
-      const headers = opts.header ? parseKeyValuePairs(opts.header) : {};
-      const body = opts.body ? loadJsonPayload(opts.body) : undefined;
-
-      const requestSpec = buildRequestSpec(operation, baseUrl, pathParams, queryParams, headers, token, body);
+      let requestSpec: ReturnType<typeof buildRequestSpec>;
+      try {
+        const pathParams = opts.pathParam ? parseKeyValuePairs(opts.pathParam) : {};
+        const queryParams = opts.queryParam ? parseKeyValuePairs(opts.queryParam) : {};
+        const headers = opts.header ? parseKeyValuePairs(opts.header) : {};
+        const body = opts.body ? loadJsonPayload(opts.body) : undefined;
+        requestSpec = buildRequestSpec(operation, baseUrl, pathParams, queryParams, headers, token, body);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("invalid_request_options", message);
+      }
 
       if (opts.dryRun) {
         printJson({
@@ -754,8 +857,8 @@ export function createProgram(): Command {
         printJson({ status: response.status, body: data });
         if (!response.ok) process.exitCode = 1;
       } catch (err) {
-        console.error(`Request failed: ${err instanceof Error ? err.message : err}`);
-        process.exit(1);
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", `Request failed: ${message}`);
       }
     });
 
@@ -780,8 +883,8 @@ export function createProgram(): Command {
         workspaceId: opts.workspaceId,
         projectId: opts.projectId,
         searchQuery: opts.search,
-        limit: opts.limit ? parseInt(opts.limit) : undefined,
-        offset: opts.offset ? parseInt(opts.offset) : undefined,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
       }));
     });
 
@@ -1027,8 +1130,8 @@ export function createProgram(): Command {
       const client = buildClient(program.opts());
       await run(() => client.workflows.listRuns(opts.workflowId, {
         workspaceId: opts.workspaceId,
-        limit: opts.limit ? parseInt(opts.limit) : undefined,
-        offset: opts.offset ? parseInt(opts.offset) : undefined,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
         sortOrder: opts.sortOrder,
       }));
     });
@@ -1052,8 +1155,8 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       await run(() => client.workflows.runHistory(opts.workflowId, {
-        limit: opts.limit ? parseInt(opts.limit) : undefined,
-        offset: opts.offset ? parseInt(opts.offset) : undefined,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
       }));
     });
 
@@ -1096,8 +1199,8 @@ export function createProgram(): Command {
       await run(() => client.agents.list({
         projectId: opts.projectId,
         searchQuery: opts.search,
-        limit: opts.limit ? parseInt(opts.limit) : undefined,
-        offset: opts.offset ? parseInt(opts.offset) : undefined,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
       }));
     });
 
@@ -1185,8 +1288,10 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const queryParams: Record<string, unknown> = {};
-      if (opts.limit) queryParams["limit"] = parseInt(opts.limit);
-      if (opts.offset) queryParams["offset"] = parseInt(opts.offset);
+      const limit = parseOptionalInteger(opts.limit as string | undefined, "--limit", 1);
+      const offset = parseOptionalInteger(opts.offset as string | undefined, "--offset", 0);
+      if (limit != null) queryParams["limit"] = limit;
+      if (offset != null) queryParams["offset"] = offset;
       await run(() => client.nodeTypes.list(queryParams));
     });
 
@@ -1248,8 +1353,8 @@ export function createProgram(): Command {
       await run(() => client.connections.list({
         workspaceId: opts.workspaceId,
         projectId: opts.projectId,
-        limit: opts.limit ? parseInt(opts.limit) : undefined,
-        offset: opts.offset ? parseInt(opts.offset) : undefined,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
       }));
     });
 

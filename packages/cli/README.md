@@ -99,8 +99,6 @@ agenticflow workflow list-runs --workflow-id <id> [--sort-order asc|desc]
 agenticflow workflow run-history --workflow-id <id>
 agenticflow workflow validate --body <json|@file>
 agenticflow workflow reference-impact --workflow-id <id>
-agenticflow workflow like --workflow-id <id>
-agenticflow workflow unlike --workflow-id <id>
 agenticflow workflow like-status --workflow-id <id>
 ```
 
@@ -109,10 +107,8 @@ agenticflow workflow like-status --workflow-id <id>
 ```bash
 agenticflow connections list [--workspace-id <id>] [--project-id <id>]
 agenticflow connections create --body <json|@file> [--workspace-id <id>]
-agenticflow connections get-default --category <name> [--workspace-id <id>] [--project-id <id>]
 agenticflow connections update --connection-id <id> --body <json|@file> [--workspace-id <id>]
 agenticflow connections delete --connection-id <id> [--workspace-id <id>]
-agenticflow connections categories [--workspace-id <id>]
 ```
 
 ### node-types
@@ -137,13 +133,13 @@ For any endpoint not covered by resource commands:
 
 ```bash
 # By operation ID
-agenticflow call --operation-id getAgentModel
+agenticflow call --operation-id get_by_id_v1_agents__agent_id__get -P agent_id=abc123
 
 # By method + path
 agenticflow call --method GET --path /v1/agents/
 
 # With parameters and body
-agenticflow call --operation-id updateAgent \
+agenticflow call --operation-id update_v1_agents__agent_id__put \
   -P agent_id=abc123 \
   --body '{"name": "Updated"}'
 
@@ -151,7 +147,7 @@ agenticflow call --operation-id updateAgent \
 agenticflow call --method GET --path /v1/agents/ -Q limit=10
 
 # Dry run (shows request without executing)
-agenticflow call --operation-id listAgents --dry-run
+agenticflow call --operation-id get_all_v1_agents__get --dry-run
 ```
 
 ### Utilities
@@ -161,7 +157,7 @@ agenticflow call --operation-id listAgents --dry-run
 agenticflow doctor
 
 # OpenAPI operation discovery
-agenticflow ops list [--public-only] [--tag <tag>]
+agenticflow ops list [--public-only] [--tag <tag>] [--json]
 agenticflow ops show <operation-id>
 
 # Operation catalog
@@ -190,7 +186,7 @@ agenticflow playbook [topic] [--list]
 
 ## Output
 
-All commands output JSON to stdout. Errors set a non-zero exit code.
+Use `--json` for machine-readable output. In JSON mode, errors use a structured envelope and exit non-zero.
 
 ```bash
 agenticflow agent list | jq '.[] | .name'

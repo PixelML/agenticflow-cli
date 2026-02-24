@@ -34,6 +34,22 @@ describe("CLI Main (Commander integration)", () => {
       const optNames = program.options.map((o) => o.long);
       expect(optNames).toContain("--api-key");
       expect(optNames).toContain("--spec-file");
+      expect(optNames).toContain("--no-color");
+      expect(optNames).toContain("--json");
+    });
+
+    it("doctor command supports strict mode", () => {
+      const program = createProgram();
+      const doctorCmd = program.commands.find((c) => c.name() === "doctor")!;
+      const optNames = doctorCmd.options.map((o) => o.long);
+      expect(optNames).toContain("--strict");
+    });
+
+    it("ops list command supports json output", () => {
+      const program = createProgram();
+      const opsCmd = program.commands.find((c) => c.name() === "ops")!;
+      const listCmd = opsCmd.commands.find((c) => c.name() === "list")!;
+      const optNames = listCmd.options.map((o) => o.long);
       expect(optNames).toContain("--json");
     });
   });
