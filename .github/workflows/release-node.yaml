@@ -52,11 +52,13 @@ jobs:
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
+      - name: Configure npm registry
+        run: npm config set registry https://registry.npmjs.org/
+
       - name: Publish to npm (trusted publishing)
         working-directory: packages/cli
         run: |
           echo "Node: $(node --version) / npm: $(npm --version)"
-          npm config set registry https://registry.npmjs.org/
           npm publish --access public --provenance
 
       - name: Create GitHub Release
@@ -117,11 +119,13 @@ jobs:
         working-directory: packages/sdk
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version
 
+      - name: Configure npm registry
+        run: npm config set registry https://registry.npmjs.org/
+
       - name: Publish to npm (trusted publishing)
         working-directory: packages/sdk
         run: |
           echo "Node: $(node --version) / npm: $(npm --version)"
-          npm config set registry https://registry.npmjs.org/
           npm publish --access public --provenance
 
       - name: Create GitHub Release
