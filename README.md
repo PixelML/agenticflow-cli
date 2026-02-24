@@ -36,16 +36,29 @@ agenticflow workflow run --workflow-id <id> --input '{"query": "hello"}'
 
 | Method | Usage | Best For |
 |--------|-------|----------|
-| Environment variable | `export AGENTICFLOW_API_KEY=<key>` | CI/CD, automated agents |
-| CLI flag | `--api-key <key>` | One-off scripts |
-| Config file | `agenticflow auth import-env --file .env` | Persistent dev setup |
+| **Interactive login** | `agenticflow login` | First-time setup |
+| **Environment variable** | `export AGENTICFLOW_API_KEY=<key>` | CI/CD, automated agents |
+| **CLI flag** | `--api-key <key>` | One-off scripts |
+| **Import from .env** | `agenticflow auth import-env --file .env` | Batch import |
+
+### Interactive Login (recommended)
 
 ```bash
-# Import API key from .env file (saves to ~/.agenticflow/auth.json)
-agenticflow auth import-env --file /path/to/.env
+agenticflow login
+# Prompts for: API Key, Workspace ID, Project ID
+# Saves to ~/.agenticflow/auth.json
 
 # Verify
 agenticflow whoami --json
+
+# Remove credentials
+agenticflow logout
+```
+
+### Import from .env
+
+```bash
+agenticflow auth import-env --file /path/to/.env
 ```
 
 ### Environment Variables
