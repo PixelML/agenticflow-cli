@@ -1139,33 +1139,33 @@ export function createProgram(): Command {
         operationId: string;
         query: Record<string, string | undefined>;
       }> = [
-        {
-          kind: "workflow",
-          operationId: "get_workflow_templates_v1_workflow_templates__get",
-          query: {
-            limit: String(limit),
-            offset: String(offset),
-            sort_order: sortOrder,
+          {
+            kind: "workflow",
+            operationId: "get_workflow_templates_v1_workflow_templates__get",
+            query: {
+              limit: String(limit),
+              offset: String(offset),
+              sort_order: sortOrder,
+            },
           },
-        },
-        {
-          kind: "agent",
-          operationId: "get_public_v1_agent_templates_public_get",
-          query: {
-            limit: String(limit),
-            offset: String(offset),
+          {
+            kind: "agent",
+            operationId: "get_public_v1_agent_templates_public_get",
+            query: {
+              limit: String(limit),
+              offset: String(offset),
+            },
           },
-        },
-        {
-          kind: "workforce",
-          operationId: "get_mas_templates_v1_mas_templates__get",
-          query: {
-            limit: String(limit),
-            offset: String(offset),
-            workforce_id: opts.workforceId as string | undefined,
+          {
+            kind: "workforce",
+            operationId: "get_mas_templates_v1_mas_templates__get",
+            query: {
+              limit: String(limit),
+              offset: String(offset),
+              workforce_id: opts.workforceId as string | undefined,
+            },
           },
-        },
-      ];
+        ];
 
       const datasets: TemplateDatasetInput[] = [];
       const issues: TemplateSyncIssue[] = [];
@@ -2052,26 +2052,6 @@ export function createProgram(): Command {
       }));
     });
 
-
-
-  workflowCmd
-    .command("like-status")
-    .description("Get like status for a workflow.")
-    .requiredOption("--workflow-id <id>", "Workflow ID")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.workflows.getLikeStatus(opts.workflowId));
-    });
-
-  workflowCmd
-    .command("reference-impact")
-    .description("Get reference impact analysis for a workflow.")
-    .requiredOption("--workflow-id <id>", "Workflow ID")
-    .action(async (opts) => {
-      const client = buildClient(program.opts());
-      await run(() => client.workflows.getReferenceImpact(opts.workflowId));
-    });
-
   // ═════════════════════════════════════════════════════════════════
   // agent  (SDK-based)
   // ═════════════════════════════════════════════════════════════════
@@ -2152,20 +2132,47 @@ export function createProgram(): Command {
       const token = resolveToken(program.opts());
       const body = loadJsonPayload(opts.body);
       ensureLocalValidation("agent.stream", validateAgentStreamPayload(body));
+      const streamBody = body as import("@pixelml/agenticflow-sdk").StreamRequest;
       if (token) {
-        await run(() => client.agents.stream(opts.agentId, body));
+        const stream = await client.agents.stream(opts.agentId, streamBody);
+        const text = await stream.text();
+        await run(() => Promise.resolve(text));
       } else {
-        await run(() => client.agents.streamAnonymous(opts.agentId, body));
+        const stream = await client.agents.streamAnonymous(opts.agentId, streamBody);
+        const text = await stream.text();
+        await run(() => Promise.resolve(text));
       }
     });
 
   agentCmd
-    .command("reference-impact")
-    .description("Get reference impact analysis for an agent.")
+    .command("upload-file")
+    .description("Upload a file for an agent.")
     .requiredOption("--agent-id <id>", "Agent ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.agents.getReferenceImpact(opts.agentId));
+      const token = resolveToken(program.opts());
+      const body = loadJsonPayload(opts.body);
+      if (token) {
+        await run(() => client.agents.uploadFile(opts.agentId, body));
+      } else {
+        await run(() => client.agents.uploadFileAnonymous(opts.agentId, body));
+      }
+    });
+
+  agentCmd
+    .command("upload-session")
+    .description("Get upload session status for an agent.")
+    .requiredOption("--agent-id <id>", "Agent ID")
+    .requiredOption("--session-id <id>", "Upload session ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const token = resolveToken(program.opts());
+      if (token) {
+        await run(() => client.agents.getUploadSession(opts.agentId, opts.sessionId));
+      } else {
+        await run(() => client.agents.getUploadSessionAnonymous(opts.agentId, opts.sessionId));
+      }
     });
 
   // ═════════════════════════════════════════════════════════════════
@@ -2180,6 +2187,9 @@ export function createProgram(): Command {
     .description("List available node types.")
     .option("--limit <n>", "Limit")
     .option("--offset <n>", "Offset")
+    .option("--sort-order <order>", "Sort order (asc|desc)")
+    .option("--connection <name>", "Filter by connection")
+    .option("--search <query>", "Search query")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const queryParams: Record<string, unknown> = {};
@@ -2187,6 +2197,9 @@ export function createProgram(): Command {
       const offset = parseOptionalInteger(opts.offset as string | undefined, "--offset", 0);
       if (limit != null) queryParams["limit"] = limit;
       if (offset != null) queryParams["offset"] = offset;
+      if (opts.sortOrder) queryParams["sort_order"] = opts.sortOrder;
+      if (opts.connection) queryParams["connection"] = opts.connection;
+      if (opts.search) queryParams["search"] = opts.search;
       await run(() => client.nodeTypes.list(queryParams));
     });
 
@@ -2288,6 +2301,36 @@ export function createProgram(): Command {
       await run(() => client.connections.delete(opts.connectionId, opts.workspaceId));
     });
 
+  connectionsCmd
+    .command("get-default")
+    .description("Get the default connection for a category.")
+    .requiredOption("--category-name <name>", "Connection category name")
+    .option("--workspace-id <id>", "Workspace ID")
+    .option("--project-id <id>", "Project ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.connections.getDefault({
+        categoryName: opts.categoryName,
+        workspaceId: opts.workspaceId,
+        projectId: opts.projectId,
+      }));
+    });
+
+  connectionsCmd
+    .command("categories")
+    .description("List connection categories.")
+    .option("--workspace-id <id>", "Workspace ID")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.connections.categories({
+        workspaceId: opts.workspaceId,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+      }));
+    });
+
 
   // ═════════════════════════════════════════════════════════════════
   // uploads  (SDK-based)
@@ -2313,6 +2356,265 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       await run(() => client.uploads.inputStatus(opts.sessionId));
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // agent-threads  (SDK-based)
+  // ═════════════════════════════════════════════════════════════════
+  const agentThreadsCmd = program
+    .command("agent-threads")
+    .description("Agent thread management.");
+
+  agentThreadsCmd
+    .command("list")
+    .description("List threads for an agent.")
+    .requiredOption("--agent-id <id>", "Agent ID")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .option("--status <status>", "Filter by status")
+    .option("--search <query>", "Search query")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.agentThreads.list(opts.agentId, {
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        status: opts.status,
+        searchQuery: opts.search,
+      }));
+    });
+
+  agentThreadsCmd
+    .command("list-by-project")
+    .description("List threads for a project.")
+    .option("--project-id <id>", "Project ID")
+    .option("--agent-id <id>", "Agent ID")
+    .option("--visibility <v>", "Visibility filter")
+    .option("--user-id <id>", "User ID filter")
+    .option("--status <status>", "Status filter")
+    .option("--sort-by <field>", "Sort field")
+    .option("--sort-order <order>", "Sort order (asc|desc)")
+    .option("--created-from <date>", "Created from (ISO date)")
+    .option("--created-to <date>", "Created to (ISO date)")
+    .option("--search <query>", "Search query")
+    .option("--page <n>", "Page number")
+    .option("--size <n>", "Page size")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const projId = opts.projectId ?? resolveProjectId(program.opts().projectId);
+      if (!projId) fail("missing_project_id", "Project ID is required.", "Set AGENTICFLOW_PROJECT_ID or pass --project-id.");
+      await run(() => client.agentThreads.listByProject(projId, {
+        agentId: opts.agentId,
+        visibility: opts.visibility,
+        userId: opts.userId,
+        status: opts.status,
+        sortBy: opts.sortBy,
+        sortOrder: opts.sortOrder,
+        createdFrom: opts.createdFrom,
+        createdTo: opts.createdTo,
+        searchQuery: opts.search,
+        page: parseOptionalInteger(opts.page as string | undefined, "--page", 1),
+        size: parseOptionalInteger(opts.size as string | undefined, "--size", 1),
+      }));
+    });
+
+  agentThreadsCmd
+    .command("get")
+    .description("Get a thread by ID.")
+    .requiredOption("--thread-id <id>", "Thread ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.agentThreads.get(opts.threadId));
+    });
+
+  agentThreadsCmd
+    .command("delete")
+    .description("Delete a thread.")
+    .requiredOption("--thread-id <id>", "Thread ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.agentThreads.delete(opts.threadId));
+    });
+
+  agentThreadsCmd
+    .command("messages")
+    .description("Get messages for a thread.")
+    .requiredOption("--thread-id <id>", "Thread ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.agentThreads.getMessages(opts.threadId));
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // knowledge  (SDK-based)
+  // ═════════════════════════════════════════════════════════════════
+  const knowledgeCmd = program
+    .command("knowledge")
+    .description("Knowledge dataset management.");
+
+  knowledgeCmd
+    .command("list")
+    .description("List knowledge datasets.")
+    .option("--workspace-id <id>", "Workspace ID")
+    .option("--project-id <id>", "Project ID")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .option("--format-type <type>", "Format type filter")
+    .option("--search <query>", "Search query")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.knowledge.list({
+        workspaceId: opts.workspaceId,
+        projectId: opts.projectId,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        formatType: opts.formatType,
+        searchQuery: opts.search,
+      }));
+    });
+
+  knowledgeCmd
+    .command("get")
+    .description("Get a knowledge dataset by ID.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.knowledge.get(opts.datasetId));
+    });
+
+  knowledgeCmd
+    .command("delete")
+    .description("Delete a knowledge dataset.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.knowledge.delete(opts.datasetId));
+    });
+
+  knowledgeCmd
+    .command("list-rows")
+    .description("List rows for a knowledge dataset.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .option("--sort <field>", "Sort field")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.knowledge.listRows(opts.datasetId, {
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        sort: opts.sort,
+      }));
+    });
+
+  knowledgeCmd
+    .command("search-rows")
+    .description("Search rows in a knowledge dataset.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .requiredOption("--search-term <term>", "Search term")
+    .option("--limit <n>", "Limit")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.knowledge.searchRows(opts.datasetId, opts.searchTerm, {
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+      }));
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // database  (SDK-based)
+  // ═════════════════════════════════════════════════════════════════
+  const databaseCmd = program
+    .command("database")
+    .description("Database dataset management.");
+
+  databaseCmd
+    .command("list")
+    .description("List database datasets.")
+    .option("--workspace-id <id>", "Workspace ID")
+    .option("--project-id <id>", "Project ID")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .option("--search <query>", "Search query")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.database.list({
+        workspaceId: opts.workspaceId,
+        projectId: opts.projectId,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        searchQuery: opts.search,
+      }));
+    });
+
+  databaseCmd
+    .command("create")
+    .description("Create a database dataset.")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body);
+      await run(() => client.database.create(body));
+    });
+
+  databaseCmd
+    .command("get")
+    .description("Get a database dataset by ID.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.database.get(opts.datasetId));
+    });
+
+  databaseCmd
+    .command("update")
+    .description("Update a database dataset.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body);
+      await run(() => client.database.update(opts.datasetId, body));
+    });
+
+  databaseCmd
+    .command("delete")
+    .description("Delete a database dataset.")
+    .requiredOption("--dataset-id <id>", "Dataset ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.database.delete(opts.datasetId));
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // mcp-clients  (SDK-based)
+  // ═════════════════════════════════════════════════════════════════
+  const mcpClientsCmd = program
+    .command("mcp-clients")
+    .description("MCP client management.");
+
+  mcpClientsCmd
+    .command("list")
+    .description("List MCP clients.")
+    .option("--workspace-id <id>", "Workspace ID")
+    .option("--project-id <id>", "Project ID")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.mcpClients.list({
+        workspaceId: opts.workspaceId,
+        projectId: opts.projectId,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+      }));
+    });
+
+  mcpClientsCmd
+    .command("get")
+    .description("Get MCP client details.")
+    .requiredOption("--client-id <id>", "MCP client ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.mcpClients.get(opts.clientId));
     });
 
   return program;

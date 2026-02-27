@@ -112,22 +112,4 @@ export class WorkflowsResource {
   async validate(payload: unknown): Promise<unknown> {
     return (await this.client.post("/v1/workflows/utils/validate_create_workflow_model", { json: payload })).data;
   }
-
-  // ── Get Reference Impact ───────────────────────────────────────────
-  async getReferenceImpact(workflowId: string): Promise<unknown> {
-    return (await this.client.get(`/v1/workflows/${workflowId}/reference-impact`)).data;
-  }
-
-  // ── Like / Unlike / Like Status ────────────────────────────────────
-  async like(workflowId: string): Promise<unknown> {
-    return (await this.client.post(`/v1/workflows/${workflowId}/like`)).data;
-  }
-
-  async unlike(workflowId: string): Promise<unknown> {
-    return (await this.client.post(`/v1/workflows/${workflowId}/unlike`)).data;
-  }
-
-  async getLikeStatus(workflowId: string): Promise<unknown> {
-    return (await this.client.get(`/v1/workflows/${workflowId}/like_status`)).data;
-  }
 }

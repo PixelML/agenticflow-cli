@@ -71,19 +71,36 @@ await client.agents.delete("agent-id");
 // Anonymous access (no API key required)
 await client.agents.getAnonymous("agent-id");
 
-// Streaming
-await client.agents.stream("agent-id", payload);
-await client.agents.streamAnonymous("agent-id", payload);
+// Streaming — returns AgentStream with event-driven API
+const stream = await client.agents.stream("agent-id", {
+  id: "550e8400-e29b-41d4-a716-446655440000", // UUID (auto-generated if omitted)
+  messages: [{ role: "user", content: "Hello!" }],
+});
+
+// Option 1: Event listeners
+stream
+  .on("textDelta", (delta) => process.stdout.write(delta))
+  .on("toolCall", (tc) => console.log("Tool:", tc))
+  .on("error", (err) => console.error(err))
+  .on("end", () => console.log("\nDone"));
+await stream.process();
+
+// Option 2: Collect full text
+const text = await stream.text();
+
+// Option 3: Async iteration
+for await (const part of stream) {
+  console.log(part.type, part.value);
+}
+
+// Anonymous streaming (no API key required)
+await client.agents.streamAnonymous("agent-id", { messages: [{ role: "user", content: "Hi" }] });
 
 // File uploads
 await client.agents.uploadFile("agent-id", payload);
 await client.agents.getUploadSession("agent-id", "session-id");
 await client.agents.uploadFileAnonymous("agent-id", payload);
 await client.agents.getUploadSessionAnonymous("agent-id", "session-id");
-
-// Reference impact
-await client.agents.getReferenceImpact("agent-id");
-```
 
 ### Workflows
 
@@ -108,15 +125,6 @@ await client.workflows.runHistory("workflow-id", { limit, offset });
 
 // Validation
 await client.workflows.validate(payload);
-
-// Reference impact
-await client.workflows.getReferenceImpact("workflow-id");
-
-// Like / Unlike
-await client.workflows.like("workflow-id");
-await client.workflows.unlike("workflow-id");
-await client.workflows.getLikeStatus("workflow-id");
-```
 
 ### Connections
 

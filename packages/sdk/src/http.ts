@@ -73,6 +73,72 @@ export class DeterministicHTTPClient {
       clearTimeout(timer);
     }
   }
+
+  /**
+   * Make an HTTP request and return the raw Response without consuming the body.
+   * Used for streaming responses where the caller needs to read the body
+   * as a stream.
+   */
+  async requestRaw(options: {
+    method: string;
+    url: string;
+    params?: Record<string, unknown> | null;
+    headers?: Record<string, string> | null;
+    json?: unknown;
+    timeout?: Timeout | null;
+  }): Promise<Response> {
+    const effectiveHeaders = normalizeHeaders(options.headers);
+    const effectiveTimeout = options.timeout ?? this.timeout;
+
+    let url = options.url;
+    const normalizedParams = normalizeParams(options.params);
+    if (normalizedParams) {
+      const searchParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(normalizedParams)) {
+        if (Array.isArray(value)) {
+          for (const v of value) searchParams.append(key, v);
+        } else {
+          searchParams.append(key, value);
+        }
+      }
+      const qs = searchParams.toString();
+      if (qs) url += (url.includes("?") ? "&" : "?") + qs;
+    }
+
+    let body: string | undefined;
+    if (options.json !== undefined && options.json !== null) {
+      body = JSON.stringify(options.json);
+      if (!effectiveHeaders["content-type"]) {
+        effectiveHeaders["content-type"] = "application/json";
+      }
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), effectiveTimeout);
+
+    try {
+      const response = await fetch(url, {
+        method: options.method,
+        headers: effectiveHeaders,
+        body,
+        signal: controller.signal,
+      });
+      // Note: we do NOT clearTimeout here — we keep the abort controller alive
+      // so streaming can be aborted if it exceeds the timeout.
+      // However, for streaming we typically want a longer timeout.
+      clearTimeout(timer);
+      return response;
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new RequestTimeoutError("Request timed out.", { cause: err });
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      throw new NetworkError(`Network request failed for ${url}: ${message}`, {
+        cause: err instanceof Error ? err : undefined,
+      });
+    }
+  }
 }
 
 function normalizeHeaders(

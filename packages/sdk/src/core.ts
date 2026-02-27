@@ -145,6 +145,62 @@ export class AgenticFlowSDK {
   delete(path: string, options?: Parameters<AgenticFlowSDK["request"]>[2]): Promise<APIResponse> {
     return this.request("DELETE", path, options);
   }
+
+  /**
+   * Make a streaming request — returns the raw Response so the caller
+   * can read the body as a stream.  Raises structured errors for non-2xx.
+   */
+  async requestStream(
+    method: string,
+    path: string,
+    options: {
+      pathParams?: Record<string, unknown> | null;
+      queryParams?: Record<string, unknown> | null;
+      headers?: Record<string, string> | null;
+      json?: unknown;
+      timeout?: Timeout | null;
+    } = {},
+  ): Promise<Response> {
+    const mergedHeaders = { ...this.defaultHeaders };
+    // Override Accept for streaming
+    mergedHeaders["Accept"] = "text/plain";
+    if (options.headers) {
+      Object.assign(mergedHeaders, options.headers);
+    }
+    if (this.apiKey && !hasAuthorization(mergedHeaders)) {
+      mergedHeaders["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+
+    const response = await this.transport.requestRaw({
+      method,
+      url: `${this.baseUrl}${resolvePath(path, options.pathParams)}`,
+      params: options.queryParams as Record<string, unknown> | undefined,
+      headers: mergedHeaders,
+      json: options.json,
+      timeout: options.timeout ?? undefined,
+    });
+
+    // Check for error status — need to consume body for error message
+    if (!response.ok) {
+      const text = await response.text();
+      const data = (() => {
+        try { return JSON.parse(text); } catch { return null; }
+      })();
+      const normalized: APIResponse = {
+        statusCode: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        text,
+        data,
+        requestUrl: response.url,
+        requestMethod: method,
+        requestId: response.headers.get("x-request-id") ?? null,
+        ok: false,
+      };
+      raiseForStatus(normalized);
+    }
+
+    return response;
+  }
 }
 
 // --- Helpers ---

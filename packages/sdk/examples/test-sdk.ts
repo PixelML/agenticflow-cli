@@ -27,12 +27,40 @@ async function main() {
   console.log();
 
   // ── Agents ──────────────────────────────────────────────────────
+  let firstAgentId: string | null = null;
   try {
     console.log("📋 Listing agents...");
     const agents = await client.agents.list({ limit: 5 });
     console.log("   data:", JSON.stringify(agents, null, 2).slice(0, 200));
+
+    // Grab first agent ID for streaming test
+    if (Array.isArray(agents) && agents.length > 0) {
+      firstAgentId = (agents[0] as Record<string, unknown>).id as string;
+    } else if (agents && typeof agents === "object" && "results" in (agents as Record<string, unknown>)) {
+      const results = (agents as Record<string, unknown>).results;
+      if (Array.isArray(results) && results.length > 0) {
+        firstAgentId = (results[0] as Record<string, unknown>).id as string;
+      }
+    }
   } catch (err) {
     console.error("   ❌ agents.list failed:", (err as Error).message);
+  }
+
+  // ── Stream ──────────────────────────────────────────────────────
+  if (firstAgentId) {
+    try {
+      console.log(`\n🔄 Streaming to agent ${firstAgentId}...`);
+      const stream = await client.agents.stream(firstAgentId, {
+        messages: [{ role: "user", content: "Hello! Tell me a short joke." }],
+      });
+
+      const text = await stream.text();
+      console.log(text);
+    } catch (err) {
+      console.error("   ❌ stream failed:", (err as Error).message);
+    }
+  } else {
+    console.log("\n⏭️  Skipping stream test — no agents found.");
   }
 
   // ── Workflows ───────────────────────────────────────────────────

@@ -29,13 +29,23 @@ function coerceNodes(data: unknown): Record<string, unknown>[] {
   return [];
 }
 
+function filterPublic(nodes: Record<string, unknown>[]): Record<string, unknown>[] {
+  return nodes.filter((node) => node["scope"] === "public");
+}
+
 export class NodeTypesResource {
   constructor(private client: AgenticFlowSDK) { }
 
   async list(queryParams?: Record<string, unknown>): Promise<unknown> {
-    return (await this.client.get("/v1/node_types", {
+    const data = (await this.client.get("/v1/node_types", {
       queryParams: compactDict(queryParams),
     })).data;
+    const nodes = coerceNodes(data);
+    const publicNodes = filterPublic(nodes);
+    return {
+      ...(data as Record<string, unknown>),
+      body: publicNodes,
+    };
   }
 
   async get(name: string): Promise<unknown> {
@@ -46,7 +56,7 @@ export class NodeTypesResource {
     const data = await this.list(queryParams);
     const nodes = coerceNodes(data);
     const needle = query.toLowerCase();
-    const matches = nodes.filter((node) =>
+    const matches = filterPublic(nodes).filter((node) =>
       JSON.stringify(node).toLowerCase().includes(needle),
     );
     return {
@@ -73,7 +83,7 @@ export class NodeTypesResource {
       project_id: projectId ?? null,
     };
     if (options.searchTerm != null) body["search_term"] = options.searchTerm;
-    return (await this.client.post(`/v1/node_types/name/${options.name}/dynamic-options`, {
+    return (await this.client.post(`/v1/node_types/name/${options.name}/dynamic_options`, {
       json: body,
     })).data;
   }

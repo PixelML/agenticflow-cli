@@ -6,6 +6,8 @@ export { AgenticFlowSDK, DEFAULT_BASE_URL, AGENTICFLOW_API_KEY, WORKSPACE_ID, PR
 export type { AgenticFlowSDKOptions } from "./core.js";
 export type { APIResponse } from "./types.js";
 export { fromFetchResponse } from "./types.js";
+export { AgentStream, parseStreamLine } from "./streaming.js";
+export type { StreamPart, StreamPartType, StreamRequest, StreamMessage, AgentStreamEventMap } from "./streaming.js";
 export {
   AgenticFlowError,
   NetworkError,
@@ -25,6 +27,10 @@ export {
   ConnectionsResource,
   NodeTypesResource,
   UploadsResource,
+  AgentThreadsResource,
+  KnowledgeResource,
+  DatabaseResource,
+  McpClientsResource,
 } from "./resources/index.js";
 
 // ── createClient ────────────────────────────────────────────────────
@@ -34,6 +40,10 @@ import { WorkflowsResource } from "./resources/workflows.js";
 import { ConnectionsResource } from "./resources/connections.js";
 import { NodeTypesResource } from "./resources/node-types.js";
 import { UploadsResource } from "./resources/uploads.js";
+import { AgentThreadsResource } from "./resources/agent-threads.js";
+import { KnowledgeResource } from "./resources/knowledge.js";
+import { DatabaseResource } from "./resources/database.js";
+import { McpClientsResource } from "./resources/mcp-clients.js";
 
 export interface AgenticFlowClient {
   /** Agent CRUD, streaming, publishing, uploads */
@@ -46,6 +56,14 @@ export interface AgenticFlowClient {
   nodeTypes: NodeTypesResource;
   /** Anonymous upload sessions */
   uploads: UploadsResource;
+  /** Agent thread CRUD, messages */
+  agentThreads: AgentThreadsResource;
+  /** Knowledge (datasets) CRUD, rows, embeddings, search */
+  knowledge: KnowledgeResource;
+  /** Database datasets CRUD */
+  database: DatabaseResource;
+  /** MCP client listing */
+  mcpClients: McpClientsResource;
   /** Low-level SDK instance for advanced / raw requests */
   sdk: AgenticFlowSDK;
 }
@@ -65,6 +83,8 @@ export interface AgenticFlowClient {
  *
  * const agents = await client.agents.list();
  * const workflow = await client.workflows.get("workflow-id");
+ * const threads = await client.agentThreads.list();
+ * const datasets = await client.knowledge.list();
  * ```
  */
 export function createClient(options: AgenticFlowSDKOptions = {}): AgenticFlowClient {
@@ -75,6 +95,10 @@ export function createClient(options: AgenticFlowSDKOptions = {}): AgenticFlowCl
     connections: new ConnectionsResource(sdk),
     nodeTypes: new NodeTypesResource(sdk),
     uploads: new UploadsResource(sdk),
+    agentThreads: new AgentThreadsResource(sdk),
+    knowledge: new KnowledgeResource(sdk),
+    database: new DatabaseResource(sdk),
+    mcpClients: new McpClientsResource(sdk),
     sdk,
   };
 }
