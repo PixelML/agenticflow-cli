@@ -7,7 +7,7 @@
 
 import { Command } from "commander";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
-import { resolve, dirname, join, basename } from "node:path";
+import { resolve, dirname, join, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -56,6 +56,30 @@ import {
   buildAgentCreatePayloadFromTemplate,
   indexTemplatesById,
 } from "./template-duplicate.js";
+import {
+  packTemplateFiles,
+  scaffoldPack,
+  validatePackAtPath,
+  loadPackManifest,
+  type PackEntrypoint,
+  type PackManifest,
+} from "./pack.js";
+import {
+  parsePackSource,
+  installPack,
+  listInstalledPacks,
+  uninstallPack,
+  readInstallManifest,
+  resolveInstalledPackRoot,
+  allInstalledPackRoots,
+} from "./pack-registry.js";
+import {
+  loadSkillDefinition,
+  findSkillsInPack,
+  buildWorkflowFromSkill,
+  resolveSkillByName,
+  type SkillDefinition,
+} from "./skill.js";
 
 // --- Constants ---
 const AUTH_ENV_API_KEY = "AGENTICFLOW_PUBLIC_API_KEY";
@@ -70,6 +94,16 @@ const TEMPLATE_SYNC_SCHEMA_VERSION = "agenticflow.templates.sync.v1";
 const TEMPLATE_INDEX_SCHEMA_VERSION = "agenticflow.templates.index.v1";
 const TEMPLATE_DUPLICATE_SCHEMA_VERSION = "agenticflow.templates.duplicate.v1";
 const LOCAL_VALIDATION_SCHEMA_VERSION = "agenticflow.local_validation.v1";
+const WORKFLOW_EXEC_SCHEMA_VERSION = "agenticflow.workflow.exec.v1";
+const PACK_INIT_SCHEMA_VERSION = "agenticflow.pack.init.v1";
+const PACK_SIMULATE_SCHEMA_VERSION = "agenticflow.pack.simulate.v1";
+const PACK_RUN_SCHEMA_VERSION = "agenticflow.pack.run.v1";
+const PACK_INSTALL_SCHEMA_VERSION = "agenticflow.pack.install.v1";
+const PACK_LIST_SCHEMA_VERSION = "agenticflow.pack.list.v1";
+const PACK_UNINSTALL_SCHEMA_VERSION = "agenticflow.pack.uninstall.v1";
+const SKILL_LIST_SCHEMA_VERSION = "agenticflow.skill.list.v1";
+const SKILL_SHOW_SCHEMA_VERSION = "agenticflow.skill.show.v1";
+const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Helpers
@@ -145,6 +179,207 @@ function parseOptionalInteger(
     );
   }
   return parsed;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function extractStringField(payload: unknown, candidates: string[]): string | null {
+  if (!isRecordValue(payload)) return null;
+  for (const key of candidates) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim().length > 0) return value;
+  }
+  return null;
+}
+
+function extractRunStatus(payload: unknown): string | null {
+  const direct = extractStringField(payload, ["status", "state", "run_status"]);
+  if (direct) return direct;
+  if (!isRecordValue(payload)) return null;
+  const execution = payload["execution"];
+  if (isRecordValue(execution)) {
+    return extractStringField(execution, ["status", "state"]);
+  }
+  return null;
+}
+
+function normalizeRunStatus(status: string): string {
+  return status.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+const TERMINAL_RUN_STATUSES = new Set([
+  "completed",
+  "complete",
+  "success",
+  "succeeded",
+  "failed",
+  "error",
+  "cancelled",
+  "canceled",
+  "timed_out",
+  "timeout",
+]);
+
+const FAILED_RUN_STATUSES = new Set([
+  "failed",
+  "error",
+  "cancelled",
+  "canceled",
+  "timed_out",
+  "timeout",
+]);
+
+function isTerminalRunStatus(status: string): boolean {
+  return TERMINAL_RUN_STATUSES.has(normalizeRunStatus(status));
+}
+
+function isFailedRunStatus(status: string): boolean {
+  return FAILED_RUN_STATUSES.has(normalizeRunStatus(status));
+}
+
+function normalizeWorkflowInputPayload(input: unknown): Record<string, unknown> {
+  if (input == null) return {};
+  if (!isRecordValue(input)) {
+    fail(
+      "invalid_input_payload",
+      "Workflow input payload must be a JSON object.",
+      "Pass `--input` as an object or @file that resolves to an object.",
+    );
+  }
+  return input;
+}
+
+interface WorkflowExecFromFileOptions {
+  client: AgenticFlowClient;
+  workflowFile: string;
+  workspaceId?: string;
+  inputPayload?: unknown;
+  skipRemoteValidate?: boolean;
+  wait?: boolean;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
+async function executeWorkflowFromFile(options: WorkflowExecFromFileOptions): Promise<Record<string, unknown>> {
+  const workflowFile = resolve(options.workflowFile);
+  if (!existsSync(workflowFile)) {
+    fail("workflow_file_not_found", `Workflow file not found: ${workflowFile}`);
+  }
+
+  const workflowBody = loadJsonPayload(`@${workflowFile}`);
+  ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(workflowBody));
+
+  let remoteValidation: unknown = null;
+  if (!options.skipRemoteValidate) {
+    remoteValidation = await options.client.workflows.validate(workflowBody);
+  }
+
+  const createdWorkflow = await options.client.workflows.create(workflowBody, options.workspaceId);
+  const workflowId = extractStringField(createdWorkflow, ["id", "workflow_id"]);
+  if (!workflowId) {
+    fail(
+      "workflow_exec_create_failed",
+      "Created workflow response is missing `id`.",
+      "Check API response shape for workflow create endpoint.",
+      createdWorkflow,
+    );
+  }
+
+  const normalizedInput = normalizeWorkflowInputPayload(options.inputPayload);
+  const runPayload: Record<string, unknown> = {
+    workflow_id: workflowId,
+    input: normalizedInput,
+  };
+  ensureLocalValidation("workflow.run", validateWorkflowRunPayload(runPayload));
+
+  const runResult = await options.client.workflows.run(runPayload);
+  const runId = extractStringField(runResult, ["id", "workflow_run_id", "run_id"]);
+
+  const pollIntervalMs = options.pollIntervalMs ?? 2000;
+  const timeoutMs = options.timeoutMs ?? 300000;
+  let waitAttempts = 0;
+  let waitTimedOut = false;
+  let finalRun: unknown = null;
+  let finalStatus: string | null = extractRunStatus(runResult);
+
+  if (options.wait) {
+    if (!runId) {
+      fail(
+        "workflow_exec_run_missing_id",
+        "Workflow run response is missing `id`, cannot poll with --wait.",
+        "Retry without --wait or inspect the raw run response.",
+        runResult,
+      );
+    }
+
+    const startedAt = Date.now();
+    while (true) {
+      waitAttempts += 1;
+      finalRun = await options.client.workflows.getRun(runId);
+      finalStatus = extractRunStatus(finalRun);
+      if (finalStatus && isTerminalRunStatus(finalStatus)) break;
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        waitTimedOut = true;
+        break;
+      }
+      await sleep(pollIntervalMs);
+    }
+  }
+
+  return {
+    schema: WORKFLOW_EXEC_SCHEMA_VERSION,
+    workflow_file: workflowFile,
+    workflow_id: workflowId,
+    validation: {
+      local: true,
+      remote: options.skipRemoteValidate ? null : remoteValidation,
+      remote_skipped: Boolean(options.skipRemoteValidate),
+    },
+    created_workflow: createdWorkflow,
+    run_request: runPayload,
+    run: runResult,
+    wait: {
+      enabled: Boolean(options.wait),
+      poll_interval_ms: pollIntervalMs,
+      timeout_ms: timeoutMs,
+      attempts: waitAttempts,
+      timed_out: waitTimedOut,
+      status: finalStatus,
+      terminal: Boolean(finalStatus && isTerminalRunStatus(finalStatus)),
+      failed: Boolean(finalStatus && isFailedRunStatus(finalStatus)),
+      final_run: finalRun,
+    },
+  };
+}
+
+function resolvePackEntrypoint(manifest: PackManifest, entryId?: string): PackEntrypoint {
+  const entrypoints = manifest.entrypoints ?? [];
+  if (entrypoints.length === 0) {
+    fail(
+      "pack_entrypoint_missing",
+      "Pack manifest has no entrypoints.",
+      "Add at least one entrypoint to pack.yaml.",
+    );
+  }
+
+  if (!entryId) return entrypoints[0];
+
+  const selected = entrypoints.find((entry) => entry.id === entryId);
+  if (!selected) {
+    fail(
+      "pack_entrypoint_not_found",
+      `Entrypoint '${entryId}' not found in pack manifest.`,
+      "Use `agenticflow pack validate --json` to inspect available entrypoints.",
+    );
+  }
+  return selected;
 }
 
 interface LocalWorkflowTemplateCache {
@@ -444,6 +679,93 @@ function parseKeyValueEnv(line: string): [string, string] | null {
     value = value.slice(1, -1);
   }
   return [key, value];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Skill mesh helpers
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Resolve template expressions like "{{audio_url}}" and "{{step_id.field}}"
+ * using the original input and accumulated step results.
+ */
+function resolveTemplateInputs(
+  templates: Record<string, string>,
+  originalInput: Record<string, unknown>,
+  stepResults: Record<string, unknown>,
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {};
+  for (const [key, template] of Object.entries(templates)) {
+    resolved[key] = resolveTemplateValue(template, originalInput, stepResults);
+  }
+  return resolved;
+}
+
+function resolveTemplateValue(
+  template: string,
+  originalInput: Record<string, unknown>,
+  stepResults: Record<string, unknown>,
+): unknown {
+  // Replace all {{...}} expressions
+  const pattern = /\{\{([^}]+)\}\}/g;
+  let hasMatch = false;
+  let singleMatch = false;
+
+  // Check if the entire string is a single template expression
+  const fullMatch = template.match(/^\{\{([^}]+)\}\}$/);
+  if (fullMatch) {
+    singleMatch = true;
+  }
+
+  const result = template.replace(pattern, (_match, expr: string) => {
+    hasMatch = true;
+    const trimmed = expr.trim();
+    // Check step results first (e.g., "transcribe.transcript")
+    if (trimmed.includes(".")) {
+      const [stepId, ...fieldParts] = trimmed.split(".");
+      const fieldName = fieldParts.join(".");
+      const stepResult = stepResults[stepId];
+      if (isRecordValue(stepResult)) {
+        const val = stepResult[fieldName];
+        if (val !== undefined) return String(val);
+      }
+    }
+    // Check original input
+    if (trimmed in originalInput) {
+      return String(originalInput[trimmed]);
+    }
+    // Return the template as-is if not resolvable
+    return `{{${trimmed}}}`;
+  });
+
+  // If it was a single expression and we found it in step results, return raw value
+  if (singleMatch && fullMatch) {
+    const trimmed = fullMatch[1].trim();
+    if (trimmed.includes(".")) {
+      const [stepId, ...fieldParts] = trimmed.split(".");
+      const fieldName = fieldParts.join(".");
+      const stepResult = stepResults[stepId];
+      if (isRecordValue(stepResult)) {
+        const val = stepResult[fieldName];
+        if (val !== undefined) return val;
+      }
+    }
+    if (trimmed in originalInput) return originalInput[trimmed];
+  }
+
+  return hasMatch ? result : template;
+}
+
+function extractStepOutput(runResult: Record<string, unknown>): Record<string, unknown> {
+  // Try to extract output from various response shapes
+  if (isRecordValue(runResult["output"])) {
+    return runResult["output"] as Record<string, unknown>;
+  }
+  if (isRecordValue(runResult["result"])) {
+    return runResult["result"] as Record<string, unknown>;
+  }
+  // Return the whole result as output
+  return runResult;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1734,6 +2056,804 @@ export function createProgram(): Command {
     });
 
   // ═════════════════════════════════════════════════════════════════
+  // pack (git-native pack control plane)
+  // ═════════════════════════════════════════════════════════════════
+  const packCmd = program
+    .command("pack")
+    .description("Pack lifecycle commands (init, validate, simulate, run, install, list, uninstall).");
+
+  packCmd
+    .command("init <name>")
+    .description("Scaffold a new pack repository structure.")
+    .option("--path <path>", "Output directory (defaults to ./<name>)")
+    .option("--force", "Overwrite existing files")
+    .option("--json", "JSON output")
+    .action((name, opts) => {
+      const parentOpts = program.opts();
+      const targetPath = resolve((opts.path as string | undefined) ?? name);
+      const result = scaffoldPack(targetPath, packTemplateFiles(name), Boolean(opts.force));
+      const payload = {
+        schema: PACK_INIT_SCHEMA_VERSION,
+        name,
+        root: result.root,
+        created: result.created,
+        skipped: result.skipped,
+        force: Boolean(opts.force),
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        console.log(`Pack scaffolded at ${result.root}`);
+        console.log(`- Created: ${result.created.length}`);
+        if (result.skipped.length > 0) {
+          console.log(`- Skipped: ${result.skipped.length} (use --force to overwrite)`);
+        }
+      }
+    });
+
+  packCmd
+    .command("validate")
+    .description("Validate pack.yaml, workflows, contracts, and tool bindings.")
+    .option("--path <path>", "Pack root path", ".")
+    .option("--strict", "Treat warnings as failures")
+    .option("--json", "JSON output")
+    .action((opts) => {
+      const parentOpts = program.opts();
+      let summary: ReturnType<typeof validatePackAtPath>;
+      try {
+        summary = validatePackAtPath(opts.path as string);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("pack_validate_failed", message);
+      }
+
+      if (opts.json || parentOpts.json) {
+        printJson(summary);
+      } else {
+        console.log(`Pack: ${summary.manifest}`);
+        console.log(`Valid: ${summary.valid ? "yes" : "no"}`);
+        console.log(`Checks: ${summary.checks}`);
+        console.log(`Errors: ${summary.errors.length}`);
+        console.log(`Warnings: ${summary.warnings.length}`);
+      }
+
+      if (!summary.valid || (opts.strict && summary.warnings.length > 0)) {
+        process.exitCode = 1;
+      }
+    });
+
+  packCmd
+    .command("simulate")
+    .description("Build a deterministic execution plan without running remote operations.")
+    .option("--path <path>", "Pack root path", ".")
+    .option("--entry <id>", "Entrypoint id (defaults to first manifest entrypoint)")
+    .option("--input <input>", "JSON input override (inline or @file)")
+    .option("--json", "JSON output")
+    .action((opts) => {
+      const parentOpts = program.opts();
+      const packRoot = resolve(opts.path as string);
+
+      let validation: ReturnType<typeof validatePackAtPath>;
+      let manifestInfo: ReturnType<typeof loadPackManifest>;
+      try {
+        validation = validatePackAtPath(packRoot);
+        manifestInfo = loadPackManifest(packRoot);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("pack_simulate_failed", message);
+      }
+
+      const { filePath: manifestPath, manifest } = manifestInfo;
+      const entry = resolvePackEntrypoint(manifest, opts.entry as string | undefined);
+      const workflowFile = resolve(packRoot, entry.workflow);
+
+      const inputPayload = normalizeWorkflowInputPayload(
+        opts.input
+          ? loadJsonPayload(opts.input as string)
+          : entry.default_input
+            ? loadJsonPayload(`@${resolve(packRoot, entry.default_input)}`)
+            : {},
+      );
+
+      const inputSource = opts.input
+        ? "cli"
+        : entry.default_input
+          ? "entrypoint_default"
+          : "empty_object";
+      const toolsDir = resolve(packRoot, "tools");
+      const toolBindings = existsSync(toolsDir)
+        ? readdirSync(toolsDir).filter((name) => name.endsWith(".tool.yaml") || name.endsWith(".tool.yml"))
+        : [];
+
+      const payload = {
+        schema: PACK_SIMULATE_SCHEMA_VERSION,
+        pack: {
+          root: packRoot,
+          manifest: relative(packRoot, manifestPath),
+          name: manifest.name ?? null,
+          version: manifest.version ?? null,
+        },
+        entrypoint: {
+          id: entry.id,
+          mode: entry.mode ?? "hybrid",
+          workflow: relative(packRoot, workflowFile),
+        },
+        validation,
+        plan: {
+          input_source: inputSource,
+          input_keys: Object.keys(inputPayload),
+          tool_bindings: toolBindings,
+          steps: [
+            {
+              id: "local.pack.validate",
+              target: "local",
+              action: "validate_pack_manifest_and_contracts",
+            },
+            {
+              id: "local.workflow.prepare",
+              target: "local",
+              action: "load_workflow_json_and_input",
+            },
+            {
+              id: "cloud.workflow.exec",
+              target: entry.mode === "local" ? "local" : "cloud",
+              action: "validate_create_run_poll_workflow",
+            },
+          ],
+        },
+        artifacts: {
+          output_dir: manifest.artifacts?.output_dir ?? "outputs/",
+          contracts: manifest.artifacts?.contracts ?? {},
+        },
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        console.log(`Pack simulation ready for entrypoint '${entry.id}'.`);
+        printJson(payload);
+      }
+
+      if (!validation.valid) process.exitCode = 1;
+    });
+
+  packCmd
+    .command("run")
+    .description("Run a pack entrypoint by executing its workflow from local files.")
+    .option("--path <path>", "Pack root path", ".")
+    .option("--entry <id>", "Entrypoint id (defaults to first manifest entrypoint)")
+    .option("--input <input>", "JSON input override (inline or @file)")
+    .option("--workspace-id <id>", "Workspace ID override for workflow create")
+    .option("--skip-remote-validate", "Skip API workflow validate call")
+    .option("--wait", "Poll workflow run to terminal state")
+    .option("--poll-interval-ms <ms>", "Polling interval when --wait is enabled", "2000")
+    .option("--timeout-ms <ms>", "Polling timeout when --wait is enabled", "300000")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      if (!resolveToken(parentOpts)) {
+        fail(
+          "missing_api_key",
+          "pack run requires authenticated access to create workflow models.",
+          "Set AGENTICFLOW_API_KEY or run `agenticflow login`.",
+        );
+      }
+
+      const packRoot = resolve(opts.path as string);
+      let validation: ReturnType<typeof validatePackAtPath>;
+      let manifestInfo: ReturnType<typeof loadPackManifest>;
+      try {
+        validation = validatePackAtPath(packRoot);
+        manifestInfo = loadPackManifest(packRoot);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("pack_run_failed", message);
+      }
+
+      if (!validation.valid) {
+        fail(
+          "pack_validation_failed",
+          "Pack validation failed. Run `agenticflow pack validate` for details.",
+          undefined,
+          validation,
+        );
+      }
+
+      const { filePath: manifestPath, manifest } = manifestInfo;
+      const entry = resolvePackEntrypoint(manifest, opts.entry as string | undefined);
+      const workflowFile = resolve(packRoot, entry.workflow);
+      const inputPayload = normalizeWorkflowInputPayload(
+        opts.input
+          ? loadJsonPayload(opts.input as string)
+          : entry.default_input
+            ? loadJsonPayload(`@${resolve(packRoot, entry.default_input)}`)
+            : {},
+      );
+      const inputSource = opts.input
+        ? "cli"
+        : entry.default_input
+          ? "entrypoint_default"
+          : "empty_object";
+
+      const pollIntervalMs = parseOptionalInteger(
+        opts.pollIntervalMs as string | undefined,
+        "--poll-interval-ms",
+        1,
+      ) ?? 2000;
+      const timeoutMs = parseOptionalInteger(
+        opts.timeoutMs as string | undefined,
+        "--timeout-ms",
+        1,
+      ) ?? 300000;
+
+      const client = buildClient(parentOpts);
+      try {
+        const workflowExec = await executeWorkflowFromFile({
+          client,
+          workflowFile,
+          workspaceId: opts.workspaceId as string | undefined,
+          inputPayload,
+          skipRemoteValidate: Boolean(opts.skipRemoteValidate),
+          wait: Boolean(opts.wait),
+          pollIntervalMs,
+          timeoutMs,
+        });
+
+        const payload = {
+          schema: PACK_RUN_SCHEMA_VERSION,
+          pack: {
+            root: packRoot,
+            manifest: relative(packRoot, manifestPath),
+            name: manifest.name ?? null,
+            version: manifest.version ?? null,
+          },
+          entrypoint: {
+            id: entry.id,
+            mode: entry.mode ?? "hybrid",
+            workflow: relative(packRoot, workflowFile),
+          },
+          input_source: inputSource,
+          validation,
+          workflow_exec: workflowExec,
+        };
+
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log(`Pack entrypoint '${entry.id}' executed.`);
+          printJson(payload);
+        }
+
+        const wait = workflowExec["wait"];
+        if (isRecordValue(wait)) {
+          if (wait["timed_out"] === true || wait["failed"] === true) process.exitCode = 1;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("pack_run_failed", message);
+      }
+    });
+
+  // ── pack install ──────────────────────────────────────────────
+  packCmd
+    .command("install <source>")
+    .description("Install a pack from a git source or local path.")
+    .option("--force", "Overwrite existing installation")
+    .option("--skip-provision", "Skip creating cloud workflows")
+    .option("--workspace-id <id>", "Workspace ID for provisioning")
+    .option("--project-id <id>", "Project ID for provisioning")
+    .option("--json", "JSON output")
+    .action(async (source: string, opts) => {
+      const parentOpts = program.opts();
+      try {
+        const parsed = parsePackSource(source);
+        const token = resolveToken(parentOpts);
+        const client = token ? buildClient(parentOpts) : null;
+
+        const manifest = await installPack(parsed, client, {
+          force: Boolean(opts.force),
+          skipProvision: Boolean(opts.skipProvision),
+          workspaceId: opts.workspaceId as string | undefined ?? resolveWorkspaceId(parentOpts.workspaceId),
+          projectId: opts.projectId as string | undefined ?? resolveProjectId(parentOpts.projectId),
+        });
+
+        const { schema: _installSchema, ...manifestRest } = manifest;
+        const payload = {
+          schema: PACK_INSTALL_SCHEMA_VERSION,
+          ...manifestRest,
+        };
+
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log(`Pack '${manifest.name}' installed (v${manifest.version}).`);
+          console.log(`  Skills: ${manifest.skill_count} (${manifest.skill_names.join(", ") || "none"})`);
+          const provSkills = Object.keys(manifest.provisioned_skills).length;
+          const provEntries = Object.keys(manifest.provisioned_entrypoints).length;
+          if (provSkills > 0 || provEntries > 0) {
+            console.log(`  Provisioned: ${provSkills} skill workflow(s), ${provEntries} entrypoint workflow(s)`);
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("pack_install_failed", message);
+      }
+    });
+
+  // ── pack list (installed) ──────────────────────────────────────
+  packCmd
+    .command("list")
+    .description("List installed packs.")
+    .option("--json", "JSON output")
+    .action((opts) => {
+      const parentOpts = program.opts();
+      const packs = listInstalledPacks();
+
+      const payload = {
+        schema: PACK_LIST_SCHEMA_VERSION,
+        count: packs.length,
+        packs,
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        if (packs.length === 0) {
+          console.log("No packs installed. Use `agenticflow pack install <source>` to install one.");
+        } else {
+          for (const pack of packs) {
+            console.log(`${pack.name} v${pack.version}  (${pack.skill_count} skills, ${pack.entrypoint_count} entrypoints)`);
+          }
+        }
+      }
+    });
+
+  // ── pack uninstall ─────────────────────────────────────────────
+  packCmd
+    .command("uninstall <name>")
+    .description("Uninstall an installed pack.")
+    .option("--delete-cloud-workflows", "Also delete provisioned cloud workflows")
+    .option("--workspace-id <id>", "Workspace ID for cloud deletion")
+    .option("--json", "JSON output")
+    .action(async (name: string, opts) => {
+      const parentOpts = program.opts();
+      try {
+        const token = resolveToken(parentOpts);
+        const client = (token && opts.deleteCloudWorkflows) ? buildClient(parentOpts) : null;
+
+        const result = await uninstallPack(name, client, {
+          deleteCloudWorkflows: Boolean(opts.deleteCloudWorkflows),
+          workspaceId: opts.workspaceId as string | undefined ?? resolveWorkspaceId(parentOpts.workspaceId),
+        });
+
+        const payload = {
+          schema: PACK_UNINSTALL_SCHEMA_VERSION,
+          ...result,
+        };
+
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log(`Pack '${name}' uninstalled.`);
+          if (result.deleted_cloud_workflows.length > 0) {
+            console.log(`  Deleted ${result.deleted_cloud_workflows.length} cloud workflow(s).`);
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("pack_uninstall_failed", message);
+      }
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // skill (skill mesh commands)
+  // ═════════════════════════════════════════════════════════════════
+  const skillCmd = program
+    .command("skill")
+    .description("Skill mesh commands (list, show, run).");
+
+  // ── skill list ─────────────────────────────────────────────────
+  skillCmd
+    .command("list")
+    .description("List all skills from installed packs.")
+    .option("--pack <name>", "Filter by pack name")
+    .option("--json", "JSON output")
+    .action((opts) => {
+      const parentOpts = program.opts();
+      const packRoots = allInstalledPackRoots();
+      const allSkills: Array<{
+        name: string;
+        kind: string;
+        version: string;
+        description?: string;
+        node_type?: string;
+        pack: string;
+      }> = [];
+
+      for (const packRoot of packRoots) {
+        const packName = packRoot.split("/").pop() ?? "unknown";
+        if (opts.pack && packName !== opts.pack) continue;
+
+        const skills = findSkillsInPack(packRoot);
+        for (const skill of skills) {
+          allSkills.push({
+            name: skill.name,
+            kind: skill.kind,
+            version: skill.version,
+            description: skill.description,
+            node_type: skill.node_type,
+            pack: packName,
+          });
+        }
+      }
+
+      const payload = {
+        schema: SKILL_LIST_SCHEMA_VERSION,
+        count: allSkills.length,
+        skills: allSkills,
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        if (allSkills.length === 0) {
+          console.log("No skills found. Install a pack with skills first.");
+        } else {
+          for (const s of allSkills) {
+            const kindTag = s.kind === "ComposedSkill" ? " [composed]" : "";
+            console.log(`${s.name}${kindTag}  (${s.pack})  ${s.description ?? ""}`);
+          }
+        }
+      }
+    });
+
+  // ── skill show ─────────────────────────────────────────────────
+  skillCmd
+    .command("show <name>")
+    .description("Show details of a skill.")
+    .option("--json", "JSON output")
+    .action((name: string, opts) => {
+      const parentOpts = program.opts();
+      const packRoots = allInstalledPackRoots();
+      const resolved = resolveSkillByName(name, packRoots);
+
+      if (!resolved) {
+        fail(
+          "skill_not_found",
+          `Skill '${name}' not found in any installed pack.`,
+          "Use `agenticflow skill list` to see available skills.",
+        );
+      }
+
+      const { skill, packName } = resolved;
+
+      const payload = {
+        schema: SKILL_SHOW_SCHEMA_VERSION,
+        pack: packName,
+        skill,
+      };
+
+      if (opts.json || parentOpts.json) {
+        printJson(payload);
+      } else {
+        console.log(`Skill: ${skill.name} (v${skill.version})`);
+        console.log(`Kind: ${skill.kind}`);
+        console.log(`Pack: ${packName}`);
+        if (skill.description) console.log(`Description: ${skill.description}`);
+        if (skill.node_type) console.log(`Node type: ${skill.node_type}`);
+        if (skill.connection_category) console.log(`Connection: ${skill.connection_category}`);
+        if (skill.inputs) {
+          console.log("Inputs:");
+          for (const [argName, input] of Object.entries(skill.inputs)) {
+            const req = input.required !== false ? " (required)" : "";
+            console.log(`  ${argName}${req}: ${input.description ?? input.field ?? argName}`);
+          }
+        }
+        if (skill.outputs) {
+          console.log("Outputs:");
+          for (const [outName, output] of Object.entries(skill.outputs)) {
+            console.log(`  ${outName}: ${output.field ?? outName}`);
+          }
+        }
+        if (skill.steps) {
+          console.log("Steps:");
+          for (const step of skill.steps) {
+            const target = step.local ? `local: ${step.script}` : `skill: ${step.skill}`;
+            console.log(`  ${step.id} → ${target}`);
+          }
+        }
+      }
+    });
+
+  // ── skill run ──────────────────────────────────────────────────
+  skillCmd
+    .command("run <name>")
+    .description("Run a skill by name.")
+    .option("--input <input>", "JSON input (inline or @file)")
+    .option("--workspace-id <id>", "Workspace ID override")
+    .option("--wait", "Poll workflow run to terminal state")
+    .option("--poll-interval-ms <ms>", "Polling interval when --wait is enabled", "2000")
+    .option("--timeout-ms <ms>", "Polling timeout when --wait is enabled", "300000")
+    .option("--json", "JSON output")
+    .action(async (name: string, opts) => {
+      const parentOpts = program.opts();
+
+      if (!resolveToken(parentOpts)) {
+        fail(
+          "missing_api_key",
+          "skill run requires authenticated access.",
+          "Set AGENTICFLOW_API_KEY or run `agenticflow login`.",
+        );
+      }
+
+      const packRoots = allInstalledPackRoots();
+      const resolved = resolveSkillByName(name, packRoots);
+
+      if (!resolved) {
+        fail(
+          "skill_not_found",
+          `Skill '${name}' not found in any installed pack.`,
+          "Use `agenticflow skill list` to see available skills.",
+        );
+      }
+
+      const { skill, packName } = resolved;
+      const client = buildClient(parentOpts);
+      const inputPayload = normalizeWorkflowInputPayload(
+        opts.input ? loadJsonPayload(opts.input as string) : {},
+      );
+
+      const pollIntervalMs = parseOptionalInteger(
+        opts.pollIntervalMs as string | undefined,
+        "--poll-interval-ms",
+        1,
+      ) ?? 2000;
+      const timeoutMs = parseOptionalInteger(
+        opts.timeoutMs as string | undefined,
+        "--timeout-ms",
+        1,
+      ) ?? 300000;
+
+      try {
+        if (skill.kind === "Skill") {
+          // Auto-resolve connection if skill declares a connection_category
+          let connectionId: string | undefined;
+          if (skill.connection_category) {
+            try {
+              const wsId = opts.workspaceId as string | undefined ?? resolveWorkspaceId(parentOpts.workspaceId);
+              const projId = resolveProjectId(parentOpts.projectId);
+              const connections = await client.connections.list({
+                workspaceId: wsId,
+                projectId: projId,
+                limit: 200,
+              }) as Record<string, unknown>[];
+              if (Array.isArray(connections)) {
+                const category = skill.connection_category.toLowerCase();
+                const match = connections.find((c) => {
+                  const cat = ((c["category"] as string) ?? "").toLowerCase();
+                  return cat === category || cat.includes(category) || category.includes(cat);
+                });
+                if (match) {
+                  connectionId = match["id"] as string;
+                }
+              }
+            } catch {
+              // connection lookup failed — proceed without, API will report the error
+            }
+          }
+
+          // Atomic skill: check for provisioned workflow first
+          const installManifest = readInstallManifest(packName);
+          const provisionedId = installManifest?.provisioned_skills[skill.name];
+
+          let workflowId: string;
+          if (provisionedId) {
+            workflowId = provisionedId;
+          } else {
+            // Create workflow on the fly
+            const workflowPayload = buildWorkflowFromSkill(
+              skill,
+              resolveProjectId(parentOpts.projectId),
+              connectionId,
+            );
+            const created = await client.workflows.create(
+              workflowPayload,
+              opts.workspaceId as string | undefined ?? resolveWorkspaceId(parentOpts.workspaceId),
+            ) as Record<string, unknown>;
+            const createdId = extractStringField(created, ["id", "workflow_id"]);
+            if (!createdId) {
+              fail("skill_run_create_failed", "Failed to create workflow for skill.", undefined, created);
+            }
+            workflowId = createdId;
+          }
+
+          // Run the workflow
+          const runPayload: Record<string, unknown> = {
+            workflow_id: workflowId,
+            input: inputPayload,
+          };
+          ensureLocalValidation("workflow.run", validateWorkflowRunPayload(runPayload));
+          const runResult = await client.workflows.run(runPayload);
+          const runId = extractStringField(runResult, ["id", "workflow_run_id", "run_id"]);
+
+          let waitResult: Record<string, unknown> | null = null;
+          if (opts.wait && runId) {
+            const startedAt = Date.now();
+            let attempts = 0;
+            while (true) {
+              await sleep(pollIntervalMs);
+              attempts += 1;
+              const statusResult = await client.workflows.getRun(runId) as Record<string, unknown>;
+              const status = extractRunStatus(statusResult);
+              if (status && isTerminalRunStatus(status)) {
+                waitResult = {
+                  final_status: status,
+                  attempts,
+                  elapsed_ms: Date.now() - startedAt,
+                  failed: isFailedRunStatus(status),
+                  timed_out: false,
+                  run: statusResult,
+                };
+                break;
+              }
+              if (Date.now() - startedAt > timeoutMs) {
+                waitResult = {
+                  final_status: status ?? "unknown",
+                  attempts,
+                  elapsed_ms: Date.now() - startedAt,
+                  failed: false,
+                  timed_out: true,
+                  run: statusResult,
+                };
+                break;
+              }
+            }
+          }
+
+          const payload: Record<string, unknown> = {
+            schema: SKILL_RUN_SCHEMA_VERSION,
+            skill: { name: skill.name, kind: skill.kind, pack: packName },
+            workflow_id: workflowId,
+            run: runResult,
+          };
+          if (waitResult) payload["wait"] = waitResult;
+
+          if (opts.json || parentOpts.json) {
+            printJson(payload);
+          } else {
+            console.log(`Skill '${skill.name}' run submitted.`);
+            if (runId) console.log(`  Run ID: ${runId}`);
+            if (waitResult) {
+              const wr = waitResult as Record<string, unknown>;
+              console.log(`  Status: ${wr["final_status"]}`);
+            }
+          }
+
+          if (waitResult) {
+            const wr = waitResult as Record<string, unknown>;
+            if (wr["timed_out"] === true || wr["failed"] === true) process.exitCode = 1;
+          }
+        } else {
+          // Composed skill: execute steps sequentially
+          const stepResults: Record<string, unknown> = {};
+
+          if (!skill.steps || skill.steps.length === 0) {
+            fail("skill_run_no_steps", `Composed skill '${skill.name}' has no steps.`);
+          }
+
+          for (const step of skill.steps!) {
+            if (step.local) {
+              // Local script execution
+              if (!step.script) {
+                fail("skill_run_local_no_script", `Step '${step.id}' is local but has no script.`);
+              }
+              // Resolve template variables in inputs
+              const resolvedInputs = resolveTemplateInputs(step.inputs ?? {}, inputPayload, stepResults);
+              const envVars: Record<string, string> = {};
+              for (const [k, v] of Object.entries(resolvedInputs)) {
+                envVars[k] = String(v ?? "");
+              }
+              const env = { ...process.env, ...envVars };
+
+              const { execSync } = await import("node:child_process");
+              const scriptPath = resolve(resolved!.path, "..", "..", step.script);
+              const output = execSync(`bash "${scriptPath}"`, {
+                env,
+                encoding: "utf-8",
+                timeout: timeoutMs,
+              });
+              stepResults[step.id] = { output: output.trim() };
+            } else if (step.skill) {
+              // Sub-skill invocation: find and run
+              const subResolved = resolveSkillByName(step.skill, packRoots);
+              if (!subResolved) {
+                fail("skill_run_sub_not_found", `Sub-skill '${step.skill}' not found for step '${step.id}'.`);
+              }
+
+              const resolvedInputs = resolveTemplateInputs(step.inputs ?? {}, inputPayload, stepResults);
+              const subSkill = subResolved.skill;
+
+              if (subSkill.kind !== "Skill") {
+                fail("skill_run_nested_compose", `Nested composed skills are not supported (step '${step.id}').`);
+              }
+
+              const subInstall = readInstallManifest(subResolved.packName);
+              const subProvisionedId = subInstall?.provisioned_skills[subSkill.name];
+
+              let subWorkflowId: string;
+              if (subProvisionedId) {
+                subWorkflowId = subProvisionedId;
+              } else {
+                const subPayload = buildWorkflowFromSkill(
+                  subSkill,
+                  resolveProjectId(parentOpts.projectId),
+                );
+                const created = await client.workflows.create(
+                  subPayload,
+                  opts.workspaceId as string | undefined ?? resolveWorkspaceId(parentOpts.workspaceId),
+                ) as Record<string, unknown>;
+                const createdId = extractStringField(created, ["id", "workflow_id"]);
+                if (!createdId) {
+                  fail("skill_run_sub_create_failed", `Failed to create workflow for sub-skill '${step.skill}'.`);
+                }
+                subWorkflowId = createdId;
+              }
+
+              const subRunPayload: Record<string, unknown> = {
+                workflow_id: subWorkflowId,
+                input: resolvedInputs,
+              };
+              const subRunResult = await client.workflows.run(subRunPayload);
+              const subRunId = extractStringField(subRunResult, ["id", "workflow_run_id", "run_id"]);
+
+              // Always wait for sub-step completion
+              if (subRunId) {
+                const startedAt = Date.now();
+                while (true) {
+                  await sleep(pollIntervalMs);
+                  const statusResult = await client.workflows.getRun(subRunId) as Record<string, unknown>;
+                  const status = extractRunStatus(statusResult);
+                  if (status && isTerminalRunStatus(status)) {
+                    if (isFailedRunStatus(status)) {
+                      fail("skill_run_step_failed", `Step '${step.id}' (skill: ${step.skill}) failed with status '${status}'.`, undefined, statusResult);
+                    }
+                    // Extract output from the run result
+                    stepResults[step.id] = extractStepOutput(statusResult);
+                    break;
+                  }
+                  if (Date.now() - startedAt > timeoutMs) {
+                    fail("skill_run_step_timeout", `Step '${step.id}' timed out.`);
+                  }
+                }
+              } else {
+                stepResults[step.id] = subRunResult;
+              }
+            }
+          }
+
+          const payload = {
+            schema: SKILL_RUN_SCHEMA_VERSION,
+            skill: { name: skill.name, kind: skill.kind, pack: packName },
+            steps: stepResults,
+          };
+
+          if (opts.json || parentOpts.json) {
+            printJson(payload);
+          } else {
+            console.log(`Composed skill '${skill.name}' completed.`);
+            console.log(`  Steps: ${Object.keys(stepResults).join(" → ")}`);
+          }
+        }
+      } catch (err) {
+        if ((err as { code?: string }).code === "commander.executeSubCommandError") throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("process.exit")) throw err;
+        fail("skill_run_failed", message);
+      }
+    });
+
+  // ═════════════════════════════════════════════════════════════════
   // workflow  (SDK-based)
   // ═════════════════════════════════════════════════════════════════
   const workflowCmd = program
@@ -1988,6 +3108,69 @@ export function createProgram(): Command {
         await run(() => client.workflows.getRun(opts.workflowRunId));
       } else {
         await run(() => client.workflows.getRunAnonymous(opts.workflowRunId));
+      }
+    });
+
+  workflowCmd
+    .command("exec")
+    .description("Execute a workflow directly from a local JSON file.")
+    .requiredOption("--file <path>", "Workflow JSON file path")
+    .option("--input <input>", "JSON input object (inline or @file)")
+    .option("--workspace-id <id>", "Workspace ID override")
+    .option("--skip-remote-validate", "Skip API validate call before create/run")
+    .option("--wait", "Poll until run reaches terminal status")
+    .option("--poll-interval-ms <ms>", "Polling interval when --wait is enabled", "2000")
+    .option("--timeout-ms <ms>", "Polling timeout when --wait is enabled", "300000")
+    .option("--json", "JSON output")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      if (!resolveToken(parentOpts)) {
+        fail(
+          "missing_api_key",
+          "workflow exec requires authenticated access to create workflow models.",
+          "Set AGENTICFLOW_API_KEY or run `agenticflow login`.",
+        );
+      }
+
+      const client = buildClient(parentOpts);
+      const pollIntervalMs = parseOptionalInteger(
+        opts.pollIntervalMs as string | undefined,
+        "--poll-interval-ms",
+        1,
+      ) ?? 2000;
+      const timeoutMs = parseOptionalInteger(
+        opts.timeoutMs as string | undefined,
+        "--timeout-ms",
+        1,
+      ) ?? 300000;
+      const inputPayload = opts.input ? loadJsonPayload(opts.input) : {};
+
+      try {
+        const payload = await executeWorkflowFromFile({
+          client,
+          workflowFile: opts.file as string,
+          workspaceId: opts.workspaceId as string | undefined,
+          inputPayload,
+          skipRemoteValidate: Boolean(opts.skipRemoteValidate),
+          wait: Boolean(opts.wait),
+          pollIntervalMs,
+          timeoutMs,
+        });
+
+        if (opts.json || parentOpts.json) {
+          printJson(payload);
+        } else {
+          console.log("Workflow execution complete.");
+          printJson(payload);
+        }
+
+        const wait = payload["wait"];
+        if (isRecordValue(wait)) {
+          if (wait["timed_out"] === true || wait["failed"] === true) process.exitCode = 1;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("workflow_exec_failed", message);
       }
     });
 
@@ -2615,6 +3798,76 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       await run(() => client.mcpClients.get(opts.clientId));
+    });
+
+  // triggers  (SDK-based)
+  // ═════════════════════════════════════════════════════════════════
+  const triggersCmd = program
+    .command("triggers")
+    .description("Workflow trigger management (webhooks).");
+
+  triggersCmd
+    .command("list")
+    .description("List triggers for a workflow.")
+    .requiredOption("--workflow-id <id>", "Workflow ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.triggers.list(opts.workflowId));
+    });
+
+  triggersCmd
+    .command("get")
+    .description("Get a specific trigger.")
+    .requiredOption("--workflow-id <id>", "Workflow ID")
+    .requiredOption("--trigger-id <id>", "Trigger ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.triggers.get(opts.workflowId, opts.triggerId));
+    });
+
+  triggersCmd
+    .command("create")
+    .description("Create a webhook trigger for a workflow.")
+    .requiredOption("--workflow-id <id>", "Workflow ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body);
+      await run(() => client.triggers.create(opts.workflowId, body));
+    });
+
+  triggersCmd
+    .command("update")
+    .description("Update a trigger.")
+    .requiredOption("--workflow-id <id>", "Workflow ID")
+    .requiredOption("--trigger-id <id>", "Trigger ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body);
+      await run(() => client.triggers.update(opts.workflowId, opts.triggerId, body));
+    });
+
+  triggersCmd
+    .command("delete")
+    .description("Delete a trigger.")
+    .requiredOption("--workflow-id <id>", "Workflow ID")
+    .requiredOption("--trigger-id <id>", "Trigger ID")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.triggers.delete(opts.workflowId, opts.triggerId));
+    });
+
+  triggersCmd
+    .command("invoke")
+    .description("Invoke a webhook trigger by path.")
+    .requiredOption("--path <path>", "Webhook trigger path")
+    .option("--body <body>", "JSON payload (inline or @file)")
+    .option("--method <method>", "HTTP method (default: POST)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = opts.body ? loadJsonPayload(opts.body) : undefined;
+      await run(() => client.triggers.invoke(opts.path, body, { method: opts.method }));
     });
 
   return program;
