@@ -25,6 +25,7 @@ describe("CLI Main (Commander integration)", () => {
       expect(commandNames).toContain("call");
       expect(commandNames).toContain("templates");
       expect(commandNames).toContain("workflow");
+      expect(commandNames).toContain("pack");
       expect(commandNames).toContain("agent");
       expect(commandNames).toContain("node-types");
       expect(commandNames).toContain("connections");
@@ -82,7 +83,20 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("update");
       expect(subNames).toContain("run");
       expect(subNames).toContain("run-status");
+      expect(subNames).toContain("exec");
       expect(subNames).toContain("validate");
+    });
+  });
+
+  describe("pack subcommands", () => {
+    it("has expected subcommands", () => {
+      const program = createProgram();
+      const packCmd = program.commands.find((c) => c.name() === "pack")!;
+      const subNames = packCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("init");
+      expect(subNames).toContain("validate");
+      expect(subNames).toContain("simulate");
+      expect(subNames).toContain("run");
     });
   });
 
