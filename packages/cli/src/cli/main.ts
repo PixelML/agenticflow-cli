@@ -756,16 +756,46 @@ function resolveTemplateValue(
   return hasMatch ? result : template;
 }
 
-function extractStepOutput(runResult: Record<string, unknown>): Record<string, unknown> {
-  // Try to extract output from various response shapes
-  if (isRecordValue(runResult["output"])) {
-    return runResult["output"] as Record<string, unknown>;
+function extractStepOutput(
+  runResult: Record<string, unknown>,
+  skillOutputs?: Record<string, { field?: string }>,
+): Record<string, unknown> {
+  // Extract actual AI output from workflow run result.
+  // The AgenticFlow API returns node output at state.nodes_state[0].output,
+  // NOT in the top-level output field (which contains un-interpolated template strings).
+  let raw: Record<string, unknown> | null = null;
+
+  const state = runResult["state"] as Record<string, unknown> | undefined;
+  if (state && Array.isArray(state["nodes_state"]) && state["nodes_state"].length > 0) {
+    const nodeState = state["nodes_state"][0] as Record<string, unknown>;
+    if (isRecordValue(nodeState["output"])) {
+      raw = nodeState["output"] as Record<string, unknown>;
+    }
   }
-  if (isRecordValue(runResult["result"])) {
-    return runResult["result"] as Record<string, unknown>;
+  if (!raw && isRecordValue(runResult["output"])) {
+    raw = runResult["output"] as Record<string, unknown>;
   }
-  // Return the whole result as output
-  return runResult;
+  if (!raw && isRecordValue(runResult["result"])) {
+    raw = runResult["result"] as Record<string, unknown>;
+  }
+  if (!raw) raw = runResult;
+
+  // Apply skill output mapping: map node field names → skill output names.
+  // e.g., skill declares outputs.audit_result.field = "generated_text"
+  //   → raw["content"] (or raw["generated_text"]) is exposed as result["audit_result"]
+  // This lets composed skills reference {{step.audit_result}} instead of {{step.content}}.
+  if (skillOutputs && Object.keys(skillOutputs).length > 0) {
+    const mapped: Record<string, unknown> = {};
+    for (const [outputName, outputDef] of Object.entries(skillOutputs)) {
+      const nodeField = outputDef.field ?? outputName;
+      // LLM nodes return "content" but skills map from "generated_text" — check both
+      mapped[outputName] = raw[nodeField] ?? raw["content"] ?? raw[outputName];
+    }
+    // Also include raw fields so both {{step.content}} and {{step.audit_result}} work
+    return { ...raw, ...mapped };
+  }
+
+  return raw;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2818,8 +2848,8 @@ export function createProgram(): Command {
                     if (isFailedRunStatus(status)) {
                       fail("skill_run_step_failed", `Step '${step.id}' (skill: ${step.skill}) failed with status '${status}'.`, undefined, statusResult);
                     }
-                    // Extract output from the run result
-                    stepResults[step.id] = extractStepOutput(statusResult);
+                    // Extract output from the run result, applying skill output mapping
+                    stepResults[step.id] = extractStepOutput(statusResult, subSkill.outputs);
                     break;
                   }
                   if (Date.now() - startedAt > timeoutMs) {
