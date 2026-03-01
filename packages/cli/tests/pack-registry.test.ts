@@ -70,6 +70,27 @@ describe("parsePackSource", () => {
     expect(source.kind).toBe("local");
     expect(source.name).toBe("my-pack");
   });
+
+  it("parses github: monorepo subpath", () => {
+    const source = parsePackSource("github:PixelML/skills/packs/security-pack");
+    expect(source.kind).toBe("github");
+    expect(source.location).toBe("PixelML/skills");
+    expect(source.subpath).toBe("packs/security-pack");
+    expect(source.name).toBe("security-pack");
+  });
+
+  it("parses https github monorepo subpath", () => {
+    const source = parsePackSource("https://github.com/PixelML/skills/packs/writing-pack");
+    expect(source.kind).toBe("github");
+    expect(source.location).toBe("PixelML/skills");
+    expect(source.subpath).toBe("packs/writing-pack");
+    expect(source.name).toBe("writing-pack");
+  });
+
+  it("sets no subpath for plain owner/repo", () => {
+    const source = parsePackSource("github:pixelml/content-pack");
+    expect(source.subpath).toBeUndefined();
+  });
 });
 
 describe("pack install/list/uninstall (local, skipProvision)", () => {

@@ -9,6 +9,7 @@
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   writeFileSync,
   readdirSync,
@@ -16,7 +17,7 @@ import {
   statSync,
 } from "node:fs";
 import { resolve, join, basename } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
 import type { AgenticFlowClient } from "@pixelml/agenticflow-sdk";
@@ -40,6 +41,8 @@ export interface PackSource {
   location: string;
   /** Derived pack name (last path segment) */
   name: string;
+  /** Subdirectory within the repo (e.g. "packs/security-pack" for github:org/repo/packs/security-pack) */
+  subpath?: string;
 }
 
 export interface PackInstallManifest {
@@ -109,29 +112,35 @@ export function packsDir(): string {
  *   /absolute/local/path
  *   ./relative/path
  */
+/**
+ * Parse a GitHub slug that may contain a subpath beyond owner/repo.
+ * e.g. "PixelML/skills/packs/security-pack" → repo "PixelML/skills", subpath "packs/security-pack"
+ */
+function parseGitHubSlug(slug: string, raw: string): PackSource {
+  const parts = slug.split("/");
+  const repo = parts.slice(0, 2).join("/");
+  const subpath = parts.length > 2 ? parts.slice(2).join("/") : undefined;
+  const name = parts[parts.length - 1];
+  return {
+    kind: "github",
+    raw,
+    location: repo,
+    name,
+    subpath,
+  };
+}
+
 export function parsePackSource(raw: string): PackSource {
   if (raw.startsWith("github:")) {
     const slug = raw.slice("github:".length).replace(/\.git$/, "");
-    const name = slug.split("/").pop() ?? slug;
-    return {
-      kind: "github",
-      raw,
-      location: slug,
-      name,
-    };
+    return parseGitHubSlug(slug, raw);
   }
 
   // Check GitHub HTTPS URLs before generic git URLs so
   // "https://github.com/org/repo.git" is classified as "github"
   if (raw.startsWith("https://github.com/")) {
     const slug = raw.replace("https://github.com/", "").replace(/\.git$/, "").replace(/\/$/, "");
-    const name = slug.split("/").pop() ?? slug;
-    return {
-      kind: "github",
-      raw,
-      location: slug,
-      name,
-    };
+    return parseGitHubSlug(slug, raw);
   }
 
   if (raw.startsWith("git@") || (raw.startsWith("https://") && raw.includes(".git"))) {
@@ -184,7 +193,24 @@ export async function installPack(
   }
 
   // Clone or copy
-  if (source.kind === "github") {
+  if (source.kind === "github" && source.subpath) {
+    // Monorepo: clone to temp dir, then copy the subpath
+    const tmpClone = mkdtempSync(join(tmpdir(), "agenticflow-pack-clone-"));
+    try {
+      const url = `https://github.com/${source.location}.git`;
+      execSync(`git clone --depth 1 ${url} ${tmpClone}`, { stdio: "pipe" });
+      const subDir = resolve(tmpClone, source.subpath);
+      if (!existsSync(subDir)) {
+        throw new Error(
+          `Subpath '${source.subpath}' not found in ${source.location}. Check the path and try again.`,
+        );
+      }
+      mkdirSync(targetDir, { recursive: true });
+      execSync(`cp -R "${subDir}/." "${targetDir}/"`, { stdio: "pipe" });
+    } finally {
+      rmSync(tmpClone, { recursive: true, force: true });
+    }
+  } else if (source.kind === "github") {
     const url = `https://github.com/${source.location}.git`;
     execSync(`git clone --depth 1 ${url} ${targetDir}`, {
       stdio: "pipe",
