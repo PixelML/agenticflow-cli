@@ -7,3 +7,6 @@ export { AgentThreadsResource } from "./agent-threads.js";
 export { KnowledgeResource } from "./knowledge.js";
 export { DatabaseResource } from "./database.js";
 export { McpClientsResource } from "./mcp-clients.js";
+export { TriggersResource } from "./triggers.js";
+export { PaperclipResource } from "./paperclip.js";
+export type { PaperclipConfig, PaperclipCompany, PaperclipAgent } from "./paperclip.js";

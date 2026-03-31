@@ -35,7 +35,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@pixelml/agenticflow-sdk": "*",
     "commander": "^13.1.0",
-    "@pixelml/agenticflow-sdk": "*"
+    "yaml": "^2.8.3"
   }
 }

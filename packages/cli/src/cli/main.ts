@@ -16,8 +16,15 @@ import {
   createClient,
   DEFAULT_BASE_URL,
   AGENTICFLOW_API_KEY,
+  PaperclipResource,
   type AgenticFlowClient,
 } from "@pixelml/agenticflow-sdk";
+import { startBridge, type BridgeConfig } from "./paperclip-bridge.js";
+import { startGateway, type GatewayConfig } from "./gateway/server.js";
+import { PaperclipConnector } from "./gateway/connectors/paperclip.js";
+import { LinearConnector } from "./gateway/connectors/linear.js";
+import { WebhookConnector } from "./gateway/connectors/webhook.js";
+import type { ChannelConnector } from "./gateway/connector.js";
 import {
   OperationRegistry,
   defaultSpecPath,
@@ -111,6 +118,39 @@ const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 
 function printJson(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
+}
+
+/** Apply --fields filter to output. Reduces context window for AI agents. */
+function applyFieldsFilter(data: unknown, fields?: string): unknown {
+  if (!fields) return data;
+  const keys = fields.split(",").map((f) => f.trim());
+  if (Array.isArray(data)) {
+    return data.map((item) => pickFields(item, keys));
+  }
+  if (data && typeof data === "object") {
+    return pickFields(data as Record<string, unknown>, keys);
+  }
+  return data;
+}
+
+function pickFields(obj: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (key in obj) result[key] = obj[key];
+  }
+  return result;
+}
+
+/** Input hardening — reject hallucinated/adversarial input. */
+function hardenInput(value: string, label: string): string {
+  if (/\.\.[\\/]/.test(value)) {
+    fail("input_rejected", `Path traversal detected in ${label}: ${value}`);
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)) {
+    fail("input_rejected", `Control characters detected in ${label}`);
+  }
+  return value;
 }
 
 function isJsonFlagEnabled(): boolean {
@@ -819,7 +859,10 @@ export function createProgram(): Command {
 
   program
     .name("agenticflow")
-    .description("AgenticFlow CLI for agent-native API operations.")
+    .description(
+      "AgenticFlow CLI for agent-native API operations.\n\n" +
+      "  AI agents: run `af context` for usage guide, `af schema` for payload schemas, `af discover --json` for full capability index.",
+    )
     .version(pkgVersion)
     .option("--api-key <key>", "API key for authentication")
     .option("--workspace-id <id>", "Default workspace ID")
@@ -835,6 +878,180 @@ export function createProgram(): Command {
   }
 
   program.exitOverride();
+
+  // ═════════════════════════════════════════════════════════════════
+  // schema  (runtime introspection for AI agents)
+  // ═════════════════════════════════════════════════════════════════
+  const SCHEMAS: Record<string, unknown> = {
+    agent: {
+      resource: "agent",
+      create: {
+        required: ["name", "tools", "project_id"],
+        optional: {
+          description: "string | null",
+          visibility: "private | public (default: private)",
+          model: "string (e.g. agenticflow/gpt-4o-mini)",
+          system_prompt: "string",
+          recursion_limit: "number (10-500, default: 25)",
+          agent_type: "standard | autonomous (default: standard)",
+        },
+        example: { name: "My Agent", tools: [], project_id: "YOUR_PROJECT_ID" },
+      },
+      stream: {
+        required: ["messages"],
+        optional: { id: "string (thread UUID for conversation continuity)" },
+        messages_item: { required: ["content"], optional: { role: "user (default)" } },
+        example: { messages: [{ content: "Hello", role: "user" }] },
+      },
+      fields: ["id", "name", "description", "model", "visibility", "system_prompt", "tools", "mcp_clients", "plugins", "sub_agents", "agent_type", "recursion_limit", "created_at", "updated_at"],
+    },
+    workflow: {
+      resource: "workflow",
+      create: {
+        required: ["name", "project_id", "nodes", "output_mapping", "input_schema"],
+        optional: { description: "string (max 400 chars)" },
+        nodes_item: { required: ["name", "node_type_name", "input_config"] },
+        example: { name: "My Workflow", project_id: "ID", nodes: [{ name: "step1", node_type_name: "llm_node", input_config: {} }], output_mapping: {}, input_schema: { type: "object", properties: {} } },
+      },
+      run: {
+        required: ["workflow_id"],
+        optional: { input: "object" },
+      },
+      fields: ["id", "name", "description", "status", "nodes", "input_schema", "output_mapping", "created_at", "updated_at"],
+    },
+    "paperclip.company": {
+      resource: "paperclip.company",
+      create: { required: ["name"], optional: { description: "string", budgetMonthlyCents: "number (cents, default: 0)" } },
+      fields: ["id", "name", "description", "status", "issuePrefix", "budgetMonthlyCents", "spentMonthlyCents"],
+    },
+    "paperclip.agent": {
+      resource: "paperclip.agent",
+      create: {
+        required: ["name"],
+        optional: {
+          role: "ceo | cto | cmo | cfo | engineer | designer | pm | qa | devops | researcher | general",
+          title: "string", capabilities: "string",
+          adapterType: "process | http | claude_local | codex_local | cursor | ...",
+          adapterConfig: "object", budgetMonthlyCents: "number", reportsTo: "UUID",
+          metadata: "object",
+        },
+      },
+      fields: ["id", "companyId", "name", "role", "status", "capabilities", "adapterType", "adapterConfig", "budgetMonthlyCents"],
+    },
+    "paperclip.goal": {
+      resource: "paperclip.goal",
+      create: {
+        required: ["title"],
+        optional: { description: "string", level: "company | team | agent | task", status: "planned | active | achieved | cancelled", ownerAgentId: "UUID", parentId: "UUID" },
+      },
+      fields: ["id", "title", "description", "level", "status", "ownerAgentId"],
+    },
+    "paperclip.issue": {
+      resource: "paperclip.issue",
+      create: {
+        required: ["title"],
+        optional: { description: "string", status: "backlog | todo | in_progress | in_review | done | blocked | cancelled", priority: "critical | high | medium | low", assigneeAgentId: "UUID", goalId: "UUID" },
+      },
+      fields: ["id", "identifier", "title", "description", "status", "priority", "assigneeAgentId", "goalId"],
+    },
+    "gateway.webhook": {
+      resource: "gateway.webhook",
+      request: { required: ["agent_id", "message"], optional: { task_id: "string", thread_id: "UUID", callback_url: "URL" } },
+      endpoint: "POST /webhook/webhook",
+    },
+  };
+
+  // ═════════════════════════════════════════════════════════════════
+  // context  (AI agent bootstrap — the single entry point)
+  // ═════════════════════════════════════════════════════════════════
+  program
+    .command("context")
+    .description("Print AI agent usage guide. Run this first if you are an AI agent operating the CLI.")
+    .action(() => {
+      if (isJsonFlagEnabled()) {
+        printResult({
+          schema: "agenticflow.context.v1",
+          invariants: [
+            "ALWAYS use --json for machine-readable output",
+            "ALWAYS run `af doctor --json --strict` at session start",
+            "ALWAYS use `af schema <resource>` before constructing payloads",
+            "ALWAYS use --dry-run before mutating operations",
+            "ALWAYS use --fields on list commands to save context window",
+            "NEVER hard-code IDs — fetch dynamically via list/get",
+          ],
+          bootstrap_sequence: [
+            "af context --json",
+            "af doctor --json --strict",
+            "af schema --json",
+            "af agent list --fields id,name,model --json",
+          ],
+          discovery: {
+            schemas: "af schema --json",
+            capabilities: "af discover --json",
+            playbooks: "af playbook --list --json",
+            gateway_channels: "af gateway channels --json",
+          },
+          resources: Object.keys(SCHEMAS),
+          env_vars: {
+            AGENTICFLOW_API_KEY: "API key (required)",
+            AGENTICFLOW_WORKSPACE_ID: "Default workspace",
+            AGENTICFLOW_PROJECT_ID: "Default project",
+            PAPERCLIP_URL: "Paperclip instance URL",
+            LINEAR_API_KEY: "Linear API key",
+          },
+          global_flags: {
+            "--json": "Machine-readable JSON output",
+            "--fields <f>": "Comma-separated fields to return (saves tokens)",
+            "--dry-run": "Validate without executing (on create commands)",
+          },
+        });
+      } else {
+        console.log("AgenticFlow CLI — AI Agent Context");
+        console.log("");
+        console.log("If you are an AI agent, run: af context --json");
+        console.log("");
+        console.log("Quick start:");
+        console.log("  1. af doctor --json --strict     # verify auth");
+        console.log("  2. af schema agent               # learn payload format");
+        console.log("  3. af agent list --fields id,name # list agents (minimal)");
+        console.log("  4. af agent stream --agent-id <id> --body '{\"messages\":[{\"content\":\"Hi\"}]}'");
+        console.log("");
+        console.log("Discovery:");
+        console.log("  af schema                        # all resource schemas");
+        console.log("  af discover --json               # full capability index");
+        console.log("  af playbook --list               # guided playbooks");
+        console.log("  af gateway channels              # available integrations");
+        console.log("");
+        console.log("Key flags for AI agents:");
+        console.log("  --json       Machine-readable output (always use this)");
+        console.log("  --fields     Filter output fields (saves context window)");
+        console.log("  --dry-run    Validate without executing (safety rail)");
+      }
+    });
+
+  program
+    .command("schema [resource]")
+    .description("Show resource schema for payload construction. AI agents: use this to discover fields before building payloads.")
+    .action((resource) => {
+      if (!resource) {
+        printResult({
+          schema: "agenticflow.schema.index.v1",
+          available: Object.keys(SCHEMAS),
+          usage: "af schema <resource> --json",
+          hint: "Use 'af schema agent' to see agent create/stream payload schemas.",
+        });
+        return;
+      }
+      const schema = SCHEMAS[resource];
+      if (!schema) {
+        fail(
+          "schema_not_found",
+          `Unknown resource: ${resource}`,
+          `Available: ${Object.keys(SCHEMAS).join(", ")}`,
+        );
+      }
+      printResult(schema);
+    });
 
   // ═════════════════════════════════════════════════════════════════
   // doctor
@@ -856,11 +1073,20 @@ export function createProgram(): Command {
           version: program.version(),
         },
         entrypoints: {
-          first_touch: "agenticflow playbook first-touch",
-          discover_playbooks: "agenticflow playbook --list --json",
-          strict_preflight: "agenticflow doctor --json --strict",
-          seed_templates: "agenticflow templates sync --json",
-          duplicate_from_template: "agenticflow templates duplicate workflow --template-id <id> --json",
+          ai_context: "af context --json",
+          schemas: "af schema --json",
+          first_touch: "af playbook first-touch",
+          quickstart: "af playbook quickstart",
+          discover_playbooks: "af playbook --list --json",
+          strict_preflight: "af doctor --json --strict",
+          gateway_channels: "af gateway channels --json",
+          seed_templates: "af templates sync --json",
+          duplicate_from_template: "af templates duplicate workflow --template-id <id> --json",
+        },
+        ai_agent_flags: {
+          "--json": "Machine-readable output (always use)",
+          "--fields <f>": "Filter output fields (save context window)",
+          "--dry-run": "Validate without executing (on create commands)",
         },
         contracts: {
           error_schema: ERROR_SCHEMA_VERSION,
@@ -2898,15 +3124,17 @@ export function createProgram(): Command {
     .option("--search <query>", "Search query")
     .option("--limit <n>", "Limit results")
     .option("--offset <n>", "Offset")
+    .option("--fields <fields>", "Comma-separated fields to return (e.g. id,name,status)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.workflows.list({
+      const data = await client.workflows.list({
         workspaceId: opts.workspaceId,
         projectId: opts.projectId,
         searchQuery: opts.search,
         limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
         offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
-      }));
+      });
+      printResult(applyFieldsFilter(data, opts.fields as string | undefined));
     });
 
   workflowCmd
@@ -2928,10 +3156,16 @@ export function createProgram(): Command {
     .description("Create a new workflow.")
     .option("--workspace-id <id>", "Workspace ID")
     .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .option("--dry-run", "Validate payload without creating")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      hardenInput(JSON.stringify(body), "workflow create body");
       ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(body));
+      if (opts.dryRun) {
+        printResult({ schema: "agenticflow.dry_run.v1", valid: true, target: "workflow.create", payload: body });
+        return;
+      }
       await run(() => client.workflows.create(body, opts.workspaceId));
     });
 
@@ -3279,14 +3513,16 @@ export function createProgram(): Command {
     .option("--search <query>", "Search query")
     .option("--limit <n>", "Limit results")
     .option("--offset <n>", "Offset")
+    .option("--fields <fields>", "Comma-separated fields to return (e.g. id,name,model)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.agents.list({
+      const data = await client.agents.list({
         projectId: opts.projectId,
         searchQuery: opts.search,
         limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
         offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
-      }));
+      });
+      printResult(applyFieldsFilter(data, opts.fields as string | undefined));
     });
 
   agentCmd
@@ -3307,10 +3543,16 @@ export function createProgram(): Command {
     .command("create")
     .description("Create an agent.")
     .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .option("--dry-run", "Validate payload without creating")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
+      hardenInput(JSON.stringify(body), "agent create body");
       ensureLocalValidation("agent.create", validateAgentCreatePayload(body));
+      if (opts.dryRun) {
+        printResult({ schema: "agenticflow.dry_run.v1", valid: true, target: "agent.create", payload: body });
+        return;
+      }
       await run(() => client.agents.create(body));
     });
 
@@ -3898,6 +4140,619 @@ export function createProgram(): Command {
       const client = buildClient(program.opts());
       const body = opts.body ? loadJsonPayload(opts.body) : undefined;
       await run(() => client.triggers.invoke(opts.path, body, { method: opts.method }));
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // paperclip  (full control plane)
+  // ═════════════════════════════════════════════════════════════════
+  const PAPERCLIP_URL_ENV = "PAPERCLIP_URL";
+  const PAPERCLIP_COMPANY_ID_ENV = "PAPERCLIP_COMPANY_ID";
+
+  function resolvePaperclipUrl(explicit?: string): string {
+    if (explicit) return explicit;
+    const fromEnv = process.env[PAPERCLIP_URL_ENV];
+    if (fromEnv) return fromEnv;
+    return "http://localhost:3100";
+  }
+
+  const PAPERCLIP_CONTEXT_FILE = join(homedir(), ".agenticflow", "paperclip_context.json");
+
+  function savePaperclipCompanyId(companyId: string): void {
+    const dir = dirname(PAPERCLIP_CONTEXT_FILE);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(PAPERCLIP_CONTEXT_FILE, JSON.stringify({ company_id: companyId }), "utf-8");
+  }
+
+  function loadPaperclipCompanyId(): string | undefined {
+    try {
+      const raw = readFileSync(PAPERCLIP_CONTEXT_FILE, "utf-8");
+      return (JSON.parse(raw) as { company_id?: string }).company_id ?? undefined;
+    } catch { return undefined; }
+  }
+
+  function resolvePaperclipCompanyId(explicit?: string): string | undefined {
+    if (explicit) return explicit;
+    const fromEnv = process.env[PAPERCLIP_COMPANY_ID_ENV];
+    if (fromEnv) return fromEnv;
+    return loadPaperclipCompanyId();
+  }
+
+  /** Build a PaperclipResource and auto-resolve company ID when only one exists. */
+  async function pcContext(opts: { paperclipUrl?: string; companyId?: string }): Promise<{
+    pc: InstanceType<typeof PaperclipResource>;
+    companyId: string;
+  }> {
+    const paperclipUrl = resolvePaperclipUrl(opts.paperclipUrl);
+    const pc = new PaperclipResource({ baseUrl: paperclipUrl });
+    let companyId = resolvePaperclipCompanyId(opts.companyId);
+    if (!companyId) {
+      const companies = await pc.listCompanies();
+      if (companies.length === 1) {
+        companyId = companies[0].id;
+      } else if (companies.length > 1) {
+        fail(
+          "company_ambiguous",
+          `Found ${companies.length} Paperclip companies. Specify --company-id.`,
+          `Available: ${companies.map((c) => `${c.name} (${c.id})`).join(", ")}`,
+        );
+      } else {
+        fail("no_company", "No Paperclip companies found. Use `af paperclip company create`.");
+      }
+    }
+    return { pc, companyId: companyId! };
+  }
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  function validateUuid(value: string, label: string): void {
+    if (!UUID_RE.test(value)) {
+      fail("invalid_id", `Invalid ${label}: "${value}" — expected a UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)`);
+    }
+  }
+
+  async function pcRun(fn: () => Promise<unknown>): Promise<void> {
+    try {
+      const result = await fn();
+      printResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      fail("paperclip_error", message);
+    }
+  }
+
+  const pcOpts = {
+    url: (cmd: Command) => cmd.option("--paperclip-url <url>", `Paperclip URL (env: ${PAPERCLIP_URL_ENV})`),
+    company: (cmd: Command) => cmd.option("--company-id <id>", `Company ID (env: ${PAPERCLIP_COMPANY_ID_ENV})`),
+    both: (cmd: Command) => { pcOpts.url(cmd); pcOpts.company(cmd); return cmd; },
+  };
+
+  const paperclipCmd = program
+    .command("paperclip")
+    .description("Publish and control AgenticFlow agents on a Paperclip instance.");
+
+  // ─── deploy ─────────────────────────────────────────────────────
+  const pcDeploy = paperclipCmd
+    .command("deploy")
+    .description("Deploy an AgenticFlow agent to Paperclip as an HTTP-adapter agent.");
+  pcOpts.both(pcDeploy);
+  pcDeploy
+    .requiredOption("--agent-id <id>", "AgenticFlow agent ID to deploy")
+    .option("--company-name <name>", "Create a new Paperclip company with this name")
+    .option("--role <role>", "Paperclip agent role", "general")
+    .option("--budget <cents>", "Monthly budget in cents", "0")
+    .option("--reports-to <id>", "Paperclip agent ID this agent reports to")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const paperclipUrl = resolvePaperclipUrl(opts.paperclipUrl);
+      const pc = new PaperclipResource({ baseUrl: paperclipUrl });
+
+      const healthy = await pc.healthCheck();
+      if (!healthy) {
+        fail("paperclip_unreachable", `Cannot reach Paperclip at ${paperclipUrl}`, "Check PAPERCLIP_URL or --paperclip-url");
+      }
+
+      let afAgent: Record<string, unknown>;
+      try {
+        afAgent = (await client.agents.get(opts.agentId)) as Record<string, unknown>;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("agent_fetch_failed", `Failed to fetch AgenticFlow agent ${opts.agentId}: ${message}`);
+      }
+
+      let companyId = resolvePaperclipCompanyId(opts.companyId);
+      if (!companyId && opts.companyName) {
+        const company = await pc.createCompany({ name: opts.companyName });
+        companyId = company.id;
+        savePaperclipCompanyId(companyId);
+        if (!isJsonFlagEnabled()) {
+          console.error(`Created Paperclip company "${company.name}" (${company.id}) — saved as default`);
+        }
+      }
+      if (!companyId) {
+        const companies = await pc.listCompanies();
+        if (companies.length === 1) companyId = companies[0].id;
+        else if (companies.length > 1) {
+          fail("company_ambiguous", `Found ${companies.length} companies. Specify --company-id or --company-name.`,
+            `Available: ${companies.map((c) => `${c.name} (${c.id})`).join(", ")}`);
+        } else {
+          fail("no_company", "No Paperclip companies found. Use --company-name to create one.");
+        }
+      }
+
+      const afBaseUrl = (client.sdk as unknown as { baseUrl: string }).baseUrl ?? DEFAULT_BASE_URL;
+      const afApiKey = resolveToken(program.opts());
+      const agentId = opts.agentId as string;
+      const streamUrl = `${afBaseUrl}/v1/agents/${agentId}/stream`;
+
+      const afName = (afAgent.name as string) ?? "AgenticFlow Agent";
+      const afDescription = (afAgent.description as string) ?? "";
+      const afModel = (afAgent.model as string) ?? "";
+      const afSystemPrompt = (afAgent.system_prompt as string) ?? "";
+      const afTools = afAgent.tools ?? [];
+      const afAgentType = (afAgent.agent_type as string) ?? "standard";
+      const roleMap: Record<string, string> = { standard: "general", autonomous: "engineer" };
+
+      const metadata: Record<string, unknown> = {
+        af_agent_id: agentId,
+        af_model: afModel,
+        af_agent_type: afAgentType,
+        af_stream_url: streamUrl,
+        deployed_at: new Date().toISOString(),
+      };
+      if (afSystemPrompt) metadata.af_system_prompt_preview = afSystemPrompt.slice(0, 200);
+      if (Array.isArray(afTools) && afTools.length > 0) metadata.af_tool_count = afTools.length;
+
+      const pcAgent = await pc.createAgent(companyId!, {
+        name: afName,
+        role: opts.role ?? roleMap[afAgentType] ?? "general",
+        title: afDescription ? afDescription.slice(0, 100) : afName,
+        capabilities: afDescription || `AgenticFlow agent (${afModel})`,
+        adapterType: "http",
+        adapterConfig: {
+          url: streamUrl,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(afApiKey ? { Authorization: `Bearer ${afApiKey}` } : {}),
+          },
+          payloadTemplate: {
+            messages: [{ content: "Execute your assigned task.", role: "user" }],
+          },
+        },
+        budgetMonthlyCents: Number.parseInt(opts.budget, 10) || 0,
+        reportsTo: opts.reportsTo,
+        metadata,
+      });
+
+      printResult({
+        schema: "agenticflow.paperclip.deploy.v1",
+        status: "deployed",
+        agenticflow: { agent_id: agentId, name: afName, model: afModel, stream_url: streamUrl },
+        paperclip: {
+          agent_id: pcAgent.id,
+          company_id: companyId,
+          name: pcAgent.name,
+          role: pcAgent.role,
+          status: pcAgent.status,
+          adapter_type: pcAgent.adapterType,
+        },
+      });
+    });
+
+  // ─── company ────────────────────────────────────────────────────
+  const pcCompanyCmd = paperclipCmd.command("company").description("Manage Paperclip companies.");
+
+  pcOpts.url(pcCompanyCmd.command("list").description("List companies."))
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.listCompanies());
+    });
+
+  pcOpts.url(pcCompanyCmd.command("get").description("Get company details."))
+    .requiredOption("--company-id <id>", "Company ID")
+    .action(async (opts: Record<string, string>) => {
+      validateUuid(opts.companyId, "company-id");
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.getCompany(opts.companyId));
+    });
+
+  pcOpts.url(pcCompanyCmd.command("create").description("Create a new company."))
+    .requiredOption("--name <name>", "Company name")
+    .option("--description <desc>", "Description")
+    .option("--budget <cents>", "Monthly budget in cents", "0")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      const company = await pc.createCompany({
+        name: opts.name,
+        description: opts.description,
+        budgetMonthlyCents: Number.parseInt(opts.budget, 10) || 0,
+      });
+      savePaperclipCompanyId(company.id);
+      if (!isJsonFlagEnabled()) {
+        console.error(`Saved company context: ${company.id} (use --company-id to override)`);
+      }
+      printResult(company);
+    });
+
+  pcOpts.url(pcCompanyCmd.command("update").description("Update a company."))
+    .requiredOption("--company-id <id>", "Company ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.updateCompany(opts.companyId, loadJsonPayload(opts.body) as Record<string, unknown>));
+    });
+
+  pcOpts.url(pcCompanyCmd.command("archive").description("Archive a company."))
+    .requiredOption("--company-id <id>", "Company ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.archiveCompany(opts.companyId));
+    });
+
+  pcOpts.url(pcCompanyCmd.command("delete").description("Delete a company."))
+    .requiredOption("--company-id <id>", "Company ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.deleteCompany(opts.companyId));
+    });
+
+  // ─── agent ──────────────────────────────────────────────────────
+  const pcAgentCmd = paperclipCmd.command("agent").description("Manage agents on Paperclip.");
+
+  pcOpts.both(pcAgentCmd.command("list").description("List agents in a company."))
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      await pcRun(() => pc.listAgents(companyId));
+    });
+
+  pcOpts.url(pcAgentCmd.command("get").description("Get agent details."))
+    .requiredOption("--id <id>", "Agent ID")
+    .action(async (opts: Record<string, string>) => {
+      validateUuid(opts.id, "agent id");
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.getAgent(opts.id));
+    });
+
+  pcOpts.url(pcAgentCmd.command("update").description("Update agent config."))
+    .requiredOption("--id <id>", "Agent ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.updateAgent(opts.id, loadJsonPayload(opts.body) as Record<string, unknown>));
+    });
+
+  pcOpts.url(pcAgentCmd.command("pause").description("Pause an agent."))
+    .requiredOption("--id <id>", "Agent ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.pauseAgent(opts.id));
+    });
+
+  pcOpts.url(pcAgentCmd.command("resume").description("Resume a paused agent."))
+    .requiredOption("--id <id>", "Agent ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.resumeAgent(opts.id));
+    });
+
+  pcOpts.url(pcAgentCmd.command("terminate").description("Terminate an agent (irreversible)."))
+    .requiredOption("--id <id>", "Agent ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.terminateAgent(opts.id));
+    });
+
+  pcOpts.url(pcAgentCmd.command("wakeup").description("Trigger agent heartbeat."))
+    .requiredOption("--id <id>", "Agent ID")
+    .option("--reason <reason>", "Reason for wakeup")
+    .option("--fresh-session", "Force a fresh session")
+    .action(async (opts: Record<string, string> & { freshSession?: boolean }) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.wakeupAgent(opts.id, {
+        source: "on_demand",
+        triggerDetail: "manual",
+        reason: opts.reason,
+        forceFreshSession: opts.freshSession ?? false,
+      }));
+    });
+
+  pcOpts.url(pcAgentCmd.command("delete").description("Delete an agent."))
+    .requiredOption("--id <id>", "Agent ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.deleteAgent(opts.id));
+    });
+
+  // ─── goal ───────────────────────────────────────────────────────
+  const pcGoalCmd = paperclipCmd.command("goal").description("Manage company goals.");
+
+  pcOpts.both(pcGoalCmd.command("list").description("List goals."))
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      await pcRun(() => pc.listGoals(companyId));
+    });
+
+  pcOpts.url(pcGoalCmd.command("get").description("Get goal details."))
+    .requiredOption("--id <id>", "Goal ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.getGoal(opts.id));
+    });
+
+  pcOpts.both(pcGoalCmd.command("create").description("Create a goal."))
+    .requiredOption("--title <title>", "Goal title")
+    .option("--description <desc>", "Goal description")
+    .option("--level <level>", "Goal level (company/team/agent/task)", "company")
+    .option("--status <status>", "Goal status (planned/active/achieved/cancelled)", "active")
+    .option("--owner-agent-id <id>", "Owning agent ID")
+    .option("--parent-id <id>", "Parent goal ID")
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      await pcRun(() => pc.createGoal(companyId, {
+        title: opts.title,
+        description: opts.description,
+        level: opts.level,
+        status: opts.status,
+        ownerAgentId: opts.ownerAgentId,
+        parentId: opts.parentId,
+      }));
+    });
+
+  pcOpts.url(pcGoalCmd.command("update").description("Update a goal."))
+    .requiredOption("--id <id>", "Goal ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.updateGoal(opts.id, loadJsonPayload(opts.body) as Record<string, unknown>));
+    });
+
+  pcOpts.url(pcGoalCmd.command("delete").description("Delete a goal."))
+    .requiredOption("--id <id>", "Goal ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.deleteGoal(opts.id));
+    });
+
+  // ─── issue ──────────────────────────────────────────────────────
+  const pcIssueCmd = paperclipCmd.command("issue").description("Manage tasks/issues.");
+
+  pcOpts.both(pcIssueCmd.command("list").description("List issues."))
+    .option("--status <status>", "Filter by status")
+    .option("--assignee <id>", "Filter by assignee agent ID")
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      const parts: string[] = [];
+      if (opts.status) parts.push(`status=${opts.status}`);
+      if (opts.assignee) parts.push(`assigneeAgentId=${opts.assignee}`);
+      await pcRun(() => pc.listIssues(companyId, parts.join("&") || undefined));
+    });
+
+  pcOpts.url(pcIssueCmd.command("get").description("Get issue details."))
+    .requiredOption("--id <id>", "Issue ID or identifier (e.g. AGE-1)")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.getIssue(opts.id));
+    });
+
+  pcOpts.both(pcIssueCmd.command("create").description("Create an issue/task."))
+    .requiredOption("--title <title>", "Issue title")
+    .option("--description <desc>", "Description")
+    .option("--status <status>", "Status (backlog/todo/in_progress/done)", "todo")
+    .option("--priority <priority>", "Priority (critical/high/medium/low)", "medium")
+    .option("--assignee <id>", "Assign to agent ID")
+    .option("--goal-id <id>", "Link to goal")
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      await pcRun(() => pc.createIssue(companyId, {
+        title: opts.title,
+        description: opts.description,
+        status: opts.status,
+        priority: opts.priority,
+        assigneeAgentId: opts.assignee,
+        goalId: opts.goalId,
+      }));
+    });
+
+  pcOpts.url(pcIssueCmd.command("update").description("Update an issue."))
+    .requiredOption("--id <id>", "Issue ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.updateIssue(opts.id, loadJsonPayload(opts.body) as Record<string, unknown>));
+    });
+
+  pcOpts.url(pcIssueCmd.command("assign").description("Assign an issue to an agent."))
+    .requiredOption("--id <id>", "Issue ID")
+    .requiredOption("--agent <agent-id>", "Agent ID to assign")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.updateIssue(opts.id, { assigneeAgentId: opts.agent }));
+    });
+
+  pcOpts.url(pcIssueCmd.command("comment").description("Add a comment to an issue."))
+    .requiredOption("--id <id>", "Issue ID")
+    .requiredOption("--body <body>", "Comment body text")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.addComment(opts.id, { body: opts.body }));
+    });
+
+  pcOpts.url(pcIssueCmd.command("comments").description("List comments on an issue."))
+    .requiredOption("--id <id>", "Issue ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.listComments(opts.id));
+    });
+
+  pcOpts.url(pcIssueCmd.command("delete").description("Delete an issue."))
+    .requiredOption("--id <id>", "Issue ID")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.deleteIssue(opts.id));
+    });
+
+  // ─── approval ───────────────────────────────────────────────────
+  const pcApprovalCmd = paperclipCmd.command("approval").description("Manage approvals.");
+
+  pcOpts.both(pcApprovalCmd.command("list").description("List pending approvals."))
+    .option("--status <status>", "Filter by status (pending/approved/rejected)")
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      await pcRun(() => pc.listApprovals(companyId, opts.status));
+    });
+
+  pcOpts.url(pcApprovalCmd.command("approve").description("Approve a request."))
+    .requiredOption("--id <id>", "Approval ID")
+    .option("--note <note>", "Decision note")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.approveApproval(opts.id, opts.note));
+    });
+
+  pcOpts.url(pcApprovalCmd.command("reject").description("Reject a request."))
+    .requiredOption("--id <id>", "Approval ID")
+    .option("--note <note>", "Decision note")
+    .action(async (opts: Record<string, string>) => {
+      const pc = new PaperclipResource({ baseUrl: resolvePaperclipUrl(opts.paperclipUrl) });
+      await pcRun(() => pc.rejectApproval(opts.id, opts.note));
+    });
+
+  // ─── dashboard ──────────────────────────────────────────────────
+  pcOpts.both(paperclipCmd.command("dashboard").description("Company dashboard overview."))
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      await pcRun(() => pc.getDashboard(companyId));
+    });
+
+  // ─── serve (bridge webhook) ─────────────────────────────────────
+  pcOpts.url(paperclipCmd
+    .command("serve")
+    .description("Start the bridge webhook that translates Paperclip heartbeats → AgenticFlow streams."))
+    .option("--port <port>", "Bridge server port", "4100")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: Record<string, unknown>) => {
+      const afApiKey = resolveToken(program.opts());
+      const afBaseUrl = (program.opts().baseUrl as string) ?? DEFAULT_BASE_URL;
+      const bridgeConfig: BridgeConfig = {
+        port: Number.parseInt(opts.port as string, 10),
+        paperclipUrl: resolvePaperclipUrl(opts.paperclipUrl as string),
+        afBaseUrl,
+        afApiKey: afApiKey ?? "",
+        verbose: Boolean(opts.verbose),
+      };
+      startBridge(bridgeConfig);
+    });
+
+  // ─── connect (update agents to use bridge) ──────────────────────
+  pcOpts.both(paperclipCmd
+    .command("connect")
+    .description("Update all AF-deployed agents to route through the bridge webhook."))
+    .option("--bridge-url <url>", "Bridge URL", "http://localhost:4100/heartbeat")
+    .action(async (opts: Record<string, string>) => {
+      const { pc, companyId } = await pcContext(opts);
+      const agents = await pc.listAgents(companyId);
+      const afAgents = agents.filter(
+        (a) => a.adapterType === "http" && a.metadata?.af_agent_id,
+      );
+
+      if (afAgents.length === 0) {
+        fail("no_af_agents", "No AgenticFlow-deployed agents found in this company.");
+      }
+
+      const results: Array<{ id: string; name: string; status: string }> = [];
+      for (const agent of afAgents) {
+        try {
+          const currentConfig = agent.adapterConfig as Record<string, unknown>;
+          await pc.updateAgent(agent.id, {
+            adapterConfig: {
+              ...currentConfig,
+              url: opts.bridgeUrl,
+            },
+            replaceAdapterConfig: true,
+          });
+          results.push({ id: agent.id, name: agent.name, status: "connected" });
+        } catch (err) {
+          results.push({
+            id: agent.id,
+            name: agent.name,
+            status: `error: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+
+      printResult({
+        schema: "agenticflow.paperclip.connect.v1",
+        bridge_url: opts.bridgeUrl,
+        agents: results,
+      });
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // gateway  (multi-channel webhook gateway)
+  // ═════════════════════════════════════════════════════════════════
+  const gatewayCmd = program
+    .command("gateway")
+    .description("Webhook gateway — receive tasks from any platform and route to AgenticFlow agents.");
+
+  gatewayCmd
+    .command("serve")
+    .description("Start the gateway server. Point external webhooks at /webhook/<channel>.")
+    .option("--port <port>", "Server port", "4100")
+    .option("--channels <list>", "Comma-separated channels to enable (paperclip,linear,webhook)", "paperclip,webhook")
+    .option("--paperclip-url <url>", `Paperclip URL (env: ${PAPERCLIP_URL_ENV})`)
+    .option("--linear-api-key <key>", "Linear API key (env: LINEAR_API_KEY)")
+    .option("--linear-agent-map <json>", 'Team→Agent mapping JSON, e.g. \'{"ENG":"af-uuid"}\'')
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts: Record<string, unknown>) => {
+      const afApiKey = resolveToken(program.opts());
+      const afBaseUrl = DEFAULT_BASE_URL;
+      const gwConfig: GatewayConfig = {
+        port: Number.parseInt(opts.port as string, 10),
+        afBaseUrl,
+        afApiKey: afApiKey ?? "",
+        verbose: Boolean(opts.verbose),
+      };
+
+      const channelNames = (opts.channels as string).split(",").map((s) => s.trim());
+      const connectors: ChannelConnector[] = [];
+
+      for (const ch of channelNames) {
+        if (ch === "paperclip") {
+          connectors.push(new PaperclipConnector({
+            paperclipUrl: resolvePaperclipUrl(opts.paperclipUrl as string | undefined),
+          }));
+        } else if (ch === "linear") {
+          const apiKey = (opts.linearApiKey as string) ?? process.env["LINEAR_API_KEY"];
+          const mapJson = (opts.linearAgentMap as string) ?? process.env["LINEAR_AGENT_MAP"];
+          if (!apiKey) {
+            fail("missing_config", "Linear channel requires --linear-api-key or LINEAR_API_KEY env var.");
+          }
+          if (!mapJson) {
+            fail("missing_config", "Linear channel requires --linear-agent-map or LINEAR_AGENT_MAP env var.");
+          }
+          connectors.push(new LinearConnector({
+            linearApiKey: apiKey,
+            agentMapping: JSON.parse(mapJson) as Record<string, string>,
+          }));
+        } else if (ch === "webhook") {
+          connectors.push(new WebhookConnector());
+        } else {
+          fail("unknown_channel", `Unknown channel: ${ch}. Available: paperclip, linear, webhook`);
+        }
+      }
+
+      startGateway(gwConfig, connectors);
+    });
+
+  gatewayCmd
+    .command("channels")
+    .description("List available channel connectors.")
+    .action(() => {
+      printResult([
+        { name: "paperclip", display: "Paperclip", description: "Paperclip heartbeat webhooks", config: "PAPERCLIP_URL" },
+        { name: "linear", display: "Linear", description: "Linear issue/comment webhooks", config: "LINEAR_API_KEY, LINEAR_AGENT_MAP" },
+        { name: "webhook", display: "Generic Webhook", description: "Any JSON POST with {agent_id, message}", config: "(none)" },
+      ]);
     });
 
   return program;
