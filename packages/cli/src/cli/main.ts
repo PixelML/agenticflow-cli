@@ -122,11 +122,17 @@ function printJson(data: unknown): void {
 /** Apply --fields filter to output. Reduces context window for AI agents. */
 function applyFieldsFilter(data: unknown, fields?: string): unknown {
   if (!fields) return data;
-  const keys = fields.split(",").map((f) => f.trim());
-  if (Array.isArray(data)) {
-    return data.map((item) => pickFields(item, keys));
+  const keys = fields.split(",").map((f) => f.trim()).filter(Boolean);
+  if (Array.isArray(data) && data.length > 0) {
+    const sample = data[0] as Record<string, unknown>;
+    const available = Object.keys(sample);
+    const invalid = keys.filter((k) => !available.includes(k));
+    if (invalid.length > 0 && invalid.length === keys.length) {
+      console.error(`Warning: No matching fields. Available: ${available.slice(0, 15).join(", ")}`);
+    }
+    return data.map((item) => pickFields(item as Record<string, unknown>, keys));
   }
-  if (data && typeof data === "object") {
+  if (data && typeof data === "object" && !Array.isArray(data)) {
     return pickFields(data as Record<string, unknown>, keys);
   }
   return data;
@@ -3587,14 +3593,23 @@ export function createProgram(): Command {
       const body = loadJsonPayload(opts.body);
       ensureLocalValidation("agent.stream", validateAgentStreamPayload(body));
       const streamBody = body as import("@pixelml/agenticflow-sdk").StreamRequest;
-      if (token) {
-        const stream = await client.agents.stream(opts.agentId, streamBody);
+      try {
+        const stream = token
+          ? await client.agents.stream(opts.agentId, streamBody)
+          : await client.agents.streamAnonymous(opts.agentId, streamBody);
         const text = await stream.text();
-        await run(() => Promise.resolve(text));
-      } else {
-        const stream = await client.agents.streamAnonymous(opts.agentId, streamBody);
-        const text = await stream.text();
-        await run(() => Promise.resolve(text));
+        if (isJsonFlagEnabled()) {
+          printResult({
+            schema: "agenticflow.agent.stream.v1",
+            agent_id: opts.agentId,
+            response: text,
+          });
+        } else {
+          console.log(text);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("stream_failed", message);
       }
     });
 
