@@ -19,7 +19,6 @@ import {
   PaperclipResource,
   type AgenticFlowClient,
 } from "@pixelml/agenticflow-sdk";
-import { startBridge, type BridgeConfig } from "./paperclip-bridge.js";
 import { startGateway, type GatewayConfig } from "./gateway/server.js";
 import { PaperclipConnector } from "./gateway/connectors/paperclip.js";
 import { LinearConnector } from "./gateway/connectors/linear.js";
@@ -4624,23 +4623,24 @@ export function createProgram(): Command {
       await pcRun(() => pc.getDashboard(companyId));
     });
 
-  // ─── serve (bridge webhook) ─────────────────────────────────────
+  // ─── serve (alias for gateway serve --channels paperclip) ────────
   pcOpts.url(paperclipCmd
     .command("serve")
-    .description("Start the bridge webhook that translates Paperclip heartbeats → AgenticFlow streams."))
-    .option("--port <port>", "Bridge server port", "4100")
+    .description("Start the gateway with Paperclip channel. Alias for `af gateway serve --channels paperclip`."))
+    .option("--port <port>", "Server port", "4100")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: Record<string, unknown>) => {
       const afApiKey = resolveToken(program.opts());
-      const afBaseUrl = (program.opts().baseUrl as string) ?? DEFAULT_BASE_URL;
-      const bridgeConfig: BridgeConfig = {
+      const gwConfig: GatewayConfig = {
         port: Number.parseInt(opts.port as string, 10),
-        paperclipUrl: resolvePaperclipUrl(opts.paperclipUrl as string),
-        afBaseUrl,
+        afBaseUrl: DEFAULT_BASE_URL,
         afApiKey: afApiKey ?? "",
         verbose: Boolean(opts.verbose),
       };
-      startBridge(bridgeConfig);
+      const connector = new PaperclipConnector({
+        paperclipUrl: resolvePaperclipUrl(opts.paperclipUrl as string | undefined),
+      });
+      startGateway(gwConfig, [connector]);
     });
 
   // ─── connect (update agents to use bridge) ──────────────────────

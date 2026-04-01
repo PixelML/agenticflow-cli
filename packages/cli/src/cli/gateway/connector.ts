@@ -1,59 +1,51 @@
 /**
- * Channel connector interface — inspired by hermes-agent's platform adapters.
+ * Channel connector interface.
  *
- * A "channel" is any external platform that can send tasks to AgenticFlow
- * agents: Paperclip, Linear, GitHub, Slack, webhooks, etc.
+ * A connector is a THIN protocol translator between an external platform
+ * and the AgenticFlow runtime API. It does NOT contain business logic —
+ * the runtime handles agent execution, thread persistence, RAG, tools, etc.
  *
- * Each connector normalizes platform-specific events into a standard task
- * and posts results back to the originating channel.
+ * Connector responsibilities:
+ *   1. Parse platform webhook → { afAgentId, message, threadId }
+ *   2. Post agent response back to platform
+ *
+ * Runtime responsibilities (NOT the connector's job):
+ *   - Agent execution, streaming, tool calling
+ *   - Thread/session persistence
+ *   - Knowledge retrieval, sub-agents
+ *   - Credit management, permissions
  */
 
-/** Platform-agnostic task representation (the "MessageEvent" equivalent). */
-export interface NormalizedTask {
-  /** Stable UUID for AF thread continuity across messages. */
-  threadId: string;
-  /** Human-readable identifier, e.g. "PIX-1", "LIN-123". */
-  taskIdentifier: string;
-  /** The full message to send to the AF agent. */
-  message: string;
+/** What the connector extracts from a platform webhook. */
+export interface InboundTask {
   /** AF agent ID to invoke. */
   afAgentId: string;
-  /** Override AF stream URL. */
+  /** Message to send to the agent. */
+  message: string;
+  /** Thread ID for conversation continuity (reuse across calls for same task). */
+  threadId?: string;
+  /** Override AF stream URL (if stored in platform metadata). */
   afStreamUrl?: string;
-  /** Source channel info (for routing responses back). */
-  source: {
-    channel: string;
-    chatId: string;
-    userId?: string;
-    userName?: string;
-  };
-  /** Opaque platform data the connector needs in postResult. */
-  platformContext: Record<string, unknown>;
+  /** Human-readable task label for logging. */
+  label: string;
+  /** Opaque data the connector needs to post results back. */
+  replyContext: Record<string, unknown>;
 }
 
-/** Channel connector for receiving tasks from an external platform. */
+/** Channel connector — thin protocol translator. */
 export interface ChannelConnector {
-  /** Short slug: paperclip, linear, github, webhook, etc. */
+  /** Short slug: paperclip, linear, github, webhook */
   readonly name: string;
-  /** Human-readable display name. */
-  readonly displayName: string;
 
   /**
-   * Parse incoming webhook into a NormalizedTask.
-   * Return null to skip (irrelevant event type).
-   * Throw to reject with 400.
+   * Parse incoming webhook → InboundTask.
+   * Return null to acknowledge but skip.
    */
   parseWebhook(
     headers: Record<string, string | string[] | undefined>,
     body: string,
-  ): Promise<NormalizedTask | null>;
+  ): Promise<InboundTask | null>;
 
-  /** Post agent response back to the originating channel. */
-  postResult(task: NormalizedTask, resultText: string): Promise<void>;
-
-  /** Optional: check if the channel is reachable. */
-  healthCheck?(): Promise<boolean>;
+  /** Post agent response back to originating platform. */
+  postResult(task: InboundTask, resultText: string): Promise<void>;
 }
-
-/** Registry of available channel connectors. */
-export type ConnectorRegistry = Map<string, ChannelConnector>;

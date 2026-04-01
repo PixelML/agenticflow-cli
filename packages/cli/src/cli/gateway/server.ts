@@ -1,13 +1,13 @@
 /**
- * Generic webhook gateway server.
+ * Thin webhook gateway.
  *
- * Routes incoming webhooks to connectors, invokes AF agents,
- * and posts results back. Can run as a long-lived server or
- * export a serverless-compatible request handler.
+ * Routes incoming platform webhooks to the AgenticFlow runtime API.
+ * The runtime does ALL the work — execution, threads, tools, RAG.
+ * This server is just a protocol translator.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { ChannelConnector, NormalizedTask } from "./connector.js";
+import type { ChannelConnector, InboundTask } from "./connector.js";
 
 export interface GatewayConfig {
   port: number;
@@ -20,16 +20,8 @@ function log(config: GatewayConfig, ...args: unknown[]) {
   if (config.verbose) console.error("[gateway]", ...args);
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks).toString("utf-8");
-}
-
 /** Extract text from Vercel AI SDK v1 stream format. */
-export function extractStreamText(raw: string): string {
+function extractStreamText(raw: string): string {
   const parts: string[] = [];
   for (const line of raw.split("\n")) {
     if (line.startsWith("0:")) {
@@ -42,26 +34,21 @@ export function extractStreamText(raw: string): string {
   return parts.join("");
 }
 
-/** Call the AF stream endpoint and return the extracted text. */
-export async function invokeAfAgent(
+/**
+ * Call the AgenticFlow runtime streaming endpoint.
+ * The runtime handles: execution, tools, RAG, thread persistence — everything.
+ */
+async function callRuntime(
   config: GatewayConfig,
-  task: NormalizedTask,
-): Promise<string> {
-  const streamUrl =
-    task.afStreamUrl ??
-    `${config.afBaseUrl.replace(/\/+$/, "")}/v1/agents/${task.afAgentId}/stream`;
+  task: InboundTask,
+): Promise<{ text: string; threadId: string }> {
+  const baseUrl = config.afBaseUrl.replace(/\/+$/, "");
+  const streamUrl = task.afStreamUrl ?? `${baseUrl}/v1/agents/${task.afAgentId}/stream`;
 
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const threadId = uuidRegex.test(task.threadId)
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const threadId = task.threadId && uuidRe.test(task.threadId)
     ? task.threadId
     : crypto.randomUUID();
-
-  const body = {
-    id: threadId,
-    messages: [{ role: "user", content: task.message }],
-  };
-
-  log(config, `Invoking AF agent ${task.afAgentId} via ${streamUrl}`);
 
   const resp = await fetch(streamUrl, {
     method: "POST",
@@ -69,21 +56,24 @@ export async function invokeAfAgent(
       "Content-Type": "application/json",
       ...(config.afApiKey ? { Authorization: `Bearer ${config.afApiKey}` } : {}),
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      id: threadId,
+      messages: [{ role: "user", content: task.message }],
+    }),
   });
 
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    throw new Error(`AF stream failed (${resp.status}): ${errText.slice(0, 500)}`);
+    const err = await resp.text().catch(() => "");
+    throw new Error(`Runtime ${resp.status}: ${err.slice(0, 300)}`);
   }
 
   const raw = await resp.text();
-  return extractStreamText(raw);
+  return { text: extractStreamText(raw), threadId };
 }
 
 /**
- * Create a Web-standard request handler for serverless deployment.
- * Works with Vercel, Cloudflare Workers, AWS Lambda (via adapter), etc.
+ * Create a Web-standard Request → Response handler.
+ * Deploy to: Vercel, Lambda, Cloudflare Workers, or `af gateway serve`.
  */
 export function createGatewayHandler(
   config: GatewayConfig,
@@ -91,33 +81,32 @@ export function createGatewayHandler(
 ): (req: Request) => Promise<Response> {
   const connectorMap = new Map(connectors.map((c) => [c.name, c]));
 
+  const json = (data: unknown, status = 200) =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url, "http://localhost");
-    const json = (data: unknown, status = 200) =>
-      new Response(JSON.stringify(data), {
-        status,
-        headers: { "Content-Type": "application/json" },
-      });
 
-    // Health check
+    // Health
     if (req.method === "GET" && url.pathname === "/health") {
       return json({
         status: "ok",
         gateway: "agenticflow",
         connectors: connectors.map((c) => c.name),
+        runtime: config.afBaseUrl,
       });
     }
 
     // Webhook dispatch
     const match = url.pathname.match(/^\/webhook\/([a-z0-9_-]+)/);
     if (req.method === "POST" && match) {
-      const connectorName = match[1];
-      const connector = connectorMap.get(connectorName);
+      const name = match[1];
+      const connector = connectorMap.get(name);
       if (!connector) {
-        return json(
-          { error: `Unknown connector: ${connectorName}`, available: [...connectorMap.keys()] },
-          404,
-        );
+        return json({ error: `Unknown channel: ${name}`, available: [...connectorMap.keys()] }, 404);
       }
 
       try {
@@ -125,45 +114,51 @@ export function createGatewayHandler(
         const headers: Record<string, string | string[] | undefined> = {};
         req.headers.forEach((v, k) => { headers[k] = v; });
 
+        // 1. Connector parses platform webhook (thin)
         const task = await connector.parseWebhook(headers, body);
-        if (!task) {
-          return json({ status: "skipped", connector: connectorName });
+        if (!task) return json({ status: "skipped", channel: name });
+
+        log(config, `[${name}] ${task.label} → agent ${task.afAgentId}`);
+
+        // 2. Runtime does all the work
+        const result = await callRuntime(config, task);
+
+        log(config, `[${name}] Response: ${result.text.length} chars`);
+
+        // 3. Connector posts result back to platform (thin)
+        if (result.text) {
+          await connector.postResult(task, result.text);
         }
-
-        log(config, `[${connectorName}] Task: ${task.taskIdentifier} → agent ${task.afAgentId}`);
-
-        const resultText = await invokeAfAgent(config, task);
-
-        log(config, `[${connectorName}] Agent responded (${resultText.length} chars)`);
-
-        await connector.postResult(task, resultText);
-
-        log(config, `[${connectorName}] Result posted back`);
 
         return json({
           status: "completed",
-          connector: connectorName,
-          task: task.taskIdentifier,
+          channel: name,
+          task: task.label,
           af_agent_id: task.afAgentId,
-          thread_id: task.threadId,
-          response_length: resultText.length,
-          response: resultText,
+          thread_id: result.threadId,
+          response_length: result.text.length,
+          response: result.text,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log(config, `[${connectorName}] Error: ${msg}`);
+        log(config, `[${name}] Error: ${msg}`);
         return json({ error: msg }, 502);
       }
     }
 
-    return json(
-      { error: "Not found. Use POST /webhook/<connector> or GET /health" },
-      404,
-    );
+    return json({ error: "POST /webhook/<channel> or GET /health" }, 404);
   };
 }
 
-/** Start a long-running HTTP server wrapping the gateway handler. */
+async function readBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+/** Start a long-running gateway server. */
 export function startGateway(
   config: GatewayConfig,
   connectors: ChannelConnector[],
@@ -185,30 +180,23 @@ export function startGateway(
     });
 
     const webResp = await handler(webReq);
-    const respBody = await webResp.text();
-
     res.writeHead(webResp.status, { "Content-Type": "application/json" });
-    res.end(respBody);
+    res.end(await webResp.text());
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
       console.error(`Error: Port ${config.port} is already in use.`);
-      console.error(`Hint: Another gateway may be running. Try --port ${config.port + 1} or kill the existing process.`);
-      console.error(`  Check: lsof -ti:${config.port}`);
+      console.error(`Hint: Try --port ${config.port + 1} or kill the existing process.`);
       process.exit(1);
     }
     throw err;
   });
 
   server.listen(config.port, () => {
-    console.log(`AgenticFlow Gateway running on http://localhost:${config.port}`);
-    console.log(`  Connectors: ${connectors.map((c) => c.name).join(", ")}`);
-    console.log(`  AF API: ${config.afBaseUrl}`);
-    console.log("");
-    for (const c of connectors) {
-      console.log(`  ${c.name}: POST http://localhost:${config.port}/webhook/${c.name}`);
-    }
-    console.log(`  Health: GET http://localhost:${config.port}/health`);
+    console.log(`AgenticFlow Gateway on http://localhost:${config.port}`);
+    console.log(`  Runtime: ${config.afBaseUrl}`);
+    connectors.forEach((c) => console.log(`  ${c.name}: POST /webhook/${c.name}`));
+    console.log(`  Health: GET /health`);
   });
 }

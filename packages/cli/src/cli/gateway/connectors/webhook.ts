@@ -1,60 +1,46 @@
 /**
- * Generic webhook channel connector.
+ * Generic webhook channel connector (thin).
  *
- * Accepts any JSON POST with a simple contract:
- *   { agent_id, message, task_id?, callback_url? }
- *
- * This is the fallback for any platform that doesn't have
- * a dedicated connector — just POST a JSON payload.
+ * Accepts: { agent_id, message, thread_id?, task_id?, callback_url? }
+ * The simplest way to send a task to an AF agent from any system.
  */
 
-import type { ChannelConnector, NormalizedTask } from "../connector.js";
+import type { ChannelConnector, InboundTask } from "../connector.js";
 
 export class WebhookConnector implements ChannelConnector {
   readonly name = "webhook";
-  readonly displayName = "Generic Webhook";
 
   async parseWebhook(
     _headers: Record<string, string | string[] | undefined>,
     body: string,
-  ): Promise<NormalizedTask | null> {
-    const payload = JSON.parse(body) as {
+  ): Promise<InboundTask | null> {
+    const p = JSON.parse(body) as {
       agent_id: string;
       message: string;
       task_id?: string;
       thread_id?: string;
       callback_url?: string;
-      metadata?: Record<string, unknown>;
     };
 
-    if (!payload.agent_id || !payload.message) {
-      throw new Error("Required fields: agent_id, message");
-    }
+    if (!p.agent_id || !p.message) throw new Error("Required: agent_id, message");
 
     return {
-      threadId: payload.thread_id ?? crypto.randomUUID(),
-      taskIdentifier: payload.task_id ?? "webhook",
-      message: payload.message,
-      afAgentId: payload.agent_id,
-      source: {
-        channel: "webhook",
-        chatId: "direct",
-      },
-      platformContext: {
-        callbackUrl: payload.callback_url,
-        metadata: payload.metadata,
-      },
+      afAgentId: p.agent_id,
+      message: p.message,
+      threadId: p.thread_id,
+      label: p.task_id ?? "webhook",
+      replyContext: { callbackUrl: p.callback_url },
     };
   }
 
-  async postResult(task: NormalizedTask, resultText: string): Promise<void> {
-    const callbackUrl = task.platformContext.callbackUrl as string | undefined;
-    if (callbackUrl) {
-      await fetch(callbackUrl, {
+  async postResult(task: InboundTask, resultText: string): Promise<void> {
+    const url = task.replyContext.callbackUrl as string | undefined;
+    if (url) {
+      await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task_id: task.taskIdentifier,
+          task: task.label,
           agent_id: task.afAgentId,
           thread_id: task.threadId,
           result: resultText,

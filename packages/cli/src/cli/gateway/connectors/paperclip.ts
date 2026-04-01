@@ -1,12 +1,12 @@
 /**
- * Paperclip channel connector.
+ * Paperclip channel connector (thin).
  *
- * Receives heartbeat POSTs from Paperclip, fetches issue context,
- * builds agent message, and posts results back as comments.
+ * Translates Paperclip heartbeat POST → AF runtime call.
+ * All execution logic lives in the AF runtime.
  */
 
 import { PaperclipResource } from "@pixelml/agenticflow-sdk";
-import type { ChannelConnector, NormalizedTask } from "../connector.js";
+import type { ChannelConnector, InboundTask } from "../connector.js";
 
 export interface PaperclipConnectorConfig {
   paperclipUrl: string;
@@ -14,127 +14,69 @@ export interface PaperclipConnectorConfig {
 
 export class PaperclipConnector implements ChannelConnector {
   readonly name = "paperclip";
-  readonly displayName = "Paperclip";
   private pc: PaperclipResource;
 
-  constructor(private config: PaperclipConnectorConfig) {
+  constructor(config: PaperclipConnectorConfig) {
     this.pc = new PaperclipResource({ baseUrl: config.paperclipUrl });
-  }
-
-  async healthCheck(): Promise<boolean> {
-    return this.pc.healthCheck();
   }
 
   async parseWebhook(
     _headers: Record<string, string | string[] | undefined>,
     body: string,
-  ): Promise<NormalizedTask | null> {
+  ): Promise<InboundTask | null> {
     const payload = JSON.parse(body) as {
       agentId: string;
       runId: string;
-      context: {
-        issueId?: string;
-        taskId?: string;
-        taskKey?: string;
-        wakeReason?: string;
-        wakeSource?: string;
-        [key: string]: unknown;
-      };
+      context: Record<string, unknown>;
     };
 
-    if (!payload.agentId) throw new Error("Missing agentId in payload");
+    if (!payload.agentId) throw new Error("Missing agentId");
 
-    // Fetch agent to get AF metadata
+    // Look up AF agent ID from Paperclip agent metadata
     const pcAgent = await this.pc.getAgent(payload.agentId);
-    const metadata = (pcAgent.metadata ?? {}) as Record<string, unknown>;
-    const afAgentId = metadata.af_agent_id as string | undefined;
-    const afStreamUrl = metadata.af_stream_url as string | undefined;
+    const meta = (pcAgent.metadata ?? {}) as Record<string, unknown>;
+    const afAgentId = meta.af_agent_id as string | undefined;
+    const afStreamUrl = meta.af_stream_url as string | undefined;
 
     if (!afAgentId) {
-      throw new Error(
-        `Agent ${payload.agentId} has no af_agent_id in metadata. Deploy via "af paperclip deploy" first.`,
-      );
+      throw new Error(`Agent ${payload.agentId} has no af_agent_id. Deploy via "af paperclip deploy" first.`);
     }
 
-    // Build message with task context
+    // Build message from Paperclip context — just pass the task info
     const ctx = payload.context;
-    const issueId = ctx.issueId ?? ctx.taskId;
-    const message = await this.buildMessage(ctx, issueId, metadata);
-
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-    return {
-      threadId: uuidRegex.test(payload.runId) ? payload.runId : crypto.randomUUID(),
-      taskIdentifier: (ctx.taskKey as string) ?? issueId ?? "unknown",
-      message,
-      afAgentId,
-      afStreamUrl,
-      source: {
-        channel: "paperclip",
-        chatId: pcAgent.companyId,
-        userId: payload.agentId,
-        userName: pcAgent.name,
-      },
-      platformContext: { issueId, agentId: payload.agentId, companyId: pcAgent.companyId },
-    };
-  }
-
-  async postResult(task: NormalizedTask, resultText: string): Promise<void> {
-    const issueId = task.platformContext.issueId as string | undefined;
-    if (issueId && resultText) {
-      await this.pc.addComment(issueId, {
-        body: `**Agent Response:**\n\n${resultText}`,
-      });
-    }
-  }
-
-  private async buildMessage(
-    ctx: Record<string, unknown>,
-    issueId: string | undefined,
-    metadata: Record<string, unknown>,
-  ): Promise<string> {
+    const issueId = (ctx.issueId ?? ctx.taskId) as string | undefined;
     const parts: string[] = [];
-    parts.push("You are working as an agent in a Paperclip company. A heartbeat has been triggered.\n");
 
-    if (ctx.wakeReason) parts.push(`## Wake Reason\n${ctx.wakeReason}\n`);
+    if (ctx.wakeReason) parts.push(`Reason: ${ctx.wakeReason}`);
 
     if (issueId) {
       try {
         const issue = await this.pc.getIssue(issueId);
-        const iss = issue as unknown as Record<string, unknown>;
-        parts.push(`## Task: ${iss.identifier ?? ""} — ${iss.title}`);
-        parts.push(`- **Priority:** ${iss.priority ?? "medium"}`);
-        parts.push(`- **Status:** ${iss.status ?? "unknown"}`);
-        if (iss.description) parts.push(`\n### Description\n${iss.description}`);
-
-        try {
-          const comments = await this.pc.listComments(issueId);
-          if (Array.isArray(comments) && comments.length > 0) {
-            parts.push("\n### Recent Comments");
-            for (const c of comments.slice(0, 5)) {
-              const cm = c as unknown as Record<string, unknown>;
-              const author = cm.authorAgentId ? `Agent` : "Board";
-              parts.push(`- **${author}:** ${cm.body}`);
-            }
-          }
-        } catch { /* non-critical */ }
-
-        if (iss.goalId) {
-          try {
-            const goal = await this.pc.getGoal(iss.goalId as string);
-            const g = goal as unknown as Record<string, unknown>;
-            parts.push(`\n### Goal\n**${g.title}** (${g.status})`);
-          } catch { /* non-critical */ }
-        }
-      } catch (err) {
-        parts.push(`\n(Could not fetch issue: ${err instanceof Error ? err.message : String(err)})\n`);
-      }
-    } else {
-      parts.push("## No specific task assigned\nCheck your inbox for available work.\n");
+        const i = issue as unknown as Record<string, unknown>;
+        parts.push(`Task: ${i.identifier ?? ""} — ${i.title}`);
+        parts.push(`Priority: ${i.priority ?? "medium"} | Status: ${i.status ?? "unknown"}`);
+        if (i.description) parts.push(`Description: ${i.description}`);
+      } catch { /* issue fetch failed — continue without */ }
     }
 
-    if (metadata.af_model) parts.push(`\n## Config\n- Model: ${metadata.af_model}`);
-    parts.push("\n## Instructions\nComplete this task. Provide a clear summary of your work.");
-    return parts.join("\n");
+    if (parts.length === 0) parts.push("Heartbeat triggered. Check your inbox for work.");
+
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    return {
+      afAgentId,
+      afStreamUrl,
+      message: parts.join("\n"),
+      threadId: uuidRe.test(payload.runId) ? payload.runId : undefined,
+      label: (ctx.taskKey as string) ?? issueId ?? "heartbeat",
+      replyContext: { issueId, agentId: payload.agentId },
+    };
+  }
+
+  async postResult(task: InboundTask, resultText: string): Promise<void> {
+    const issueId = task.replyContext.issueId as string | undefined;
+    if (issueId && resultText) {
+      await this.pc.addComment(issueId, { body: `**Agent Response:**\n\n${resultText}` });
+    }
   }
 }
