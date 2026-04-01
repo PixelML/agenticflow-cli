@@ -1,9 +1,15 @@
 /**
  * Thin webhook gateway.
  *
- * Routes incoming platform webhooks to the AgenticFlow runtime API.
- * The runtime does ALL the work — execution, threads, tools, RAG.
- * This server is just a protocol translator.
+ * Routes platform webhooks to the AgenticFlow runtime API.
+ * The runtime does ALL the work. This is just a protocol translator.
+ *
+ * Flow:
+ *   1. Connector parses platform webhook → { afAgentId, message }
+ *   2. Gateway POSTs to /v1/agents/{id}/stream
+ *   3. Reads thread_id from first streamed line
+ *   4. Waits for stream to finish, then GETs /v1/agent-threads/{thread_id}/messages
+ *   5. Connector posts result back to platform
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -20,23 +26,16 @@ function log(config: GatewayConfig, ...args: unknown[]) {
   if (config.verbose) console.error("[gateway]", ...args);
 }
 
-/** Extract text from Vercel AI SDK v1 stream format. */
-function extractStreamText(raw: string): string {
-  const parts: string[] = [];
-  for (const line of raw.split("\n")) {
-    if (line.startsWith("0:")) {
-      try {
-        const text = JSON.parse(line.slice(2));
-        if (typeof text === "string") parts.push(text);
-      } catch { /* skip */ }
-    }
-  }
-  return parts.join("");
+function authHeaders(config: GatewayConfig): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(config.afApiKey ? { Authorization: `Bearer ${config.afApiKey}` } : {}),
+  };
 }
 
 /**
- * Call the AgenticFlow runtime streaming endpoint.
- * The runtime handles: execution, tools, RAG, thread persistence — everything.
+ * Call the AF runtime: stream → extract thread_id → wait → fetch messages.
+ * Returns the assistant's last message text.
  */
 async function callRuntime(
   config: GatewayConfig,
@@ -46,18 +45,18 @@ async function callRuntime(
   const streamUrl = task.afStreamUrl ?? `${baseUrl}/v1/agents/${task.afAgentId}/stream`;
 
   const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const threadId = task.threadId && uuidRe.test(task.threadId)
+  const requestThreadId = task.threadId && uuidRe.test(task.threadId)
     ? task.threadId
     : crypto.randomUUID();
 
+  // 1. POST to stream endpoint
+  log(config, `Streaming to ${streamUrl} (thread: ${requestThreadId})`);
+
   const resp = await fetch(streamUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(config.afApiKey ? { Authorization: `Bearer ${config.afApiKey}` } : {}),
-    },
+    headers: authHeaders(config),
     body: JSON.stringify({
-      id: threadId,
+      id: requestThreadId,
       messages: [{ role: "user", content: task.message }],
     }),
   });
@@ -67,12 +66,58 @@ async function callRuntime(
     throw new Error(`Runtime ${resp.status}: ${err.slice(0, 300)}`);
   }
 
+  // 2. Read stream — extract thread_id from first data line, collect text
   const raw = await resp.text();
-  return { text: extractStreamText(raw), threadId };
+  let threadId = requestThreadId;
+  const textParts: string[] = [];
+
+  for (const line of raw.split("\n")) {
+    // Thread info: 2:[{"type":"thread_info","data":{"thread_id":"..."}}]
+    if (line.startsWith("2:")) {
+      try {
+        const arr = JSON.parse(line.slice(2)) as Array<{ type: string; data: Record<string, unknown> }>;
+        const info = arr.find((e) => e.type === "thread_info");
+        if (info?.data?.thread_id) {
+          threadId = info.data.thread_id as string;
+        }
+      } catch { /* skip */ }
+    }
+    // Text tokens: 0:text
+    if (line.startsWith("0:")) {
+      try {
+        const text = JSON.parse(line.slice(2));
+        if (typeof text === "string") textParts.push(text);
+      } catch { /* skip */ }
+    }
+  }
+
+  // 3. If we got text from the stream, use it directly (faster)
+  if (textParts.length > 0) {
+    return { text: textParts.join(""), threadId };
+  }
+
+  // 4. Fallback: fetch messages from thread API (works even if stream parsing fails)
+  log(config, `Fetching messages from thread ${threadId}`);
+  try {
+    const msgResp = await fetch(`${baseUrl}/v1/agent-threads/${threadId}/messages`, {
+      headers: authHeaders(config),
+    });
+    if (msgResp.ok) {
+      const history = (await msgResp.json()) as {
+        messages: Array<{ role: string; content: string }>;
+      };
+      const assistantMsgs = history.messages.filter((m) => m.role === "assistant");
+      if (assistantMsgs.length > 0) {
+        return { text: assistantMsgs[assistantMsgs.length - 1].content, threadId };
+      }
+    }
+  } catch { /* thread fetch failed — return empty */ }
+
+  return { text: "", threadId };
 }
 
 /**
- * Create a Web-standard Request → Response handler.
+ * Web-standard Request → Response handler.
  * Deploy to: Vercel, Lambda, Cloudflare Workers, or `af gateway serve`.
  */
 export function createGatewayHandler(
@@ -90,7 +135,6 @@ export function createGatewayHandler(
   return async (req: Request): Promise<Response> => {
     const url = new URL(req.url, "http://localhost");
 
-    // Health
     if (req.method === "GET" && url.pathname === "/health") {
       return json({
         status: "ok",
@@ -100,7 +144,6 @@ export function createGatewayHandler(
       });
     }
 
-    // Webhook dispatch
     const match = url.pathname.match(/^\/webhook\/([a-z0-9_-]+)/);
     if (req.method === "POST" && match) {
       const name = match[1];
@@ -114,18 +157,15 @@ export function createGatewayHandler(
         const headers: Record<string, string | string[] | undefined> = {};
         req.headers.forEach((v, k) => { headers[k] = v; });
 
-        // 1. Connector parses platform webhook (thin)
         const task = await connector.parseWebhook(headers, body);
         if (!task) return json({ status: "skipped", channel: name });
 
         log(config, `[${name}] ${task.label} → agent ${task.afAgentId}`);
 
-        // 2. Runtime does all the work
         const result = await callRuntime(config, task);
 
-        log(config, `[${name}] Response: ${result.text.length} chars`);
+        log(config, `[${name}] ${result.text.length} chars, thread ${result.threadId}`);
 
-        // 3. Connector posts result back to platform (thin)
         if (result.text) {
           await connector.postResult(task, result.text);
         }
@@ -158,7 +198,6 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
-/** Start a long-running gateway server. */
 export function startGateway(
   config: GatewayConfig,
   connectors: ChannelConnector[],
