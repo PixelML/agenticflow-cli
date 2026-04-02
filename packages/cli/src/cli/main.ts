@@ -3623,90 +3623,35 @@ export function createProgram(): Command {
     .option("--poll-interval <seconds>", "Seconds between status checks", "2")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      const timeoutMs = Number.parseInt(opts.timeout, 10) * 1000;
-      const pollMs = Number.parseInt(opts.pollInterval, 10) * 1000;
-      const threadId = opts.threadId ?? crypto.randomUUID();
+
+      if (!isJsonFlagEnabled()) {
+        console.error(`Sending task to agent ${opts.agentId}...`);
+      }
 
       try {
-        // 1. Fire: POST to stream, read thread_id from first line, don't block
-        if (!isJsonFlagEnabled()) {
-          console.error(`Sending task to agent ${opts.agentId}...`);
+        const result = await client.agents.run(opts.agentId, {
+          message: opts.message,
+          threadId: opts.threadId,
+          timeoutMs: Number.parseInt(opts.timeout, 10) * 1000,
+          pollIntervalMs: Number.parseInt(opts.pollInterval, 10) * 1000,
+        });
+
+        if (result.status === "failed") {
+          fail("agent_run_failed", `Agent run failed (thread: ${result.threadId})`);
+        }
+        if (result.status === "timeout") {
+          fail("agent_run_timeout",
+            `Agent did not respond within ${opts.timeout}s`,
+            `Thread: ${result.threadId}. Check with: af agent-threads messages --thread-id ${result.threadId}`);
         }
 
-        const streamBody = {
-          messages: [{ role: "user" as const, content: opts.message }],
-        };
-
-        const token = resolveToken(program.opts());
-        const stream = token
-          ? await client.agents.stream(opts.agentId, streamBody)
-          : await client.agents.streamAnonymous(opts.agentId, streamBody);
-
-        // Consume stream to get thread info and full text
-        const text = await stream.text();
-
-        // Try to get thread_id from stream metadata
-        let resolvedThreadId = threadId;
-        try {
-          const rawParts = (stream as unknown as { _raw?: string })._raw;
-          if (typeof rawParts === "string") {
-            for (const line of rawParts.split("\n")) {
-              if (line.startsWith("2:")) {
-                const arr = JSON.parse(line.slice(2)) as Array<{ type: string; data: Record<string, unknown> }>;
-                const info = arr.find((e) => e.type === "thread_info");
-                if (info?.data?.thread_id) {
-                  resolvedThreadId = info.data.thread_id as string;
-                }
-              }
-            }
-          }
-        } catch { /* ignore — use default threadId */ }
-
-        // 2. If we got text from stream, return it immediately
-        if (text && text.trim()) {
-          printResult({
-            schema: "agenticflow.agent.run.v1",
-            status: "completed",
-            agent_id: opts.agentId,
-            thread_id: resolvedThreadId,
-            response: text,
-          });
-          return;
-        }
-
-        // 3. Fallback: poll thread status then fetch messages
-        if (!isJsonFlagEnabled()) {
-          console.error(`Waiting for response (thread: ${resolvedThreadId})...`);
-        }
-
-        const start = Date.now();
-        while (Date.now() - start < timeoutMs) {
-          try {
-            const thread = (await client.agentThreads.get(resolvedThreadId)) as Record<string, unknown>;
-            const status = thread.status as string;
-            if (status === "processed" || status === "idle") {
-              const history = (await client.agentThreads.getMessages(resolvedThreadId)) as {
-                messages: Array<{ role: string; content: string }>;
-              };
-              const msgs = history.messages?.filter((m) => m.role === "assistant") ?? [];
-              const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].content : "";
-              printResult({
-                schema: "agenticflow.agent.run.v1",
-                status: "completed",
-                agent_id: opts.agentId,
-                thread_id: resolvedThreadId,
-                response: lastMsg,
-              });
-              return;
-            }
-            if (status === "failed") {
-              fail("agent_run_failed", `Agent run failed (thread: ${resolvedThreadId})`);
-            }
-          } catch { /* thread not ready yet */ }
-          await new Promise((r) => setTimeout(r, pollMs));
-        }
-
-        fail("agent_run_timeout", `Agent did not respond within ${opts.timeout}s`, `Thread: ${resolvedThreadId}. Check with: af agent-threads messages --thread-id ${resolvedThreadId}`);
+        printResult({
+          schema: "agenticflow.agent.run.v1",
+          status: result.status,
+          agent_id: opts.agentId,
+          thread_id: result.threadId,
+          response: result.response,
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         fail("agent_run_failed", message);

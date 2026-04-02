@@ -23,6 +23,8 @@ export {
 } from "./exceptions.js";
 export {
   AgentsResource,
+  type AgentRunResult,
+  type AgentRunOptions,
   WorkflowsResource,
   ConnectionsResource,
   NodeTypesResource,
