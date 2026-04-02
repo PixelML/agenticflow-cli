@@ -61,13 +61,16 @@ export class PaperclipConnector implements ChannelConnector {
 
     if (parts.length === 0) parts.push("Heartbeat triggered. Check your inbox for work.");
 
+    // Use issueId as threadId so repeated heartbeats for the same task
+    // reuse the same AF conversation thread (continuity, not duplication)
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const stableThreadId = issueId && uuidRe.test(issueId) ? issueId : undefined;
 
     return {
       afAgentId,
       afStreamUrl,
       message: parts.join("\n"),
-      threadId: uuidRe.test(payload.runId) ? payload.runId : undefined,
+      threadId: stableThreadId,
       label: (ctx.taskKey as string) ?? issueId ?? "heartbeat",
       replyContext: { issueId, agentId: payload.agentId },
     };

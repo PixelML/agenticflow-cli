@@ -4336,6 +4336,7 @@ export function createProgram(): Command {
     .option("--company-name <name>", "Create a new Paperclip company with this name")
     .option("--role <role>", "Paperclip agent role", "general")
     .option("--budget <cents>", "Monthly budget in cents", "0")
+    .option("--heartbeat-interval <seconds>", "Auto-heartbeat interval in seconds (0 = on-demand only)", "0")
     .option("--reports-to <id>", "Paperclip agent ID this agent reports to")
     .action(async (opts) => {
       const client = buildClient(program.opts());
@@ -4414,6 +4415,13 @@ export function createProgram(): Command {
           },
           payloadTemplate: {
             messages: [{ content: "Execute your assigned task.", role: "user" }],
+          },
+        },
+        runtimeConfig: {
+          heartbeat: {
+            enabled: true,
+            intervalSec: Number.parseInt(opts.heartbeatInterval as string, 10) || 0,
+            wakeOnDemand: true,
           },
         },
         budgetMonthlyCents: Number.parseInt(opts.budget, 10) || 0,
