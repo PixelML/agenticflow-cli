@@ -182,7 +182,11 @@ export function createGatewayHandler(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log(config, `[${name}] Error: ${msg}`);
-        return json({ error: msg }, 502);
+        // Distinguish client errors from runtime errors
+        const isValidation = msg.includes("Required") || msg.includes("Missing") || msg.includes("missing");
+        const isNotFound = msg.includes("404") || msg.includes("not found") || msg.includes("Not Found");
+        const status = isValidation ? 400 : isNotFound ? 404 : 502;
+        return json({ error: msg }, status);
       }
     }
 

@@ -3660,6 +3660,24 @@ export function createProgram(): Command {
     .option("--timeout <seconds>", "Max seconds to wait for result", "120")
     .option("--poll-interval <seconds>", "Seconds between status checks", "2")
     .action(async (opts) => {
+      // Input validation
+      if (!opts.agentId || !opts.agentId.trim()) {
+        fail("invalid_option_value", "agent-id cannot be empty");
+      }
+      if (!opts.message || !opts.message.trim()) {
+        fail("invalid_option_value", "message cannot be empty");
+      }
+      const timeout = Number.parseInt(opts.timeout, 10);
+      if (timeout <= 0) {
+        fail("invalid_option_value", `Invalid --timeout: ${opts.timeout}. Must be a positive number of seconds.`);
+      }
+      if (opts.threadId) {
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRe.test(opts.threadId)) {
+          fail("invalid_option_value", `Invalid --thread-id: "${opts.threadId}". Must be a UUID.`);
+        }
+      }
+
       const client = buildClient(program.opts());
 
       if (!isJsonFlagEnabled()) {
@@ -4505,6 +4523,11 @@ export function createProgram(): Command {
     .option("--heartbeat-interval <seconds>", "Auto-heartbeat interval in seconds (0 = on-demand only)", "0")
     .option("--reports-to <id>", "Paperclip agent ID this agent reports to")
     .action(async (opts) => {
+      const VALID_ROLES = ["ceo", "cto", "cmo", "cfo", "engineer", "designer", "pm", "qa", "devops", "researcher", "general"];
+      if (opts.role && !VALID_ROLES.includes(opts.role)) {
+        fail("invalid_option_value", `Invalid --role: "${opts.role}"`, `Valid roles: ${VALID_ROLES.join(", ")}`);
+      }
+
       const client = buildClient(program.opts());
       const paperclipUrl = resolvePaperclipUrl(opts.paperclipUrl);
       const pc = new PaperclipResource({ baseUrl: paperclipUrl });
