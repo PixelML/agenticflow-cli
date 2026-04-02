@@ -24,6 +24,7 @@ import { PaperclipConnector } from "./gateway/connectors/paperclip.js";
 import { LinearConnector } from "./gateway/connectors/linear.js";
 import { WebhookConnector } from "./gateway/connectors/webhook.js";
 import type { ChannelConnector } from "./gateway/connector.js";
+import { listBlueprints, getBlueprint } from "./company-blueprints.js";
 import {
   OperationRegistry,
   defaultSpecPath,
@@ -4325,6 +4326,171 @@ export function createProgram(): Command {
   const paperclipCmd = program
     .command("paperclip")
     .description("Publish and control AgenticFlow agents on a Paperclip instance.");
+
+  // ─── init (bootstrap a company from blueprint) ──────────────────
+  pcOpts.both(paperclipCmd
+    .command("init")
+    .description("Bootstrap a Paperclip company from a pre-built blueprint with AgenticFlow agents."))
+    .requiredOption("--blueprint <id>", "Blueprint ID (use --list to see available)")
+    .option("--list", "List available blueprints")
+    .option("--budget <cents>", "Monthly budget in cents", "50000")
+    .action(async (opts: Record<string, unknown>) => {
+      // List mode
+      if (opts.list) {
+        printResult(listBlueprints().map((b) => ({
+          id: b.id,
+          name: b.name,
+          description: b.description,
+          agents: b.agents.length,
+          tasks: b.starterTasks.length,
+        })));
+        return;
+      }
+
+      const bp = getBlueprint(opts.blueprint as string);
+      if (!bp) {
+        fail("blueprint_not_found", `Unknown blueprint: ${opts.blueprint}`,
+          `Available: ${listBlueprints().map((b) => b.id).join(", ")}`);
+      }
+
+      const client = buildClient(program.opts());
+      const paperclipUrl = resolvePaperclipUrl(opts.paperclipUrl as string | undefined);
+      const pc = new PaperclipResource({ baseUrl: paperclipUrl });
+
+      const healthy = await pc.healthCheck();
+      if (!healthy) fail("paperclip_unreachable", `Cannot reach Paperclip at ${paperclipUrl}`);
+
+      if (!isJsonFlagEnabled()) console.error(`\nBootstrapping "${bp.name}" company...\n`);
+
+      // 1. List AF agents to match against blueprint slots
+      const afAgents = (await client.agents.list({ limit: 100 })) as Array<Record<string, unknown>>;
+
+      // 2. Create company
+      const company = await pc.createCompany({
+        name: bp.name,
+        description: bp.description,
+        budgetMonthlyCents: Number.parseInt(opts.budget as string, 10) || 50000,
+      });
+      savePaperclipCompanyId(company.id);
+      if (!isJsonFlagEnabled()) console.error(`  Company: ${company.name} (${company.id})`);
+
+      // 3. Create goal
+      const goal = await pc.createGoal(company.id, {
+        title: bp.goal,
+        level: "company",
+        status: "active",
+      });
+      if (!isJsonFlagEnabled()) console.error(`  Goal: ${bp.goal}`);
+
+      // 4. Deploy agents — match AF agents to blueprint slots
+      const deployed: Array<{ slot: string; afAgent: string; pcAgent: string; role: string }> = [];
+      const afBaseUrl = DEFAULT_BASE_URL;
+      const afApiKey = resolveToken(program.opts());
+
+      for (const slot of bp.agents) {
+        // Find best matching AF agent
+        let match = afAgents.find((a) =>
+          slot.suggestedTemplate && (a.name as string)?.toLowerCase().includes(slot.suggestedTemplate!.toLowerCase()),
+        );
+        if (!match) match = afAgents[0]; // Fallback to first available
+        if (!match) {
+          if (!isJsonFlagEnabled()) console.error(`  Skipped: ${slot.title} (no AF agent available)`);
+          continue;
+        }
+
+        const afId = match.id as string;
+        const afName = match.name as string;
+        const afModel = (match.model as string) ?? "";
+        const afDesc = (match.description as string) ?? "";
+        const streamUrl = `${afBaseUrl.replace(/\/+$/, "")}/v1/agents/${afId}/stream`;
+
+        const pcAgent = await pc.createAgent(company.id, {
+          name: afName,
+          role: slot.role,
+          title: slot.title,
+          capabilities: slot.description + (afDesc ? ` | AF: ${afDesc}` : ""),
+          adapterType: "http",
+          adapterConfig: {
+            url: streamUrl,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(afApiKey ? { Authorization: `Bearer ${afApiKey}` } : {}),
+            },
+            payloadTemplate: { messages: [{ content: "Execute your assigned task.", role: "user" }] },
+          },
+          runtimeConfig: {
+            heartbeat: { enabled: true, intervalSec: 0, wakeOnDemand: true },
+          },
+          metadata: {
+            af_agent_id: afId,
+            af_model: afModel,
+            af_stream_url: streamUrl,
+            blueprint: bp.id,
+            slot: slot.role,
+            deployed_at: new Date().toISOString(),
+          },
+        });
+
+        deployed.push({ slot: slot.title, afAgent: afName, pcAgent: pcAgent.id, role: slot.role });
+        if (!isJsonFlagEnabled()) console.error(`  Agent: ${afName} → ${slot.role} (${pcAgent.id})`);
+      }
+
+      // 5. Create starter tasks
+      const roleToAgent = new Map(deployed.map((d) => [d.role, d.pcAgent]));
+      const tasks: Array<{ identifier: string; title: string; assignee: string }> = [];
+
+      for (const task of bp.starterTasks) {
+        const assignee = roleToAgent.get(task.assigneeRole);
+        if (!assignee) continue;
+
+        const issue = await pc.createIssue(company.id, {
+          title: task.title,
+          description: task.description,
+          priority: task.priority,
+          assigneeAgentId: assignee,
+          goalId: goal.id,
+          status: "todo",
+        });
+        const iss = issue as unknown as Record<string, unknown>;
+        tasks.push({ identifier: (iss.identifier as string) ?? "", title: task.title, assignee });
+        if (!isJsonFlagEnabled()) console.error(`  Task: ${iss.identifier} → ${task.title}`);
+      }
+
+      if (!isJsonFlagEnabled()) {
+        console.error(`\n  Done! ${deployed.length} agents deployed, ${tasks.length} tasks created.`);
+        console.error(`  Next: af gateway serve --channels paperclip && af paperclip connect --company-id ${company.id}`);
+      }
+
+      printResult({
+        schema: "agenticflow.paperclip.init.v1",
+        blueprint: bp.id,
+        company: { id: company.id, name: company.name },
+        goal: { id: goal.id, title: bp.goal },
+        agents: deployed,
+        tasks,
+      });
+    });
+
+  // ─── blueprints ─────────────────────────────────────────────────
+  paperclipCmd
+    .command("blueprints")
+    .description("List available company blueprints for `af paperclip init`.")
+    .action(() => {
+      const bps = listBlueprints();
+      if (isJsonFlagEnabled()) {
+        printResult(bps.map((b) => ({ id: b.id, name: b.name, description: b.description, agents: b.agents.length })));
+      } else {
+        console.log("Available company blueprints:\n");
+        for (const b of bps) {
+          console.log(`  ${b.id}`);
+          console.log(`    ${b.name} — ${b.description}`);
+          console.log(`    Agents: ${b.agents.map((a) => a.role).join(", ")}`);
+          console.log("");
+        }
+        console.log("Use: af paperclip init --blueprint <id>");
+      }
+    });
 
   // ─── deploy ─────────────────────────────────────────────────────
   const pcDeploy = paperclipCmd
