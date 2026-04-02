@@ -121,8 +121,9 @@ function printJson(data: unknown): void {
 
 /** Apply --fields filter to output. Reduces context window for AI agents. */
 function applyFieldsFilter(data: unknown, fields?: string): unknown {
-  if (!fields) return data;
+  if (fields === undefined || fields === null) return data;
   const keys = fields.split(",").map((f) => f.trim()).filter(Boolean);
+  if (keys.length === 0) return data; // --fields "" → treat as no filter
   if (Array.isArray(data) && data.length > 0) {
     const sample = data[0] as Record<string, unknown>;
     const available = Object.keys(sample);
@@ -1043,12 +1044,20 @@ export function createProgram(): Command {
     .description("Show resource schema for payload construction. AI agents: use this to discover fields before building payloads.")
     .action((resource) => {
       if (!resource) {
-        printResult({
-          schema: "agenticflow.schema.index.v1",
-          available: Object.keys(SCHEMAS),
-          usage: "af schema <resource> --json",
-          hint: "Use 'af schema agent' to see agent create/stream payload schemas.",
-        });
+        if (isJsonFlagEnabled()) {
+          printResult({
+            schema: "agenticflow.schema.index.v1",
+            available: Object.keys(SCHEMAS),
+            usage: "af schema <resource> --json",
+            hint: "Use 'af schema agent' to see agent create/stream payload schemas.",
+          });
+        } else {
+          console.log("Available resource schemas:");
+          for (const key of Object.keys(SCHEMAS)) {
+            console.log(`  af schema ${key}`);
+          }
+          console.log("\nUse --json for machine-readable output.");
+        }
         return;
       }
       const schema = SCHEMAS[resource];
@@ -1059,7 +1068,25 @@ export function createProgram(): Command {
           `Available: ${Object.keys(SCHEMAS).join(", ")}`,
         );
       }
-      printResult(schema);
+      if (isJsonFlagEnabled()) {
+        printResult(schema);
+      } else {
+        const s = schema as Record<string, unknown>;
+        console.log(`Resource: ${s.resource}`);
+        if (s.create) {
+          const c = s.create as Record<string, unknown>;
+          console.log(`\nCreate (required): ${(c.required as string[]).join(", ")}`);
+          if (c.optional) {
+            console.log("Create (optional):");
+            for (const [k, v] of Object.entries(c.optional as Record<string, string>)) {
+              console.log(`  ${k}: ${v}`);
+            }
+          }
+          if (c.example) console.log(`\nExample:\n  ${JSON.stringify(c.example)}`);
+        }
+        if (s.fields) console.log(`\nFields: ${(s.fields as string[]).join(", ")}`);
+        console.log("\nUse --json for full machine-readable schema.");
+      }
     });
 
   // ═════════════════════════════════════════════════════════════════
@@ -4328,7 +4355,8 @@ export function createProgram(): Command {
         fail("agent_fetch_failed", `Failed to fetch AgenticFlow agent ${opts.agentId}: ${message}`);
       }
 
-      let companyId = resolvePaperclipCompanyId(opts.companyId);
+      // --company-name takes priority: always create a new company
+      let companyId = opts.companyName ? undefined : resolvePaperclipCompanyId(opts.companyId);
       if (!companyId && opts.companyName) {
         const company = await pc.createCompany({ name: opts.companyName });
         companyId = company.id;
