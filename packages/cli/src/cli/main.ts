@@ -126,9 +126,13 @@ function applyFieldsFilter(data: unknown, fields?: string): unknown {
   if (Array.isArray(data) && data.length > 0) {
     const sample = data[0] as Record<string, unknown>;
     const available = Object.keys(sample);
-    const invalid = keys.filter((k) => !available.includes(k));
-    if (invalid.length > 0 && invalid.length === keys.length) {
-      console.error(`Warning: No matching fields. Available: ${available.slice(0, 15).join(", ")}`);
+    const matched = keys.filter((k) => available.includes(k));
+    if (matched.length === 0) {
+      fail(
+        "invalid_fields",
+        `No matching fields: ${keys.join(", ")}`,
+        `Available: ${available.slice(0, 20).join(", ")}`,
+      );
     }
     return data.map((item) => pickFields(item as Record<string, unknown>, keys));
   }
@@ -3579,7 +3583,13 @@ export function createProgram(): Command {
     .requiredOption("--agent-id <id>", "Agent ID")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.agents.delete(opts.agentId));
+      try {
+        await client.agents.delete(opts.agentId);
+        printResult({ schema: "agenticflow.delete.v1", deleted: true, id: opts.agentId, resource: "agent" });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", message);
+      }
     });
 
   agentCmd
