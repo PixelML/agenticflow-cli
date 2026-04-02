@@ -4919,7 +4919,7 @@ export function createProgram(): Command {
   pcOpts.both(paperclipCmd
     .command("connect")
     .description("Update all AF-deployed agents to route through the bridge webhook."))
-    .option("--bridge-url <url>", "Bridge URL", "http://localhost:4100/heartbeat")
+    .option("--bridge-url <url>", "Gateway webhook URL", "http://localhost:4100/webhook/paperclip")
     .action(async (opts: Record<string, string>) => {
       const { pc, companyId } = await pcContext(opts);
       const agents = await pc.listAgents(companyId);

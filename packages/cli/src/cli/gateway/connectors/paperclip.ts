@@ -25,12 +25,12 @@ export class PaperclipConnector implements ChannelConnector {
     body: string,
   ): Promise<InboundTask | null> {
     const payload = JSON.parse(body) as {
-      agentId: string;
-      runId: string;
-      context: Record<string, unknown>;
+      agentId?: string;
+      runId?: string;
+      context?: Record<string, unknown>;
     };
 
-    if (!payload.agentId) throw new Error("Missing agentId");
+    if (!payload.agentId) throw new Error("Missing agentId in payload");
 
     // Look up AF agent ID from Paperclip agent metadata
     const pcAgent = await this.pc.getAgent(payload.agentId);
@@ -42,9 +42,9 @@ export class PaperclipConnector implements ChannelConnector {
       throw new Error(`Agent ${payload.agentId} has no af_agent_id. Deploy via "af paperclip deploy" first.`);
     }
 
-    // Build message from Paperclip context — just pass the task info
-    const ctx = payload.context;
-    const issueId = (ctx.issueId ?? ctx.taskId) as string | undefined;
+    // Build message from Paperclip context — handle missing/partial context
+    const ctx = payload.context ?? {};
+    const issueId = (ctx.issueId ?? ctx.taskId ?? ctx.taskKey) as string | undefined;
     const parts: string[] = [];
 
     if (ctx.wakeReason) parts.push(`Reason: ${ctx.wakeReason}`);
