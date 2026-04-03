@@ -872,7 +872,7 @@ export function createProgram(): Command {
     .name("agenticflow")
     .description(
       "AgenticFlow CLI for agent-native API operations.\n\n" +
-      "  AI agents: run `af context` for usage guide, `af schema` for payload schemas, `af discover --json` for full capability index.",
+      "  AI agents: run `af bootstrap --json` to get started in one command.",
     )
     .version(pkgVersion)
     .option("--api-key <key>", "API key for authentication")
@@ -975,6 +975,54 @@ export function createProgram(): Command {
   // ═════════════════════════════════════════════════════════════════
   // context  (AI agent bootstrap — the single entry point)
   // ═════════════════════════════════════════════════════════════════
+  program
+    .command("bootstrap")
+    .description("Single-command AI agent setup: verify auth, list agents, return schemas. Combines context + doctor + schema + agent list.")
+    .action(async () => {
+      // Combine everything an AI needs in one response
+      const client = buildClient(program.opts());
+      const token = resolveToken(program.opts());
+
+      let health = false;
+      let agents: unknown[] = [];
+      try {
+        const sdk = client.sdk;
+        const resp = await sdk.get("/v1/health");
+        health = resp.ok;
+      } catch { /* unhealthy */ }
+
+      try {
+        agents = (await client.agents.list({ limit: 10 })) as unknown[];
+      } catch { /* no agents or unauth */ }
+
+      printResult({
+        schema: "agenticflow.bootstrap.v1",
+        auth: {
+          authenticated: !!token,
+          health,
+          workspace_id: client.sdk.workspaceId,
+          project_id: client.sdk.projectId,
+        },
+        agents: Array.isArray(agents)
+          ? agents.slice(0, 10).map((a) => {
+            const ag = a as Record<string, unknown>;
+            return { id: ag.id, name: ag.name, model: ag.model };
+          })
+          : [],
+        schemas: Object.keys(SCHEMAS),
+        commands: {
+          run_agent: "af agent run --agent-id <id> --message <msg> --json",
+          create_agent: "af agent create --body <json> --dry-run --json",
+          list_agents: "af agent list --fields id,name,model --json",
+          deploy_to_paperclip: "af paperclip init --blueprint <id> --json",
+          send_webhook: "curl -X POST http://localhost:4100/webhook/webhook -H 'Content-Type: application/json' -d '{\"agent_id\":\"<id>\",\"message\":\"<msg>\"}'",
+          get_schema: "af schema <resource> --json",
+          get_playbook: "af playbook <topic>",
+        },
+        playbooks: listPlaybooks().map((p) => p.topic),
+      });
+    });
+
   program
     .command("context")
     .description("Print AI agent usage guide. Run this first if you are an AI agent operating the CLI.")
@@ -1396,27 +1444,50 @@ export function createProgram(): Command {
   // ═════════════════════════════════════════════════════════════════
   program
     .command("login")
-    .description("Interactively configure your credentials.")
+    .description("Configure credentials. Use --api-key for non-interactive (AI-friendly) mode.")
     .option("--profile <profile>", "Profile name", "default")
     .action(async (opts) => {
       const parentOpts = program.opts();
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const ask = (q: string): Promise<string> =>
-        new Promise((res) => rl.question(q, (a) => res(a.trim())));
 
-      console.log("\n🔑 AgenticFlow Login\n");
+      // Non-interactive mode: if all values provided via flags/env, skip prompts
+      const flagApiKey = parentOpts.apiKey || process.env[AGENTICFLOW_API_KEY];
+      const flagWsId = parentOpts.workspaceId || process.env["AGENTICFLOW_WORKSPACE_ID"];
+      const flagProjId = parentOpts.projectId || process.env["AGENTICFLOW_PROJECT_ID"];
+      const nonInteractive = !!(flagApiKey && process.stdin.isTTY === undefined);
 
-      const apiKey = parentOpts.apiKey || await ask("  API Key: ");
-      if (!apiKey) { console.error("\n✗ API key is required."); rl.close(); process.exit(1); }
-      if (parentOpts.apiKey) console.log("  API Key: ••••••••");
+      let apiKey: string;
+      let workspaceId: string;
+      let projectId: string;
 
-      const workspaceId = parentOpts.workspaceId || await ask("  Workspace ID: ");
-      if (parentOpts.workspaceId) console.log(`  Workspace ID: ${parentOpts.workspaceId}`);
+      if (flagApiKey && flagWsId && flagProjId) {
+        // Fully non-interactive
+        apiKey = flagApiKey;
+        workspaceId = flagWsId;
+        projectId = flagProjId;
+      } else if (flagApiKey && nonInteractive) {
+        // API key set but missing workspace/project — still save what we have
+        apiKey = flagApiKey;
+        workspaceId = flagWsId ?? "";
+        projectId = flagProjId ?? "";
+      } else {
+        // Interactive mode
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const ask = (q: string): Promise<string> =>
+          new Promise((res) => rl.question(q, (a) => res(a.trim())));
 
-      const projectId = parentOpts.projectId || await ask("  Project ID: ");
-      if (parentOpts.projectId) console.log(`  Project ID: ${parentOpts.projectId}`);
+        if (!isJsonFlagEnabled()) console.log("\nAgenticFlow Login\n");
 
-      rl.close();
+        apiKey = flagApiKey || await ask("  API Key: ");
+        if (!apiKey) { console.error("\nAPI key is required."); rl.close(); process.exit(1); }
+        if (flagApiKey) console.log("  API Key: ••••••••");
+
+        workspaceId = flagWsId || await ask("  Workspace ID: ");
+        if (flagWsId) console.log(`  Workspace ID: ${flagWsId}`);
+
+        projectId = flagProjId || await ask("  Project ID: ");
+        if (flagProjId) console.log(`  Project ID: ${flagProjId}`);
+        rl.close();
+      }
 
       const configPath = defaultAuthConfigPath();
       const config = loadAuthFile(configPath);
@@ -3712,6 +3783,22 @@ export function createProgram(): Command {
         const message = err instanceof Error ? err.message : String(err);
         fail("agent_run_failed", message);
       }
+    });
+
+  agentCmd
+    .command("scaffold")
+    .description("Generate a valid agent create payload from schema. Pipe to `af agent create --body`.")
+    .option("--agent-name <name>", "Agent name", "My Agent")
+    .action((opts) => {
+      const projectId = resolveProjectId(program.opts().projectId) ?? "YOUR_PROJECT_ID";
+      printResult({
+        name: opts.agentName,
+        tools: [],
+        project_id: projectId,
+        description: "",
+        visibility: "private",
+        recursion_limit: 25,
+      });
     });
 
   agentCmd
