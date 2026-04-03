@@ -161,6 +161,10 @@ function hardenInput(value: string, label: string): string {
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)) {
     fail("input_rejected", `Control characters detected in ${label}`);
   }
+  // Catch escaped null bytes that JSON.stringify produces
+  if (/\\u0000|\\x00/.test(value)) {
+    fail("input_rejected", `Null byte detected in ${label}`);
+  }
   return value;
 }
 
@@ -4491,17 +4495,29 @@ export function createProgram(): Command {
       const deployed: Array<{ slot: string; afAgent: string; pcAgent: string; role: string }> = [];
       const afBaseUrl = DEFAULT_BASE_URL;
       const afApiKey = resolveToken(program.opts());
+      const usedAgentIds = new Set<string>();
 
       for (const slot of bp.agents) {
-        // Find best matching AF agent
-        let match = afAgents.find((a) =>
-          slot.suggestedTemplate && (a.name as string)?.toLowerCase().includes(slot.suggestedTemplate!.toLowerCase()),
-        );
-        if (!match) match = afAgents[0]; // Fallback to first available
+        // Find best matching AF agent — prefer template match, then round-robin unused agents
+        let match = slot.suggestedTemplate
+          ? afAgents.find((a) =>
+              (a.name as string)?.toLowerCase().includes(slot.suggestedTemplate!.toLowerCase()) &&
+              !usedAgentIds.has(a.id as string),
+            )
+          : undefined;
+        if (!match) {
+          // Round-robin: pick first unused agent
+          match = afAgents.find((a) => !usedAgentIds.has(a.id as string));
+        }
+        if (!match) {
+          // All agents used — reuse from start
+          match = afAgents[deployed.length % afAgents.length];
+        }
         if (!match) {
           if (!isJsonFlagEnabled()) console.error(`  Skipped: ${slot.title} (no AF agent available)`);
           continue;
         }
+        usedAgentIds.add(match.id as string);
 
         const afId = match.id as string;
         const afName = match.name as string;

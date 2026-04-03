@@ -154,6 +154,15 @@ export function createGatewayHandler(
 
       try {
         const body = await req.text();
+
+        // Validate JSON before passing to connector
+        if (!body || !body.trim()) {
+          return json({ error: "Empty request body" }, 400);
+        }
+        try { JSON.parse(body); } catch {
+          return json({ error: "Invalid JSON in request body" }, 400);
+        }
+
         const headers: Record<string, string | string[] | undefined> = {};
         req.headers.forEach((v, k) => { headers[k] = v; });
 
