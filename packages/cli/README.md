@@ -42,9 +42,15 @@ af agent list --fields id,name,model --json
 af agent get --agent-id <id> --json
 af agent create --body @agent.json --dry-run    # Validate first
 af agent create --body @agent.json
-af agent stream --agent-id <id> --body @stream.json
+af agent run --agent-id <id> --message "Analyze this" --json   # Non-streaming
+af agent stream --agent-id <id> --body @stream.json            # Streaming
 af agent update --agent-id <id> --body @update.json
 af agent delete --agent-id <id>
+```
+
+`af agent run` is designed for AI agents and scripts — returns structured JSON:
+```json
+{"schema":"agenticflow.agent.run.v1","status":"completed","thread_id":"...","response":"..."}
 ```
 
 ### Workflows
@@ -89,6 +95,11 @@ af gateway serve --channels linear
 Deploy agents to [Paperclip](https://github.com/paperclipai/paperclip) companies:
 
 ```bash
+# One-command setup from a blueprint
+af paperclip blueprints                              # List templates
+af paperclip init --blueprint dev-shop               # Bootstrap entire company
+
+# Or step by step
 af paperclip company create --name "My Company" --budget 100000
 af paperclip deploy --agent-id <id> --role engineer
 af paperclip goal create --title "Build the product" --level company
@@ -97,6 +108,8 @@ af paperclip connect                    # Wire agents to gateway
 af paperclip agent wakeup --id <id>     # Trigger execution
 af paperclip dashboard                  # Monitor
 ```
+
+Blueprints: `dev-shop`, `marketing-agency`, `sales-team`, `content-studio`, `support-center`.
 
 ### AI-Agent Discovery
 
@@ -119,13 +132,14 @@ af connections list --limit 200 --json
 ### Playbooks
 
 ```bash
-af playbook quickstart           # Zero to working agent in 5 min
-af playbook gateway-setup        # Webhook gateway setup
-af playbook deploy-to-paperclip  # Paperclip company setup
-af playbook agent-channels       # Connect Linear, webhooks, etc.
-af playbook agent-build          # Agent configuration
-af playbook workflow-build       # Workflow design
-af playbook template-bootstrap   # Start from templates
+af playbook quickstart             # Zero to working agent in 5 min
+af playbook company-from-scratch   # Full Paperclip company setup
+af playbook gateway-setup          # Webhook gateway setup
+af playbook deploy-to-paperclip    # Step-by-step Paperclip deploy
+af playbook agent-channels         # Connect Linear, webhooks, etc.
+af playbook agent-build            # Agent configuration
+af playbook workflow-build         # Workflow design
+af playbook template-bootstrap     # Start from templates
 ```
 
 ## Global Options
