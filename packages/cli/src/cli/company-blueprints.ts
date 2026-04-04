@@ -115,6 +115,26 @@ export const BLUEPRINTS: Record<string, CompanyBlueprint> = {
       { title: "Draft FAQ document", description: "Write an FAQ with the top 20 most common customer questions and answers.", assigneeRole: "researcher", priority: "medium" },
     ],
   },
+  "amazon-seller": {
+    id: "amazon-seller",
+    name: "Amazon Seller Team",
+    description: "An AI team for Amazon Singapore sellers — listing optimization, PPC campaigns, review analysis, competitor monitoring, pricing, and customer support.",
+    goal: "Maximize Amazon Singapore sales through optimized listings, smart advertising, and excellent customer experience",
+    agents: [
+      { role: "ceo", title: "Amazon Business Manager", description: "Overall Amazon business strategy, P&L oversight, launch coordination" },
+      { role: "cmo", title: "Listing & SEO Specialist", description: "Product listing optimization, keyword research, A+ content", suggestedTemplate: "SEO" },
+      { role: "engineer", title: "PPC Campaign Manager", description: "Sponsored Products/Brands/Display campaign management, bid optimization", suggestedTemplate: "Ads" },
+      { role: "researcher", title: "Market & Competitor Analyst", description: "Competitor monitoring, pricing intelligence, market trends", suggestedTemplate: "Research" },
+      { role: "general", title: "Customer Support Agent", description: "Buyer message responses, review management, Q&A", suggestedTemplate: "Support", optional: true },
+    ],
+    starterTasks: [
+      { title: "Optimize top 3 product listings", description: "Audit and optimize the title, bullets, description, and backend keywords for our top 3 ASINs. Use Singapore-specific keywords including Mandarin and Malay terms.", assigneeRole: "cmo", priority: "high" },
+      { title: "Set up PPC campaigns for main product", description: "Create Sponsored Products campaigns (Auto + Manual) for our best-selling ASIN. Budget: SGD 500/month. Target ACoS: 25%.", assigneeRole: "engineer", priority: "high" },
+      { title: "Competitive analysis report", description: "Analyze top 5 competitors for our main product category. Compare pricing, ratings, review counts, and listing quality. Identify gaps we can exploit.", assigneeRole: "researcher", priority: "high" },
+      { title: "Draft responses to recent negative reviews", description: "Review all 1-2 star reviews from the past 30 days. Draft professional responses that acknowledge concerns and guide customers to Amazon resolution.", assigneeRole: "general", priority: "medium" },
+      { title: "Q2 pricing strategy", description: "Develop pricing strategy for Q2 including 11.11, Great Singapore Sale, and National Day promotions. Factor in FBA fees, shipping costs, and competitor pricing.", assigneeRole: "ceo", priority: "medium" },
+    ],
+  },
 };
 
 export function listBlueprints(): CompanyBlueprint[] {
