@@ -905,7 +905,7 @@ export function createProgram(): Command {
         optional: {
           description: "string | null",
           visibility: "private | public (default: private)",
-          model: "string (e.g. agenticflow/gpt-4o-mini)",
+          model: "string (e.g. agenticflow/gemini-2.0-flash, agenticflow/gemma-4-31b-it, agenticflow/gpt-4o-mini)",
           system_prompt: "string",
           recursion_limit: "number (10-500, default: 25)",
           agent_type: "standard | autonomous (default: standard)",
