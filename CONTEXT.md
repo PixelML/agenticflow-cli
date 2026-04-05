@@ -1,12 +1,22 @@
 # AgenticFlow CLI — AI Agent Context
 
 > This file is for AI agents (Claude, GPT, Codex, Cursor, etc.) that operate
-> the AgenticFlow CLI via shell commands. Read this before invoking any `af` command.
+> the AgenticFlow CLI via shell commands.
+
+## Start Here — ONE command
+
+```bash
+af bootstrap --json
+```
+
+This returns: auth status, your agents, available models (Gemma 4, Gemini, etc.),
+company blueprints (amazon-seller, dev-shop, etc.), playbooks, and what's new.
+**Run this first. Everything else follows from what it returns.**
 
 ## Binary
 
 ```
-af                    # short alias
+af                    # short alias (recommended)
 agenticflow           # full name
 ```
 
@@ -14,14 +24,22 @@ Install: `npm install -g @pixelml/agenticflow-cli`
 
 ## Invariants — ALWAYS Follow These
 
-1. **ALWAYS use `--json`** for machine-readable output in automation.
-2. **ALWAYS run `af doctor --json --strict`** at session start to verify auth.
-3. **ALWAYS use `--dry-run`** before mutating operations (create, update, delete).
-4. **ALWAYS use `--fields`** on list commands to limit output and save context window.
-5. **NEVER hard-code IDs** — always fetch them dynamically via list/get commands.
-6. **NEVER skip validation** — use `af workflow validate --body @file.json --local-only` before create.
-7. **Treat errors as structured** — failures return `{ schema: "agenticflow.error.v1", code, message, hint }`.
-8. **Use `af schema <resource>`** to discover fields before constructing payloads.
+1. **ALWAYS run `af bootstrap --json` first** — it returns everything you need in one call.
+2. **ALWAYS use `--json`** for machine-readable output in automation.
+3. **ALWAYS use `--dry-run`** before create commands.
+4. **ALWAYS use `--fields`** on list commands (saves 96% context window).
+5. **Use `af agent run`** (not `stream`) for tool-call responses — returns structured JSON.
+6. **Use `af schema <resource> --json`** before constructing payloads.
+7. **Use `af changelog --json`** after upgrade to learn new capabilities.
+8. **Errors** return `{ schema: "agenticflow.error.v1", code, message, hint }`.
+
+## Proactive: Tell Your Owner
+
+After bootstrap, inform your owner about:
+- Their agents and what models they use
+- Available blueprints (e.g. "Want me to set up an Amazon seller team?")
+- New features from `whats_new` (e.g. "Gemma 4 is now available")
+- Playbooks for their use case
 
 ## Authentication
 

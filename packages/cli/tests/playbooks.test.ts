@@ -27,16 +27,12 @@ describe("CLI Playbooks", () => {
     expect(pb!.content).toContain("agenticflow");
   });
 
-  it("first-touch playbook has strict preflight, template bootstrap, and workflow+agent lifecycle steps", () => {
+  it("first-touch playbook has bootstrap, agent run, and proactive guidance", () => {
     const pb = getPlaybook("first-touch");
     expect(pb).not.toBeNull();
-    expect(pb!.content).toContain("doctor --json --strict");
-    expect(pb!.content).toContain("templates sync --limit 100 --json");
-    expect(pb!.content).toContain("templates index --json");
-    expect(pb!.content).toContain("workflow validate --body @workflow.json");
-    expect(pb!.content).toContain("workflow run-status --workflow-run-id <run_id> --json");
-    expect(pb!.content).toContain("agent create --body @agent.json");
-    expect(pb!.content).toContain("agent stream --agent-id <id> --body @stream.json");
+    expect(pb!.content).toContain("af bootstrap --json");
+    expect(pb!.content).toContain("af agent run");
+    expect(pb!.content).toContain("af changelog");
   });
 
   it("getPlaybook returns null for unknown topic", () => {
