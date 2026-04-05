@@ -118,9 +118,6 @@ const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 // ═══════════════════════════════════════════════════════════════════
 const AF_WEB_BASE = "https://agenticflow.ai";
 
-// URL routes verified against WorkflowChef-Web/src/app/ on 2026-04-05.
-// All 10 cases (agent, thread, workflow, workflow-run, workspace, datasets,
-// settings, connections, mcp, install-mcp) match Next.js file-system routes.
 function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workspace" | "datasets" | "settings" | "connections" | "mcp" | "install-mcp", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; runId?: string; mcpSlug?: string }): string {
   const ws = ids.workspaceId ?? "";
   switch (type) {
@@ -440,74 +437,6 @@ async function executeWorkflowFromFile(options: WorkflowExecFromFileOptions): Pr
       final_run: finalRun,
     },
   };
-}
-
-async function checkWorkflowConnections(
-  client: AgenticFlowClient,
-  workflowFile: string,
-  opts: { yes?: boolean; skipCheck?: boolean; workspaceId?: string }
-): Promise<void> {
-  if (opts.skipCheck) return;
-
-  // Read and parse the workflow JSON to inspect nodes
-  const filePath = resolve(workflowFile);
-  if (!existsSync(filePath)) return;
-  const raw = readFileSync(filePath, "utf-8");
-  let body: unknown;
-  try { body = JSON.parse(raw); } catch { return; }
-  if (!isRecordValue(body)) return;
-
-  // Find mcp_run_action nodes
-  const nodes = Array.isArray(body["nodes"]) ? body["nodes"] : [];
-  const actionNodes = nodes.filter(
-    (n: unknown) => isRecordValue(n) && n["node_type_name"] === "mcp_run_action"
-  );
-  if (actionNodes.length === 0) return;
-
-  // Fetch available connections
-  const projectId = resolveProjectId(undefined);
-  if (!projectId) return; // can't check without project context
-  let available: unknown;
-  try {
-    available = await client.connections.list({ workspaceId: opts.workspaceId, projectId });
-  } catch {
-    return; // don't block execution if list() fails
-  }
-
-  // Check if any mcp category connection exists
-  const results = isRecordValue(available) && Array.isArray(available["results"])
-    ? (available["results"] as unknown[])
-    : [];
-  const hasMcp = results.some(
-    (c: unknown) => isRecordValue(c) && (c["category"] === "mcp" || c["category_name"] === "mcp")
-  );
-  if (hasMcp) return;
-
-  // Warn with _links
-  const mcpUrl = webUrl("mcp", { workspaceId: opts.workspaceId ?? client.sdk.workspaceId });
-  const connectionsUrl = webUrl("connections", { workspaceId: opts.workspaceId ?? client.sdk.workspaceId });
-
-  if (isJsonFlagEnabled()) {
-    console.error(JSON.stringify({
-      schema: "agenticflow.warning.connection.v1",
-      message: `This workflow uses ${actionNodes.length} mcp_run_action node(s) but no MCP connection was found.`,
-      missing_category: "mcp",
-      action_nodes: actionNodes.length,
-      _links: { mcp: mcpUrl, connections: connectionsUrl },
-    }, null, 2));
-  } else {
-    console.error(`\nWarning: This workflow uses ${actionNodes.length} mcp_run_action node(s) but no MCP connection is configured.`);
-    console.error(`  Add one at: ${mcpUrl}\n`);
-  }
-
-  // Prompt unless --yes
-  if (!opts.yes) {
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    const answer = await new Promise<string>((res) => {
-      rl.question("Continue anyway? (workflow may fail) [y/N] ", (a) => { rl.close(); res(a); });
-    });
-    if (!/^y(es)?$/i.test(answer.trim())) process.exit(0);
-  }
 }
 
 function resolvePackEntrypoint(manifest: PackManifest, entryId?: string): PackEntrypoint {
@@ -2739,8 +2668,6 @@ export function createProgram(): Command {
     .option("--poll-interval-ms <ms>", "Polling interval when --wait is enabled", "2000")
     .option("--timeout-ms <ms>", "Polling timeout when --wait is enabled", "300000")
     .option("--json", "JSON output")
-    .option("-y, --yes", "Auto-accept connection warnings")
-    .option("--skip-check", "Skip pre-flight connection check")
     .action(async (opts) => {
       const parentOpts = program.opts();
       if (!resolveToken(parentOpts)) {
@@ -2799,11 +2726,6 @@ export function createProgram(): Command {
       ) ?? 300000;
 
       const client = buildClient(parentOpts);
-      await checkWorkflowConnections(client, workflowFile, {
-        yes: Boolean(opts.yes),
-        skipCheck: Boolean(opts.skipCheck),
-        workspaceId: opts.workspaceId as string | undefined,
-      });
       try {
         const workflowExec = await executeWorkflowFromFile({
           client,
@@ -2847,16 +2769,6 @@ export function createProgram(): Command {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const isConnectionError = /connection|mcp|unauthorized|credentials|not.configured/i.test(message);
-        if (isConnectionError) {
-          const mcpUrl = webUrl("mcp", { workspaceId: opts.workspaceId as string | undefined });
-          fail(
-            "pack_run_connection_error",
-            message,
-            `This may be a missing MCP connection. Add one at: ${mcpUrl}`,
-            { _links: { mcp: mcpUrl } },
-          );
-        }
         fail("pack_run_failed", message);
       }
     });
@@ -3656,8 +3568,6 @@ export function createProgram(): Command {
     .option("--poll-interval-ms <ms>", "Polling interval when --wait is enabled", "2000")
     .option("--timeout-ms <ms>", "Polling timeout when --wait is enabled", "300000")
     .option("--json", "JSON output")
-    .option("-y, --yes", "Auto-accept connection warnings")
-    .option("--skip-check", "Skip pre-flight connection check")
     .action(async (opts) => {
       const parentOpts = program.opts();
       if (!resolveToken(parentOpts)) {
@@ -3681,11 +3591,6 @@ export function createProgram(): Command {
       ) ?? 300000;
       const inputPayload = opts.input ? loadJsonPayload(opts.input) : {};
 
-      await checkWorkflowConnections(client, opts.file as string, {
-        yes: Boolean(opts.yes),
-        skipCheck: Boolean(opts.skipCheck),
-        workspaceId: opts.workspaceId as string | undefined,
-      });
       try {
         const payload = await executeWorkflowFromFile({
           client,
@@ -3711,16 +3616,6 @@ export function createProgram(): Command {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const isConnectionError = /connection|mcp|unauthorized|credentials|not.configured/i.test(message);
-        if (isConnectionError) {
-          const mcpUrl = webUrl("mcp", { workspaceId: opts.workspaceId as string | undefined });
-          fail(
-            "workflow_exec_connection_error",
-            message,
-            `This may be a missing MCP connection. Add one at: ${mcpUrl}`,
-            { _links: { mcp: mcpUrl } },
-          );
-        }
         fail("workflow_exec_failed", message);
       }
     });
