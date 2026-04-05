@@ -25,6 +25,7 @@ import { LinearConnector } from "./gateway/connectors/linear.js";
 import { WebhookConnector } from "./gateway/connectors/webhook.js";
 import type { ChannelConnector } from "./gateway/connector.js";
 import { listBlueprints, getBlueprint } from "./company-blueprints.js";
+import { CHANGELOG, getLatestChangelog } from "./changelog.js";
 import {
   OperationRegistry,
   defaultSpecPath,
@@ -1022,9 +1023,47 @@ export function createProgram(): Command {
           send_webhook: "curl -X POST http://localhost:4100/webhook/webhook -H 'Content-Type: application/json' -d '{\"agent_id\":\"<id>\",\"message\":\"<msg>\"}'",
           get_schema: "af schema <resource> --json",
           get_playbook: "af playbook <topic>",
+          get_changelog: "af changelog --json",
         },
+        models: [
+          "agenticflow/gemma-4-31b-it",
+          "agenticflow/gemma-4-26b-a4b-it",
+          "agenticflow/gemini-2.0-flash",
+          "agenticflow/gpt-4o-mini",
+          "agenticflow/deepseek-v3.2",
+          "agenticflow/qwen-3.5-flash",
+        ],
+        blueprints: listBlueprints().map((b) => ({ id: b.id, name: b.name, agents: b.agents.length })),
         playbooks: listPlaybooks().map((p) => p.topic),
+        whats_new: getLatestChangelog(),
       });
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // changelog
+  // ═════════════════════════════════════════════════════════════════
+  program
+    .command("changelog")
+    .description("Show what's new in the CLI. AI agents: read this after install or upgrade to learn new capabilities.")
+    .option("--all", "Show all versions")
+    .action((opts) => {
+      const entries = opts.all ? CHANGELOG : [getLatestChangelog()];
+      if (isJsonFlagEnabled()) {
+        printResult(entries);
+      } else {
+        for (const entry of entries) {
+          console.log(`\n## v${entry.version} (${entry.date})\n`);
+          for (const h of entry.highlights) {
+            console.log(`  - ${h}`);
+          }
+          if (entry.for_ai.length > 0) {
+            console.log("\n  For AI agents:");
+            for (const tip of entry.for_ai) {
+              console.log(`    - ${tip}`);
+            }
+          }
+        }
+      }
     });
 
   program
