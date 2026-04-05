@@ -114,6 +114,25 @@ const SKILL_SHOW_SCHEMA_VERSION = "agenticflow.skill.show.v1";
 const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 
 // ═══════════════════════════════════════════════════════════════════
+// Web URL builder — link users to AgenticFlow UI
+// ═══════════════════════════════════════════════════════════════════
+const AF_WEB_BASE = "https://agenticflow.ai";
+
+function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workspace" | "datasets" | "settings", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; runId?: string }): string {
+  const ws = ids.workspaceId ?? "";
+  switch (type) {
+    case "agent": return `${AF_WEB_BASE}/app/workspaces/${ws}/agents/${ids.agentId}`;
+    case "thread": return `${AF_WEB_BASE}/app/workspaces/${ws}/agents/${ids.agentId}/threads/${ids.threadId}`;
+    case "workflow": return `${AF_WEB_BASE}/app/workspaces/${ws}/workflows/${ids.workflowId}`;
+    case "workflow-run": return `${AF_WEB_BASE}/app/workspaces/${ws}/workflows/${ids.workflowId}/logs/${ids.runId}`;
+    case "workspace": return `${AF_WEB_BASE}/app/workspaces/${ws}`;
+    case "datasets": return `${AF_WEB_BASE}/app/workspaces/${ws}/datasets`;
+    case "settings": return `${AF_WEB_BASE}/app/workspaces/${ws}/settings`;
+    default: return AF_WEB_BASE;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1036,6 +1055,11 @@ export function createProgram(): Command {
         blueprints: listBlueprints().map((b) => ({ id: b.id, name: b.name, agents: b.agents.length })),
         playbooks: listPlaybooks().map((p) => p.topic),
         whats_new: getLatestChangelog(),
+        _links: {
+          workspace: webUrl("workspace", { workspaceId: client.sdk.workspaceId }),
+          settings: webUrl("settings", { workspaceId: client.sdk.workspaceId }),
+          datasets: webUrl("datasets", { workspaceId: client.sdk.workspaceId }),
+        },
       });
     });
 
@@ -3821,6 +3845,10 @@ export function createProgram(): Command {
           agent_id: opts.agentId,
           thread_id: result.threadId,
           response: result.response,
+          _links: {
+            agent: webUrl("agent", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId }),
+            thread: webUrl("thread", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId, threadId: result.threadId }),
+          },
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
