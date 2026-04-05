@@ -118,6 +118,9 @@ const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 // ═══════════════════════════════════════════════════════════════════
 const AF_WEB_BASE = "https://agenticflow.ai";
 
+// URL routes verified against WorkflowChef-Web/src/app/ on 2026-04-05.
+// All 10 cases (agent, thread, workflow, workflow-run, workspace, datasets,
+// settings, connections, mcp, install-mcp) match Next.js file-system routes.
 function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workspace" | "datasets" | "settings" | "connections" | "mcp" | "install-mcp", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; runId?: string; mcpSlug?: string }): string {
   const ws = ids.workspaceId ?? "";
   switch (type) {
