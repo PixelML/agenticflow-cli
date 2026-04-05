@@ -111,3 +111,12 @@ None - no external service configuration required. Features activate automatical
 ---
 *Phase: 01-action-workflows-url-verification*
 *Completed: 2026-04-05*
+
+## Self-Check: PASSED
+
+- FOUND: 01-01-SUMMARY.md
+- FOUND: packages/cli/src/cli/main.ts
+- FOUND: commit 8d9a705 (Task 1 — checkWorkflowConnections + flags)
+- FOUND: commit 74b415e (Task 2 — fail-and-guide catch blocks)
+- checkWorkflowConnections appears 3 times in main.ts (definition + 2 call sites)
+- TypeScript compiles with no errors
