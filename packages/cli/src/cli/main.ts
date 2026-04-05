@@ -118,7 +118,7 @@ const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 // ═══════════════════════════════════════════════════════════════════
 const AF_WEB_BASE = "https://agenticflow.ai";
 
-function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workspace" | "datasets" | "settings", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; runId?: string }): string {
+function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workspace" | "datasets" | "settings" | "connections" | "mcp" | "install-mcp", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; runId?: string; mcpSlug?: string }): string {
   const ws = ids.workspaceId ?? "";
   switch (type) {
     case "agent": return `${AF_WEB_BASE}/app/workspaces/${ws}/agents/${ids.agentId}`;
@@ -128,6 +128,11 @@ function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "worksp
     case "workspace": return `${AF_WEB_BASE}/app/workspaces/${ws}`;
     case "datasets": return `${AF_WEB_BASE}/app/workspaces/${ws}/datasets`;
     case "settings": return `${AF_WEB_BASE}/app/workspaces/${ws}/settings`;
+    case "connections": return `${AF_WEB_BASE}/app/workspaces/${ws}/connections`;
+    case "mcp": return `${AF_WEB_BASE}/app/workspaces/${ws}/mcp`;
+    case "install-mcp": return ids.mcpSlug
+      ? `${AF_WEB_BASE}/mcp/${ids.mcpSlug}`
+      : `${AF_WEB_BASE}/app/workspaces/${ws}/mcp`;
     default: return AF_WEB_BASE;
   }
 }
@@ -1057,6 +1062,8 @@ export function createProgram(): Command {
         whats_new: getLatestChangelog(),
         _links: {
           workspace: webUrl("workspace", { workspaceId: client.sdk.workspaceId }),
+          connections: webUrl("connections", { workspaceId: client.sdk.workspaceId }),
+          mcp: webUrl("mcp", { workspaceId: client.sdk.workspaceId }),
           settings: webUrl("settings", { workspaceId: client.sdk.workspaceId }),
           datasets: webUrl("datasets", { workspaceId: client.sdk.workspaceId }),
         },
