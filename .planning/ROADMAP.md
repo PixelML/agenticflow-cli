@@ -12,9 +12,9 @@
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Connection pre-flight check + fail-and-guide error handling
-- [ ] 01-02-PLAN.md -- Action workflow template (LLM -> mcp_run_action) in amazon-seller-pack
-- [ ] 01-03-PLAN.md -- URL verification against WorkflowChef-Web routes
+- [x] 01-01-PLAN.md -- Connection pre-flight check + fail-and-guide error handling
+- [x] 01-02-PLAN.md -- Action workflow template (LLM -> mcp_run_action) in amazon-seller-pack
+- [x] 01-03-PLAN.md -- URL verification against WorkflowChef-Web routes
 
 **Tasks:**
 1. Verify all `_links` URLs against WorkflowChef-Web routes -- fix any mismatches
