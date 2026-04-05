@@ -41,7 +41,7 @@
 |----|-------------|------------------|
 | ACT-01 | Workflows chain LLM → `mcp_run_action` to post to Google Business, Instagram, etc. | mcp_run_action node schema documented; connection field verified in local-validation.ts; existing LLM→web_scraping pattern in review-scrape-respond.workflow.json is the direct model |
 | ACT-02 | CLI detects missing MCP connections and shows `_links.mcp` with setup instructions | ConnectionsResource.list() is the pre-flight data source; `webUrl("mcp", ...)` already generates the correct link; `fail()` + `_links` pattern is established |
-| ACT-03 | `af connections list --json` shows available connections with categories | Command already exists at line 3988 of main.ts; ConnectionsResource.categories() also available for category listing |
+| ACT-03 | `af connections list --json` shows available connections with categories | Command already exists at line 3988 of main.ts; ConnectionsResource.categories() also available for category listing. **Already satisfied by existing code — no new implementation needed.** |
 | ACT-04 | Workflow templates in skills packs use real platform nodes (web_scraping, mcp_run_action, api_call) | review-scrape-respond.workflow.json uses web_scraping; new template adds mcp_run_action; both nodes documented in agenticflow-docs |
 | WEB-02 | URLs verified against WorkflowChef-Web routes (agents, threads, connections, mcp, settings) | WorkflowChef-Web routes directly inspected; all existing webUrl() routes confirmed; install-mcp URL discrepancy identified |
 </phase_requirements>
@@ -215,7 +215,7 @@ async function checkWorkflowConnections(
 }
 ```
 
-### Pattern 4: Action Workflow Template (LLM → mcp_run_action)
+### Pattern 4: Action Workflow Template (LLM -> mcp_run_action)
 
 **What:** A two-node workflow JSON: LLM generates a response draft, `mcp_run_action` posts it.
 **When to use:** Action workflows in packs where the output is external posting, not text delivery.
@@ -389,7 +389,7 @@ entrypoints:
         required: true
 ```
 
-### Existing LLM → Web_Scraping Pattern (Model for LLM → mcp_run_action)
+### Existing LLM -> Web_Scraping Pattern (Model for LLM -> mcp_run_action)
 ```json
 // Source: agent-skills/packs/amazon-seller-pack/workflows/review-scrape-respond.workflow.json
 // Pattern: node A produces output, node B reads it via "${node-a.output_field}"
@@ -428,7 +428,7 @@ import { createInterface } from "node:readline";
 
 | Old Approach | Current Approach | Impact |
 |--------------|------------------|--------|
-| LLM-only workflows (generate text) | LLM → mcp_run_action (generate + act) | Workflows DO things, not just analyze |
+| LLM-only workflows (generate text) | LLM -> mcp_run_action (generate + act) | Workflows DO things, not just analyze |
 | No connection guidance | Pre-flight check + fail-and-guide | Users unblocked when MCP connection missing |
 | URL trust (v1.3.1) | URL verified against source routes | Eliminates 404 links in CLI output |
 
@@ -450,15 +450,15 @@ import { createInterface } from "node:readline";
 
 ## Open Questions
 
-1. **Exact MCP action ID for Google Business Profile review reply**
+1. **Exact MCP action ID for Google Business Profile review reply** (RESOLVED)
    - What we know: `mcp_run_action` executes any action by string name; naming convention follows `{service}-{action}` (e.g., `google_sheets-upsert-row`, `gmail-send-email`)
    - What's unclear: The exact action string for GBP review reply — it could be `google_business_profile-reply_to_review`, `gbp-reply_review`, or something else
-   - Recommendation: Implementer should check the MCP catalog in the AgenticFlow web UI or run `af node-types get --name mcp_run_action --json` before writing the template
+   - Resolution: Accepted as assumption A1. The naming convention `google_business_profile-reply_to_review` is consistent with verified patterns (`google_sheets-upsert-row`, `gmail-send-email`). Plan 02 Task 1 documents this assumption explicitly and notes it is a one-line fix if wrong. The implementer should verify against the MCP catalog when possible, but this does not block implementation.
 
-2. **`connections.list()` response shape**
+2. **`connections.list()` response shape** (RESOLVED)
    - What we know: SDK method exists, returns `unknown`; the endpoint is `/v1/workspaces/{ws}/app_connections/`
    - What's unclear: Whether the response has `results[]` or `items[]`, and what field names distinguish categories
-   - Recommendation: Implementer calls `af connections list --json` once with a real API key and adjusts the pre-flight check filter accordingly
+   - Resolution: Accepted as assumption A2. The pre-flight check in Plan 01 Task 1 defensively handles both `category` and `category_name` field names, and gracefully falls back (returns without blocking) if the response shape is unexpected. The `isRecordValue` guard and `Array.isArray` check prevent runtime errors regardless of the actual shape. The implementer should call `af connections list --json` once to confirm, but the defensive coding means this does not block implementation.
 
 ---
 
@@ -480,12 +480,12 @@ Step 2.6: SKIPPED — Phase is code and JSON authoring only. No external CLIs or
 | Quick run command | Manual: `af workflow exec --file <workflow.json> --json` |
 | Full suite command | Manual: run all pack entrypoints via `af pack run` |
 
-### Phase Requirements → Test Map
+### Phase Requirements -> Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| ACT-01 | LLM → mcp_run_action workflow executes | smoke | `af pack run --path agent-skills/packs/amazon-seller-pack --entry post-review-to-gbp --json` | ❌ Wave 0 (new file) |
+| ACT-01 | LLM -> mcp_run_action workflow executes | smoke | `af pack run --path agent-skills/packs/amazon-seller-pack --entry post-review-to-gbp --json` | No (new file) |
 | ACT-02 | Pre-flight warns on missing MCP connection | manual | Run workflow exec without MCP connection configured | N/A |
-| ACT-03 | `af connections list --json` returns structured output | smoke | `af connections list --json` | N/A (command exists) |
+| ACT-03 | `af connections list --json` returns structured output | smoke | `af connections list --json` | N/A (command exists, already satisfied) |
 | ACT-04 | Pack workflow JSON is valid | unit | `af pack validate --path agent-skills/packs/amazon-seller-pack --json` | N/A (command exists) |
 | WEB-02 | All webUrl() outputs match WorkflowChef-Web routes | manual | Read WorkflowChef-Web route directories | N/A (done in research) |
 
