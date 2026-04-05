@@ -2844,6 +2844,16 @@ export function createProgram(): Command {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const isConnectionError = /connection|mcp|unauthorized|credentials|not.configured/i.test(message);
+        if (isConnectionError) {
+          const mcpUrl = webUrl("mcp", { workspaceId: opts.workspaceId as string | undefined });
+          fail(
+            "pack_run_connection_error",
+            message,
+            `This may be a missing MCP connection. Add one at: ${mcpUrl}`,
+            { _links: { mcp: mcpUrl } },
+          );
+        }
         fail("pack_run_failed", message);
       }
     });
@@ -3698,6 +3708,16 @@ export function createProgram(): Command {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const isConnectionError = /connection|mcp|unauthorized|credentials|not.configured/i.test(message);
+        if (isConnectionError) {
+          const mcpUrl = webUrl("mcp", { workspaceId: opts.workspaceId as string | undefined });
+          fail(
+            "workflow_exec_connection_error",
+            message,
+            `This may be a missing MCP connection. Add one at: ${mcpUrl}`,
+            { _links: { mcp: mcpUrl } },
+          );
+        }
         fail("workflow_exec_failed", message);
       }
     });
