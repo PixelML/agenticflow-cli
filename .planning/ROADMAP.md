@@ -32,10 +32,17 @@ Plans:
 
 **Requirements:** ISHI-01, ISHI-02, PACK-02
 
+**Plans:** 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md -- Update agenticflow-skill with Phase 1 features and pack catalog
+- [ ] 02-02-PLAN.md -- Create tutor-pack and freelancer-pack with domain-adapted agents
+- [ ] 02-03-PLAN.md -- End-to-end Ishi + AgenticFlow integration validation
+
 **Tasks:**
 1. Read Ishi CLI architecture and find integration points
 2. Create AgenticFlow skill for Ishi (minimal -- CLI does the work)
-3. Build tutor-pack and cafe-pack (company.yaml + skills)
+3. Build tutor-pack and freelancer-pack (company.yaml + skills)
 4. Test: Ishi user with AgenticFlow skill can deploy agents to Paperclip
 5. Autoresearch: Ishi + AgenticFlow end-to-end test
 
