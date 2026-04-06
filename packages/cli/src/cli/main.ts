@@ -112,6 +112,7 @@ const PACK_UNINSTALL_SCHEMA_VERSION = "agenticflow.pack.uninstall.v1";
 const SKILL_LIST_SCHEMA_VERSION = "agenticflow.skill.list.v1";
 const SKILL_SHOW_SCHEMA_VERSION = "agenticflow.skill.show.v1";
 const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
+const AGENT_CLONE_SCHEMA_VERSION = "agenticflow.agent.clone.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Web URL builder — link users to AgenticFlow UI
@@ -3908,6 +3909,62 @@ export function createProgram(): Command {
       } else {
         await run(() => client.agents.getUploadSessionAnonymous(opts.agentId, opts.sessionId));
       }
+    });
+
+  agentCmd
+    .command("clone")
+    .description("Clone a live agent with all config copied (name suffixed with ' [Copy]')")
+    .requiredOption("--agent-id <id>", "Source agent UUID to clone")
+    .option("--json", "Output JSON")
+    .action(async (opts) => {
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRe.test(opts.agentId)) {
+        fail("invalid_option_value", `Invalid --agent-id: "${opts.agentId}". Must be a UUID.`);
+      }
+      const client = buildClient(program.opts());
+      let source: unknown;
+      try {
+        source = await client.agents.get(opts.agentId);
+      } catch (err) {
+        fail("agent_not_found", `Could not fetch agent ${opts.agentId}: ${(err as Error).message}`,
+          "Verify the agent ID exists in your workspace.");
+      }
+      const src = source as Record<string, unknown>;
+      const copyFields = [
+        "description", "visibility", "model", "system_prompt",
+        "model_user_config", "suggest_replies", "suggest_replies_model",
+        "suggest_replies_model_user_config", "suggest_replies_prompt_template",
+        "auto_generate_title", "welcome_message", "suggested_messages",
+        "agent_metadata", "mcp_clients", "knowledge", "task_management_config",
+        "response_format", "file_system_tool_config", "code_execution_tool_config",
+        "skills_config", "recursion_limit", "attachment_config",
+      ];
+      const payload: Record<string, unknown> = {
+        name: `${(src["name"] as string) ?? "Agent"} [Copy]`,
+      };
+      for (const f of copyFields) {
+        if (src[f] !== undefined) payload[f] = src[f];
+      }
+      // Live agent tools have workflow_id directly — copy as-is (per RESEARCH pitfall #1)
+      if (Array.isArray(src["tools"])) payload["tools"] = src["tools"];
+      if (src["project_id"] !== undefined) payload["project_id"] = src["project_id"];
+
+      let cloned: unknown;
+      try {
+        cloned = await client.agents.create(payload as never);
+      } catch (err) {
+        fail("agent_clone_failed", `Failed to create cloned agent: ${(err as Error).message}`);
+      }
+      const c = cloned as Record<string, unknown>;
+      printResult({
+        schema: AGENT_CLONE_SCHEMA_VERSION,
+        source_agent_id: opts.agentId,
+        agent_id: c["id"],
+        name: c["name"],
+        _links: {
+          agent: webUrl("agent", { workspaceId: client.sdk.workspaceId, agentId: c["id"] as string }),
+        },
+      });
     });
 
   // ═════════════════════════════════════════════════════════════════
