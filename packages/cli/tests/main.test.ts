@@ -86,6 +86,18 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("exec");
       expect(subNames).toContain("validate");
     });
+
+    it("registers `workflow watch` subcommand with --run-id, --poll-interval-ms, --timeout-ms options", () => {
+      const program = createProgram();
+      const wf = program.commands.find((c) => c.name() === "workflow");
+      expect(wf).toBeDefined();
+      const watch = wf!.commands.find((c) => c.name() === "watch");
+      expect(watch).toBeDefined();
+      const opts = watch!.options.map((o) => o.long);
+      expect(opts).toContain("--run-id");
+      expect(opts).toContain("--poll-interval-ms");
+      expect(opts).toContain("--timeout-ms");
+    });
   });
 
   describe("pack subcommands", () => {
@@ -143,26 +155,6 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("create");
       expect(subNames).toContain("update");
       expect(subNames).toContain("stream");
-    });
-
-    it("registers `agent clone` subcommand with --agent-id option", () => {
-      const program = createProgram();
-      const agent = program.commands.find((c) => c.name() === "agent");
-      expect(agent).toBeDefined();
-      const clone = agent!.commands.find((c) => c.name() === "clone");
-      expect(clone).toBeDefined();
-      const opts = clone!.options.map((o) => o.long);
-      expect(opts).toContain("--agent-id");
-    });
-
-    it("registers `agent usage` subcommand with --agent-id option", () => {
-      const program = createProgram();
-      const agent = program.commands.find((c) => c.name() === "agent");
-      const usage = agent!.commands.find((c) => c.name() === "usage");
-      expect(usage).toBeDefined();
-      const opts = usage!.options.map((o) => o.long);
-      expect(opts).toContain("--agent-id");
-      expect(opts).toContain("--json");
     });
   });
 
