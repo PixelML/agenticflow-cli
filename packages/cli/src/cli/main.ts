@@ -11,6 +11,7 @@ import { resolve, dirname, join, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
 
 import {
   createClient,
@@ -113,6 +114,7 @@ const SKILL_LIST_SCHEMA_VERSION = "agenticflow.skill.list.v1";
 const SKILL_SHOW_SCHEMA_VERSION = "agenticflow.skill.show.v1";
 const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 const WORKFLOW_WATCH_SCHEMA_VERSION = "agenticflow.workflow.watch.v1";
+const AGENT_CHAT_SCHEMA_VERSION = "agenticflow.agent.chat.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Web URL builder — link users to AgenticFlow UI
@@ -3969,6 +3971,67 @@ export function createProgram(): Command {
         await run(() => client.agents.getUploadSession(opts.agentId, opts.sessionId));
       } else {
         await run(() => client.agents.getUploadSessionAnonymous(opts.agentId, opts.sessionId));
+      }
+    });
+
+  agentCmd
+    .command("chat")
+    .description("Interactive multi-turn streaming chat with an agent (Ctrl+C to exit)")
+    .requiredOption("--agent-id <id>", "Agent UUID to chat with")
+    .option("--thread-id <id>", "Resume an existing thread (UUID)")
+    .action(async (opts) => {
+      const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRe.test(opts.agentId as string)) {
+        fail("invalid_option_value", `Invalid --agent-id: "${opts.agentId}". Must be a UUID.`);
+      }
+      if (opts.threadId && !uuidRe.test(opts.threadId as string)) {
+        fail("invalid_option_value", `Invalid --thread-id: "${opts.threadId}". Must be a UUID.`);
+      }
+      const client = buildClient(program.opts());
+
+      let currentThreadId: string = (opts.threadId as string | undefined) ?? randomUUID();
+
+      process.stderr.write(`Chat with agent ${opts.agentId} (thread ${currentThreadId}). Press Ctrl+C to exit.\n`);
+
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const askQuestion = (prompt: string): Promise<string> =>
+        new Promise((resolve) => rl.question(prompt, resolve));
+
+      rl.on("SIGINT", () => {
+        process.stderr.write("\n[Chat ended]\n");
+        rl.close();
+        process.exit(0);
+      });
+
+      // AGENT_CHAT_SCHEMA_VERSION reserved for future --json line output
+      void AGENT_CHAT_SCHEMA_VERSION;
+
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const input = await askQuestion("You: ");
+          if (!input.trim()) continue;
+
+          try {
+            const stream = await client.agents.stream(opts.agentId as string, {
+              id: currentThreadId,
+              messages: [{ role: "user", content: input }],
+            });
+            process.stdout.write("Agent: ");
+            stream.on("textDelta", (chunk: string) => {
+              process.stdout.write(chunk);
+            });
+            await stream.process();
+            process.stdout.write("\n");
+            // Per RESEARCH pitfall #2: stream.threadId is only valid AFTER process() resolves
+            if (stream.threadId) currentThreadId = stream.threadId;
+          } catch (err) {
+            process.stderr.write(`[Error: ${(err as Error).message}]\n`);
+            // Continue loop — do not exit on transient errors
+          }
+        }
+      } finally {
+        rl.close();
       }
     });
 
