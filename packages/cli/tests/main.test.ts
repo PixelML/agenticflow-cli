@@ -154,6 +154,16 @@ describe("CLI Main (Commander integration)", () => {
       const opts = clone!.options.map((o) => o.long);
       expect(opts).toContain("--agent-id");
     });
+
+    it("registers `agent usage` subcommand with --agent-id option", () => {
+      const program = createProgram();
+      const agent = program.commands.find((c) => c.name() === "agent");
+      const usage = agent!.commands.find((c) => c.name() === "usage");
+      expect(usage).toBeDefined();
+      const opts = usage!.options.map((o) => o.long);
+      expect(opts).toContain("--agent-id");
+      expect(opts).toContain("--json");
+    });
   });
 
   describe("node-types subcommands", () => {
