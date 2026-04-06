@@ -51,11 +51,28 @@ Plans:
 
 ## Phase 3: Platform Depth
 
-**Goal:** Deeper AgenticFlow platform integration -- cost tracking, monitoring, cloning.
+**Goal:** Deeper AgenticFlow platform integration -- cost tracking, monitoring, cloning, interactive chat. Four new CLI commands (`agent clone`, `agent usage`, `workflow watch`, `agent chat`) extending existing primitives without new external dependencies.
 
 **Requirements:** PLAT-01, PLAT-02, PLAT-03, PLAT-04
 
 **Depends on:** Phase 1 (action workflows established)
 
+**Plans:** 4 plans
+
+Plans:
+- [ ] 03-01-PLAN.md -- PLAT-04: `af agent clone` (full-config clone with [Copy] suffix)
+- [ ] 03-02-PLAN.md -- PLAT-02: `af agent usage` (client-side JSONL token tracking)
+- [ ] 03-03-PLAN.md -- PLAT-03: `af workflow watch` (streaming run status polling)
+- [ ] 03-04-PLAN.md -- PLAT-01: `af agent chat` (interactive streaming readline loop)
+
+**Tasks:**
+1. PLAT-04: Add `agent clone` reusing copyFields from template-duplicate (live-agent source)
+2. PLAT-02: Add `appendFileSync` import, hook `agent run` to write usage.jsonl, add `agent usage` aggregator
+3. PLAT-03: Add `workflow watch` reusing `extractRunStatus` / `isTerminalRunStatus` polling helpers
+4. PLAT-01: Add `agent chat` with `agents.stream()` + readline loop + thread continuity
+
+**Success criteria:** Users can clone agents, monitor workflow runs, see local token estimates per agent, and have multi-turn streaming conversations — all via single CLI commands matching existing output conventions.
+
 ---
 *Roadmap created: 2026-04-05*
+*Phase 3 planned: 2026-04-06*
