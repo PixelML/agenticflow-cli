@@ -156,6 +156,16 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("update");
       expect(subNames).toContain("stream");
     });
+
+    it("registers `agent chat` subcommand with --agent-id and --thread-id options", () => {
+      const program = createProgram();
+      const agent = program.commands.find((c) => c.name() === "agent");
+      const chat = agent!.commands.find((c) => c.name() === "chat");
+      expect(chat).toBeDefined();
+      const opts = chat!.options.map((o) => o.long);
+      expect(opts).toContain("--agent-id");
+      expect(opts).toContain("--thread-id");
+    });
   });
 
   describe("node-types subcommands", () => {
