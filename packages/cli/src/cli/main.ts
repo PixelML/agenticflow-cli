@@ -6,7 +6,7 @@
  */
 
 import { Command } from "commander";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, unlinkSync, readdirSync } from "node:fs";
 import { resolve, dirname, join, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -113,6 +113,7 @@ const SKILL_LIST_SCHEMA_VERSION = "agenticflow.skill.list.v1";
 const SKILL_SHOW_SCHEMA_VERSION = "agenticflow.skill.show.v1";
 const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 const AGENT_CLONE_SCHEMA_VERSION = "agenticflow.agent.clone.v1";
+const AGENT_USAGE_SCHEMA_VERSION = "agenticflow.agent.usage.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Web URL builder — link users to AgenticFlow UI
@@ -731,6 +732,28 @@ function describeCommand(cmd: Command, depth = 0): Record<string, unknown> {
     descriptor["subcommands"] = cmd.commands.map((sub) => describeCommand(sub, depth + 1));
   }
   return descriptor;
+}
+
+// --- Usage tracking helpers ---
+function usageFilePath(): string {
+  const dir = resolve(homedir(), ".agenticflow");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return join(dir, "usage.jsonl");
+}
+
+function recordAgentRunUsage(agentId: string, threadId: string | undefined, responseText: string): void {
+  try {
+    const record = {
+      ts: new Date().toISOString(),
+      agent_id: agentId,
+      thread_id: threadId ?? null,
+      response_chars: responseText.length,
+      tokens_estimated: Math.ceil(responseText.length / 4),
+    };
+    appendFileSync(usageFilePath(), JSON.stringify(record) + "\n", "utf-8");
+  } catch {
+    // Best-effort; never fail the run because tracking failed
+  }
 }
 
 // --- Auth helpers ---
@@ -3858,6 +3881,7 @@ export function createProgram(): Command {
             thread: webUrl("thread", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId, threadId: result.threadId }),
           },
         });
+        recordAgentRunUsage(opts.agentId, result.threadId, result.response ?? "");
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         fail("agent_run_failed", message);
@@ -3964,6 +3988,45 @@ export function createProgram(): Command {
         _links: {
           agent: webUrl("agent", { workspaceId: client.sdk.workspaceId, agentId: c["id"] as string }),
         },
+      });
+    });
+
+  agentCmd
+    .command("usage")
+    .description("Show local token usage estimates accumulated from `af agent run`")
+    .option("--agent-id <id>", "Filter to a single agent")
+    .option("--json", "Output JSON")
+    .action((opts) => {
+      const path = usageFilePath();
+      if (!existsSync(path)) {
+        printResult({
+          schema: AGENT_USAGE_SCHEMA_VERSION,
+          agents: [],
+          total_tokens_estimated: 0,
+        });
+        return;
+      }
+      const lines = readFileSync(path, "utf-8").split("\n").filter((l) => l.trim().length > 0);
+      const byAgent = new Map<string, { agent_id: string; runs: number; total_response_chars: number; total_tokens_estimated: number }>();
+      for (const line of lines) {
+        try {
+          const r = JSON.parse(line) as { agent_id: string; response_chars: number; tokens_estimated: number };
+          if (opts.agentId && r.agent_id !== opts.agentId) continue;
+          const cur = byAgent.get(r.agent_id) ?? { agent_id: r.agent_id, runs: 0, total_response_chars: 0, total_tokens_estimated: 0 };
+          cur.runs += 1;
+          cur.total_response_chars += r.response_chars ?? 0;
+          cur.total_tokens_estimated += r.tokens_estimated ?? 0;
+          byAgent.set(r.agent_id, cur);
+        } catch {
+          // skip malformed line
+        }
+      }
+      const agents = Array.from(byAgent.values());
+      const total = agents.reduce((s, a) => s + a.total_tokens_estimated, 0);
+      printResult({
+        schema: AGENT_USAGE_SCHEMA_VERSION,
+        agents,
+        total_tokens_estimated: total,
       });
     });
 
