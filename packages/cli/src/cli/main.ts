@@ -112,6 +112,7 @@ const PACK_UNINSTALL_SCHEMA_VERSION = "agenticflow.pack.uninstall.v1";
 const SKILL_LIST_SCHEMA_VERSION = "agenticflow.skill.list.v1";
 const SKILL_SHOW_SCHEMA_VERSION = "agenticflow.skill.show.v1";
 const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
+const WORKFLOW_WATCH_SCHEMA_VERSION = "agenticflow.workflow.watch.v1";
 
 // ═══════════════════════════════════════════════════════════════════
 // Web URL builder — link users to AgenticFlow UI
@@ -3679,6 +3680,67 @@ export function createProgram(): Command {
         limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
         offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
       }));
+    });
+
+  workflowCmd
+    .command("watch")
+    .description("Stream workflow run status changes until terminal state.")
+    .requiredOption("--run-id <id>", "Workflow run ID to watch")
+    .option("--poll-interval-ms <ms>", "Poll interval in ms", "2000")
+    .option("--timeout-ms <ms>", "Max time to wait in ms", "600000")
+    .option("--json", "Output JSON")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const pollIntervalMs = parseOptionalInteger(opts.pollIntervalMs as string | undefined, "--poll-interval-ms", 1) ?? 2000;
+      const timeoutMs = parseOptionalInteger(opts.timeoutMs as string | undefined, "--timeout-ms", 1) ?? 600000;
+      const runId = opts.runId as string;
+      if (!runId || runId.trim() === "") {
+        fail("invalid_option_value", "--run-id is required and must be non-empty");
+      }
+      const client = buildClient(parentOpts);
+
+      let lastStatus: string | null = null;
+      let finalStatus: string | null = null;
+      const startedAt = Date.now();
+
+      while (true) {
+        let run: unknown;
+        try {
+          run = await client.workflows.getRun(runId);
+        } catch (err) {
+          fail("workflow_run_fetch_failed", `Failed to fetch run ${runId}: ${(err as Error).message}`);
+        }
+        const status = extractRunStatus(run);
+        if (status && status !== lastStatus) {
+          process.stdout.write(JSON.stringify({
+            ts: new Date().toISOString(),
+            run_id: runId,
+            status,
+          }) + "\n");
+          lastStatus = status;
+        }
+        if (status && isTerminalRunStatus(status)) {
+          finalStatus = status;
+          break;
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          fail("workflow_watch_timeout", `Run ${runId} did not reach terminal state within ${timeoutMs}ms`);
+        }
+        await sleep(pollIntervalMs);
+      }
+
+      const failed = finalStatus ? isFailedRunStatus(finalStatus) : false;
+      printResult({
+        schema: WORKFLOW_WATCH_SCHEMA_VERSION,
+        run_id: runId,
+        final_status: finalStatus,
+        success: !failed,
+        _links: {
+          run: webUrl("workflow-run", { workspaceId: client.sdk.workspaceId, runId }),
+        },
+      });
+      if (failed) process.exitCode = 1;
+      // Do NOT call process.exit() — avoids stdout flush race condition
     });
 
   // ═════════════════════════════════════════════════════════════════
