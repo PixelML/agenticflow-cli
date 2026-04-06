@@ -144,6 +144,16 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("update");
       expect(subNames).toContain("stream");
     });
+
+    it("registers `agent clone` subcommand with --agent-id option", () => {
+      const program = createProgram();
+      const agent = program.commands.find((c) => c.name() === "agent");
+      expect(agent).toBeDefined();
+      const clone = agent!.commands.find((c) => c.name() === "clone");
+      expect(clone).toBeDefined();
+      const opts = clone!.options.map((o) => o.long);
+      expect(opts).toContain("--agent-id");
+    });
   });
 
   describe("node-types subcommands", () => {
