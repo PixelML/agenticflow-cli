@@ -412,17 +412,19 @@ rl.question("prompt text", (answer) => { /* handle */ rl.close(); });
 | A2 | Live agent `tools` array items have `workflow_id`, `run_behavior`, `description`, `timeout`, `input_config` fields copyable as-is | Architecture Patterns: PLAT-04 | If platform API returns tools in a different shape, clone payload will be malformed; implementer must verify against a real `agents.get()` response |
 | A3 | `stream.threadId` from `AgentStream` correctly persists across the readline loop (i.e., using the same UUID for follow-up messages creates actual thread continuity) | Architecture Patterns: PLAT-01 | If the platform treats a reused UUID as a different thread, chat history won't persist; Phase 2 tests confirm thread continuity via `af agent run --thread-id` which uses the same mechanism |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Live agent tools field shape for clone**
    - What we know: Template duplicate uses `buildAgentCreatePayloadFromTemplate` which strips `workflow_template_id` and remaps to `workflow_id`. Live agents already have `workflow_id`.
    - What's unclear: Whether `agents.get()` returns tools with the exact same field names expected by `agents.create()` — e.g., is it `tools[].workflow_id` or `tools[].workflow` (nested object)?
    - Recommendation: Implementer should call `af agent get --agent-id X --json` against a real agent and inspect the `tools` array shape before writing the clone payload builder. Add a comment in code with verified field names.
+   - RESOLVED: Plan 03-01 Task 2 copies tools array as-is (`src["tools"]`), using `workflow_id` directly per RESEARCH pitfall #1. Implementer is instructed to verify against a real `agents.get()` response and add a comment with verified field names.
 
 2. **`af workflow watch` — does it need `--workflow-id` in addition to `--run-id`?**
    - What we know: `client.workflows.getRun(runId)` fetches a run by run ID alone (no workflow ID needed, per workflows.ts line 71).
    - What's unclear: Whether output `_links` should include a link to the parent workflow (which would require knowing `workflow_id`).
    - Recommendation: Accept `--run-id` as the primary required option. Optionally accept `--workflow-id` for richer `_links` output. Make `--workflow-id` optional.
+   - RESOLVED: `--workflow-id` is omitted. `client.workflows.getRun(runId)` requires only the run ID. If `webUrl("workflowRun")` key does not exist, `_links.run` is omitted. No `--workflow-id` option needed.
 
 ## Environment Availability
 
