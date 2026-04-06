@@ -37,8 +37,8 @@ Plans:
 Plans:
 - [x] 02-01-PLAN.md -- Update agenticflow-skill with Phase 1 features and pack catalog
 - [x] 02-02-PLAN.md -- Create tutor-pack and freelancer-pack with domain-adapted agents
-- [ ] 02-03-PLAN.md -- End-to-end Ishi + AgenticFlow integration validation
-- [ ] 02-04-PLAN.md -- Gap closure: fix skill trigger, pack install format, pack summaries, flag docs
+- [x] 02-03-PLAN.md -- End-to-end Ishi + AgenticFlow integration validation
+- [x] 02-04-PLAN.md -- Gap closure: fix skill trigger, pack install format, pack summaries, flag docs
 
 **Tasks:**
 1. Read Ishi CLI architecture and find integration points
