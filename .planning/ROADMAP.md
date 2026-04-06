@@ -60,10 +60,10 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 03-01-PLAN.md -- PLAT-04: `af agent clone` (full-config clone with [Copy] suffix)
-- [ ] 03-02-PLAN.md -- PLAT-02: `af agent usage` (client-side JSONL token tracking)
-- [ ] 03-03-PLAN.md -- PLAT-03: `af workflow watch` (streaming run status polling)
-- [ ] 03-04-PLAN.md -- PLAT-01: `af agent chat` (interactive streaming readline loop)
+- [x] 03-01-PLAN.md -- PLAT-04: `af agent clone` (full-config clone with [Copy] suffix)
+- [x] 03-02-PLAN.md -- PLAT-02: `af agent usage` (client-side JSONL token tracking)
+- [x] 03-03-PLAN.md -- PLAT-03: `af workflow watch` (streaming run status polling)
+- [x] 03-04-PLAN.md -- PLAT-01: `af agent chat` (interactive streaming readline loop)
 
 **Tasks:**
 1. PLAT-04: Add `agent clone` reusing copyFields from template-duplicate (live-agent source)
