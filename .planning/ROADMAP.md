@@ -38,9 +38,9 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
   3. Running `af agent run --json` when truncated returns `{ truncated: true, response: "...", hint: "..." }` — AI agents can detect and act on truncation programmatically
   4. Using `af agent chat` when a reply is cut short displays a truncation warning with a continuation hint inline — the user is never left wondering if the response was complete
 **Plans**: 3 plans
-  - [ ] 04-01-PLAN.md — SDK: detect finishReason length, expose AgentRunResult.status truncated (Wave 0 stubs + A1 live validation)
-  - [ ] 04-02-PLAN.md — CLI: af agent run truncation branch (ACT-07/08/09, --json + human, exit 1)
-  - [ ] 04-03-PLAN.md — CLI: af agent chat inline stderr truncation warning (CHAT-01)
+  - [x] 04-01-PLAN.md — SDK: detect finishReason length, expose AgentRunResult.status truncated (Wave 0 stubs + A1 live validation)
+  - [x] 04-02-PLAN.md — CLI: af agent run truncation branch (ACT-07/08/09, --json + human, exit 1)
+  - [x] 04-03-PLAN.md — CLI: af agent chat inline stderr truncation warning (CHAT-01)
 
 ### Phase 5: Platform Skill/Pack Catalog
 **Goal**: Users can browse what the AgenticFlow platform offers — skills and pack templates — without leaving the CLI
