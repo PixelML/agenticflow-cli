@@ -50,7 +50,10 @@ Full details: `.planning/milestones/v1.0-ROADMAP.md`
   1. Running `af skill list --platform` shows platform skills with an installed checkmark for skills already present locally — existing `af skill list` (no flag) behavior is unchanged
   2. Running `af pack search` (with optional query) shows matching platform pack templates as a browsable list
   3. Both `af skill list --platform` and `af pack search` accept `--limit` to cap results and `--json` to return machine-parseable output with `schema` and `_links` fields
-**Plans**: TBD
+**Plans**: 3 plans
+  - [x] 05-01-PLAN.md — platform-catalog.ts module (GitHub PixelML/skills fetch + rate-limit handling)
+  - [x] 05-02-PLAN.md — af skill list --platform flag (installed checkmark + --json + --limit)
+  - [x] 05-03-PLAN.md — af pack search [query] subcommand (--json + --limit)
 **UI hint**: no
 
 ### Phase 6: Company Export/Import
