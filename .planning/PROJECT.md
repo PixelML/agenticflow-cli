@@ -13,6 +13,7 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 ## Current State
 
 **v1.0 shipped 2026-04-06.** All 3 phases complete, 11 plans delivered.
+**v1.5 Phase 6 complete 2026-04-07.** `af company export/import` — portable YAML workspace snapshots with round-trip fidelity, dry-run preview, and idempotent upsert.
 
 | Version | Key Features |
 |---------|-------------|
@@ -71,7 +72,7 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 - [ ] **ACT-07**: Token limit handling — detect truncated responses, auto-split or suggest follow-up
 - [ ] **ECO-01**: Published first-party skills in `af skill list`
 - [ ] **ECO-02**: Pack marketplace browsing from CLI
-- [ ] **ECO-03**: Company import/export format
+- ✓ **ECO-03**: Company import/export format — Validated in Phase 6: Company Export/Import
 - [ ] **QA-03**: Autoresearch score ≥ 8.5/10 *(partial — achieved 8.0–8.7; refine agent composition)*
 
 ### Out of Scope
