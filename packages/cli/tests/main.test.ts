@@ -30,6 +30,13 @@ describe("CLI Main (Commander integration)", () => {
       expect(commandNames).toContain("node-types");
       expect(commandNames).toContain("connections");
       expect(commandNames).toContain("uploads");
+      expect(commandNames).toContain("company");
+    });
+
+    it("registers the company command group (Phase 6)", () => {
+      const program = createProgram();
+      const commandNames = program.commands.map((c) => c.name());
+      expect(commandNames).toContain("company");
     });
 
     it("has global options", () => {
