@@ -2892,6 +2892,7 @@ export function createProgram(): Command {
     .option("--json", "Output JSON")
     .option("--limit <n>", "Cap results to first N entries", (v) => parseInt(v, 10))
     .action(async (query: string | undefined, opts: { json?: boolean; limit?: number }) => {
+      const parentOpts = program.opts();
       try {
         const allPacks = await fetchPlatformPacks({ token: process.env.GITHUB_TOKEN });
         const q = (query ?? "").trim().toLowerCase();
@@ -2907,7 +2908,7 @@ export function createProgram(): Command {
           typeof opts.limit === "number" && opts.limit > 0
             ? filtered.slice(0, opts.limit)
             : filtered;
-        if (opts.json) {
+        if (opts.json || parentOpts.json) {
           printJson({
             schema: "agenticflow.pack.search.v1",
             count: limited.length,
