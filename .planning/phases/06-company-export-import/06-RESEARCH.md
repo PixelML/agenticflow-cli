@@ -478,17 +478,11 @@ const cliVersion = program.version();          // for _source block
 | A2 | The API default limit for agents.list() may be less than the total agent count — pagination may be needed | Pitfall 1 | If uncapped, no pagination logic needed; if capped, first export is incomplete |
 | A3 | `client.sdk.projectId` is always available after `buildClient()` when authenticated | Architecture Patterns | If null for some auth flows, import create path needs a fallback error message |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **agents.list() Response Shape**
-   - What we know: SDK returns `Promise<unknown>` typed; from bootstrap code (line 1025) it's treated as `unknown[]` via `as unknown[]` — but this suggests the raw response might be an array, not `{ agents: [] }`
-   - What's unclear: Is the list response a flat array or a paginated envelope `{ agents, total, ... }`?
-   - Recommendation: Implementer should call the API once with `--json` and inspect the actual response shape. Check main.ts line 1025 (`await client.agents.list({ limit: 10 })) as unknown[]`) — suggests it may be directly an array.
+1. **agents.list() Response Shape** — RESOLVED: Plans handle both flat array and `{ agents: [] }` envelope via `extractAgentsFromListResponse()`. Both shapes are tested in Plan 01 Task 1 (Test 6 in behavior block). No runtime verification needed before execution.
 
-2. **agents.list() Total Count / Pagination**
-   - What we know: SDK accepts `limit` and `offset` options
-   - What's unclear: Does the API return all agents with no limit, or does it page at some N?
-   - Recommendation: Add a loop with `offset` increments in `exportCompany()`, fetching until `result.length < limit` indicates the last page.
+2. **agents.list() Total Count / Pagination** — RESOLVED: Use `limit: 1000` as a high-water mark for v1.5 (documented assumption A2). This is acceptable for workspace-scale agent counts. Pagination loop is documented as a future improvement.
 
 ## Environment Availability
 
