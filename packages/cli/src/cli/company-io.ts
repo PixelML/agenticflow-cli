@@ -1,5 +1,9 @@
 import { parse, stringify } from "yaml";
 import type { AgenticFlowClient } from "@pixelml/agenticflow-sdk";
+import {
+  validateAgentCreatePayload,
+  validateAgentUpdatePayload,
+} from "./local-validation.js";
 
 /**
  * The 11 portable agent fields per D-01.
@@ -111,3 +115,150 @@ export async function exportCompany(
 
 /** Re-export yaml helpers so callers (main.ts) use the same package consistently. */
 export { parse as parseYaml, stringify as stringifyYaml };
+
+// ---------------------------------------------------------------------------
+// importCompany — Plan 02 (ECO-06)
+// ---------------------------------------------------------------------------
+
+export interface CompanyImportResult {
+  schema: "agenticflow.company.import.v1";
+  created: string[];   // agent names
+  updated: string[];   // agent names
+}
+
+export interface CompanyImportDryRunResult {
+  schema: "agenticflow.company.import.dry-run.v1";
+  would_create: string[];
+  would_update: Array<{ name: string; changed_fields: string[] }>;
+}
+
+export interface CompanyImportOptions {
+  dryRun?: boolean;
+}
+
+/**
+ * Compare exported entry vs existing agent record.
+ * Returns names of fields that differ.
+ * Uses JSON.stringify for stable comparison of nested arrays/objects (Pitfall 6).
+ */
+export function changedFields(
+  exported: CompanyExportAgentEntry,
+  existing: Record<string, unknown>,
+): string[] {
+  const changed: string[] = [];
+  for (const field of COMPANY_EXPORT_FIELDS) {
+    const a = (exported as unknown as Record<string, unknown>)[field];
+    const b = existing[field];
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      changed.push(field);
+    }
+  }
+  return changed;
+}
+
+/**
+ * Import a CompanyExportSchema into the current workspace.
+ * - Match key: agent name (D-10)
+ * - Existing → update (PUT all 11 fields, full replace per D-11)
+ * - Missing → create (11 fields + project_id from auth)
+ * - dryRun: true → zero writes; returns CompanyImportDryRunResult with diff
+ */
+export async function importCompany(
+  client: AgenticFlowClient,
+  schema: CompanyExportSchema,
+  opts: CompanyImportOptions = {},
+): Promise<CompanyImportResult | CompanyImportDryRunResult> {
+  // Schema version guard (T-06-04)
+  if (schema.schema !== "agenticflow.company.export.v1") {
+    throw new CompanyIOError(
+      `Unsupported schema version: ${String(schema.schema)} (expected agenticflow.company.export.v1)`,
+      "schema_version_mismatch",
+    );
+  }
+
+  const projectId = client.sdk.projectId ?? undefined;
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const existingAgents = extractAgentsFromListResponse(raw);
+
+  // Build name → existing agent map for O(1) lookup (D-10)
+  const existingByName = new Map<string, Record<string, unknown>>();
+  for (const agent of existingAgents) {
+    const name = agent["name"];
+    if (typeof name === "string") existingByName.set(name, agent);
+  }
+
+  // Classify each exported agent as create or update
+  const toCreate: CompanyExportAgentEntry[] = [];
+  const toUpdate: Array<{
+    entry: CompanyExportAgentEntry;
+    existing: Record<string, unknown>;
+    changed: string[];
+  }> = [];
+
+  for (const entry of schema.agents) {
+    const existing = existingByName.get(entry.name);
+    if (existing) {
+      toUpdate.push({ entry, existing, changed: changedFields(entry, existing) });
+    } else {
+      toCreate.push(entry);
+    }
+  }
+
+  // Dry-run: return diff, zero writes (D-08/D-09)
+  if (opts.dryRun) {
+    return {
+      schema: "agenticflow.company.import.dry-run.v1",
+      would_create: toCreate.map((e) => e.name),
+      would_update: toUpdate.map((u) => ({ name: u.entry.name, changed_fields: u.changed })),
+    };
+  }
+
+  // Execute creates
+  const createdNames: string[] = [];
+  for (const entry of toCreate) {
+    if (!projectId) {
+      throw new CompanyIOError(
+        `Cannot create agent "${entry.name}": no project_id in auth context`,
+        "missing_project_id",
+      );
+    }
+    const payload = { ...entry, project_id: projectId } as Record<string, unknown>;
+    const issues = validateAgentCreatePayload(payload);
+    if (issues.length > 0) {
+      throw new CompanyIOError(
+        `Validation failed for agent "${entry.name}": ${JSON.stringify(issues)}`,
+        "validation_failed",
+      );
+    }
+    await client.agents.create(payload);
+    createdNames.push(entry.name);
+  }
+
+  // Execute updates (full PUT replace per D-11)
+  const updatedNames: string[] = [];
+  for (const { entry, existing } of toUpdate) {
+    const id = existing["id"];
+    if (typeof id !== "string") {
+      throw new CompanyIOError(
+        `Cannot update agent "${entry.name}": existing record has no id`,
+        "missing_existing_id",
+      );
+    }
+    const payload = { ...(entry as unknown as Record<string, unknown>) };
+    const issues = validateAgentUpdatePayload(payload);
+    if (issues.length > 0) {
+      throw new CompanyIOError(
+        `Validation failed for agent "${entry.name}": ${JSON.stringify(issues)}`,
+        "validation_failed",
+      );
+    }
+    await client.agents.update(id, payload);
+    updatedNames.push(entry.name);
+  }
+
+  return {
+    schema: "agenticflow.company.import.v1",
+    created: createdNames,
+    updated: updatedNames,
+  };
+}
