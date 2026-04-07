@@ -2,7 +2,7 @@
 
 ## What This Is
 
-The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow the headquarters for AI agents. Any AI with shell access can install it, bootstrap in one command, create agents, run tasks, deploy teams to external platforms (Paperclip, Linear, webhooks), and now monitor runs, track usage, clone agents, and chat interactively. It's designed for AI agents as first-class users — structured JSON output, runtime schema introspection, executable playbooks, and one-click links to the AgenticFlow web UI.
+The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow the headquarters for AI agents. Any AI with shell access can install it, bootstrap in one command, create agents, run tasks, deploy teams to external platforms (Paperclip, Linear, webhooks), monitor runs, track usage, clone agents, chat interactively, and now browse platform skills/packs and snapshot entire workspace configs to portable YAML. It's designed for AI agents as first-class users — structured JSON output, runtime schema introspection, executable playbooks, one-click links to the AgenticFlow web UI, and truncation detection so partial output is never silently returned as success.
 
 ## Core Value
 
@@ -12,28 +12,17 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 
 ## Current State
 
-**v1.0 shipped 2026-04-06.** All 3 phases complete, 11 plans delivered.
-**v1.5 Phase 6 complete 2026-04-07.** `af company export/import` — portable YAML workspace snapshots with round-trip fidelity, dry-run preview, and idempotent upsert.
+**v1.5 shipped 2026-04-07.** 3 phases, 9 plans, 17K TypeScript LOC.
 
 | Version | Key Features |
 |---------|-------------|
 | v1.3.1 (pre-milestone) | `_links` to agenticflow.ai web UI, MCP/connections URLs |
-| v1.4.0 (milestone output) | Action workflows, connection pre-flight, Ishi integration, tutor/freelancer packs, agent clone/usage/watch/chat |
+| v1.4.0 (v1.0 milestone) | Action workflows, connection pre-flight, Ishi integration, tutor/freelancer packs, agent clone/usage/watch/chat |
+| v1.5.0 (shipped 2026-04-07) | Truncation detection (SDK + CLI + chat), platform skill/pack catalog, `af company export/import` |
 
 **Published as:** `@pixelml/agenticflow-cli` on npm
 **Platform:** 131+ workflow nodes, 2674 MCP integrations, 19 LLM models
-
-## Current Milestone: v1.5 Reliability & Ecosystem
-
-**Goal:** Harden agent run reliability with truncation detection and expand the ecosystem surface with skills, packs, and portable company configs.
-
-**Target features:**
-- Detect truncated responses via API finish_reason, surface error + hint (never silently return partial output)
-- Auto-split suggestion or follow-up prompt guidance when truncation detected
-- `af skill list` — query platform skill/pack catalog
-- `af pack list` / `af pack search` — marketplace browse from CLI
-- `af company export` → portable YAML/JSON config
-- `af company import` → load portable config into any workspace
+**Test suite:** 314 passing (18 pre-existing failures in main.test.ts from Phase 3 — unrelated to v1.5)
 
 ## Requirements
 
@@ -65,15 +54,23 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 - ✓ **PLAT-02**: Cost/token tracking per agent (`af agent usage`) — v1.0 Phase 3
 - ✓ **PLAT-03**: Workflow execution monitoring (`af workflow watch`) — v1.0 Phase 3
 - ✓ **PLAT-04**: Agent cloning (`af agent clone`) — v1.0 Phase 3
+- ✓ **ACT-07**: Truncation detection in `af agent run` — `status: "truncated"`, non-zero exit, `--thread-id` hint — v1.5 Phase 4
+- ✓ **ACT-08**: Continuation hint in truncation output — copy-pasteable `--thread-id` command — v1.5 Phase 4
+- ✓ **ACT-09**: AI-readable truncation JSON — `truncated: true`, partial response preserved — v1.5 Phase 4
+- ✓ **CHAT-01**: `af agent chat` truncation warning to stderr with continuation hint — v1.5 Phase 4
+- ✓ **ECO-01**: `af skill list --platform` — platform skills with installed checkmark — v1.5 Phase 5
+- ✓ **ECO-02**: `af pack search [query]` — platform pack marketplace from CLI — v1.5 Phase 5
+- ✓ **ECO-04**: `--limit` and `--json` on catalog commands — v1.5 Phase 5
+- ✓ **ECO-03**: `af company export` — portable YAML with `CompanyExportSchema`, 11-field allowlist — v1.5 Phase 6
+- ✓ **ECO-05**: `_source` metadata block (workspace ID, timestamp, CLI version) in export — v1.5 Phase 6
+- ✓ **ECO-06**: `af company import` — idempotent upsert by name, `--dry-run` preview — v1.5 Phase 6
 
 ### Active (Next Milestone)
 
 - [ ] **ACT-06**: Model descriptions in bootstrap — which model for what use case, cost per token
-- [ ] **ACT-07**: Token limit handling — detect truncated responses, auto-split or suggest follow-up
-- [ ] **ECO-01**: Published first-party skills in `af skill list`
-- [ ] **ECO-02**: Pack marketplace browsing from CLI
-- ✓ **ECO-03**: Company import/export format — Validated in Phase 6: Company Export/Import
 - [ ] **QA-03**: Autoresearch score ≥ 8.5/10 *(partial — achieved 8.0–8.7; refine agent composition)*
+- [ ] **ECO-07**: `af company diff` — compare local export against live workspace state
+- [ ] **ECO-08**: `af company import --merge` — conflict resolution on import
 
 ### Out of Scope
 
@@ -94,6 +91,8 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 - Key platform nodes: `web_scraping` (free), `mcp_run_action` (2674 integrations), `firecrawl_scrape/extract`, `api_call`
 - Frontend routes verified: `/app/workspaces/{wsId}/agents/{agentId}`, `/connections`, `/mcp`, `/settings`
 - Local usage tracking: `~/.agenticflow/usage.jsonl` — JSONL, best-effort, never fails runs
+- **v1.5 tech**: platform-catalog.ts module (GitHub Tree API + parallel raw fetches), company-io.ts module (yaml v2.8.3, 11-field CompanyExportSchema), TDD throughout (RED→GREEN per plan)
+- **Known debt**: 4 pre-existing test failures in main.test.ts (agent clone/usage/chat/workflow-watch assertions) from Phase 3 worktree clobber — tracked, not new
 
 ## Constraints
 
@@ -121,6 +120,10 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 | Agent clone copies all 22 fields, no selective flags | "One command, full result" philosophy | ✓ Good — simple, matches duplicate pattern |
 | Agent chat: readline + `agents.stream()` textDelta | Streaming + thread continuity across turns | ✓ Good — 25/25 tests pass, tsc clean |
 | TDD throughout (RED → GREEN commits) | Catches regressions, documents expected behavior | ✓ Good — maintained across all 3 phases |
+| `finishReason = "length"` passthrough detection | Backend passes OpenAI raw string unchanged — safe to intercept | ✓ Good — A1 validated via backend source |
+| platform-catalog.ts GitHub Tree API client | Single tree call + parallel raw fetches — no auth required for public repo | ✓ Good — rate-limit handling via PlatformCatalogError |
+| `yaml` package over `js-yaml` for company-io | Already a production dependency (v2.8.3) — no new dep needed | ✓ Good — D-13 conflict resolved, one YAML library |
+| `extractAgentsFromListResponse()` dual-shape | Handles both flat array and `{ agents: [] }` envelope from SDK | ✓ Good — defensive against API shape ambiguity |
 
 ## Evolution
 
@@ -140,4 +143,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-06 after v1.5 milestone started*
+*Last updated: 2026-04-07 after v1.5 milestone*

@@ -1,5 +1,20 @@
 # Milestones
 
+## v1.5 Reliability & Ecosystem (Shipped: 2026-04-07)
+
+**Phases completed:** 3 phases, 9 plans, 8 tasks
+
+**Key accomplishments:**
+
+- One-liner:
+- One-liner:
+- `af pack search [query]` with client-side filter, --limit, and agenticflow.pack.search.v1 JSON schema via fetchPlatformPacks from platform-catalog.ts
+- CompanyExportSchema public contract (11 portable fields) with exportCompany() and Wave 0 vitest scaffold — yaml package used, no js-yaml
+- Idempotent upsert by agent name (ECO-06) with dry-run diff — local validation before every write, schema version guard, zero API calls in dry-run mode
+- `af company export` and `af company import` wired into main.ts — Commander.js subcommands call company-io.ts functions with file I/O, output formatting, and error handling per established patterns
+
+---
+
 ## v1.0 Platform Depth (Shipped: 2026-04-07)
 
 **Phases completed:** 1 phases, 4 plans, 8 tasks

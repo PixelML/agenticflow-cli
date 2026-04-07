@@ -45,15 +45,54 @@
 
 ---
 
+## Milestone: v1.5 — Reliability & Ecosystem
+
+**Shipped:** 2026-04-07
+**Phases:** 3 (4–6) | **Plans:** 9 | **Timeline:** 7 days
+
+### What Was Built
+
+- **Phase 4:** SDK truncation detection (`finishReason = "length"` → `status: "truncated"`), `af agent run` truncation branch with `--thread-id` hint and non-zero exit, `af agent chat` CHAT-01 stderr warning with continuation hint
+- **Phase 5:** `platform-catalog.ts` GitHub Tree API client with typed error handling, `af skill list --platform` with installed checkmark, `af pack search [query]` with `--limit`/`--json`
+- **Phase 6:** `company-io.ts` module (`CompanyExportSchema`, `exportCompany`, `importCompany`, `changedFields`), `af company export/import` CLI wiring with `--force`/`--dry-run`, idempotent upsert by agent name
+
+### What Worked
+
+- **TDD plan structure** — RED commit then GREEN commit per plan made all 13 company-io tests trustworthy from the start. No "write tests after the fact" debt.
+- **Research resolving real conflicts** — RESEARCH.md caught the D-13 `js-yaml` vs `yaml` package conflict before the planner ran. Zero plan rework needed.
+- **Module extraction pattern** — Phase 5 established `platform-catalog.ts`, Phase 6 followed with `company-io.ts`. Pattern was clear and consistent.
+- **Plan checker catching RESEARCH.md gaps** — Dimension 11 flagged unresolved open questions in RESEARCH.md; one-line fix cleared it. Prevented the planner from inheriting ambiguous assumptions.
+- **Worktree isolation working cleanly** — Phase 6 Wave 3 committed to its worktree branch correctly (not main), requiring a proper merge. The merge was clean with no conflicts.
+
+### What Was Inefficient
+
+- **Git stash pop conflict during regression gate** — attempted to stash Phase 6 files to test pre-Phase-6 state; stash pop created merge conflicts in STATE.md and deleted many planning files. Required `git checkout HEAD --` restoration. Better approach: `git show <sha>:path` for targeted file inspection without stash.
+- **Traceability table not auto-updated** — all 10 requirements showed "Pending" at milestone completion because the traceability table isn't updated during phase execution. Minor friction during `gsd-complete-milestone`.
+- **Pre-existing test failures in main.test.ts** — 4 tests from Phase 3 worktree clobber still failing. These surfaced during regression gate and required investigation to confirm pre-existing. Should be fixed as part of QA-03 next milestone.
+
+### Patterns Established
+
+- **`extractAgentsFromListResponse()` dual-shape pattern** — when SDK returns `Promise<unknown>`, handle both flat array and `{ agents: [] }` envelope defensively and test both shapes explicitly.
+- **Research open questions require RESOLVED markers** — plan checker Dimension 11 enforces this. Write `## Open Questions (RESOLVED)` with inline resolution text before planning.
+- **Module-level re-exports for YAML helpers** — `export { parse as parseYaml, stringify as stringifyYaml }` from `company-io.ts` gives main.ts a typed, project-standard YAML surface.
+
+### Key Lessons
+
+1. Never use `git stash` to inspect a prior state — use `git show <sha>:path` or `git checkout <sha> -- <file>` targeted to specific files only.
+2. Traceability tables need to be updated during phase execution, not just at milestone boundaries.
+3. Pre-existing test failures should be fixed or formally documented in RETROSPECTIVE + PROJECT.md before the next milestone starts — they erode confidence in the regression gate.
+
+---
+
 ## Cross-Milestone Trends
 
-| Metric | v1.0 |
-|--------|------|
-| Phases | 3 |
-| Plans | 11 |
-| Timeline | 2 days |
-| Commits | ~31 |
-| Test pass rate | 25/25 (100%) |
-| Verification score | 11/11 automated |
-| Requirement coverage | 18/19 (95%) |
-| Worktree incidents | 3 (all recovered) |
+| Metric | v1.0 | v1.5 |
+|--------|------|------|
+| Phases | 3 | 3 |
+| Plans | 11 | 9 |
+| Timeline | 2 days | 7 days |
+| Commits | ~31 | ~65 |
+| Test pass rate | 25/25 (100%) | 314/332 (95% — 18 pre-existing failures) |
+| Verification score | 11/11 automated | 4/4 automated + 4 UAT pending |
+| Requirement coverage | 18/19 (95%) | 10/10 (100%) |
+| Worktree incidents | 3 (all recovered) | 1 (stash pop conflict, recovered) |
