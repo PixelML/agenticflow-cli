@@ -1,0 +1,83 @@
+# Requirements: AgenticFlow CLI
+
+**Defined:** 2026-04-06
+**Core Value:** Any AI can go from `npm install` to useful agent output in under 5 minutes, and drive their owner to AgenticFlow for everything else.
+
+## v1.5 Requirements
+
+Requirements for the Reliability & Ecosystem milestone. Each maps to roadmap phases.
+
+### Token Limit Handling
+
+- [ ] **ACT-07**: User can see a `status: "truncated"` result when a run hits the model's token limit — never silently returns partial output as success
+- [ ] **ACT-08**: User receives a `--thread-id` continuation hint in the error output when a run is truncated, enabling a copy-pasteable follow-up command
+- [ ] **ACT-09**: AI agent can detect truncation via `--json` output (`truncated: true`, non-zero exit code, partial response text preserved)
+
+### Interactive Chat Truncation
+
+- [ ] **CHAT-01**: User sees a truncation warning with continuation hint during `af agent chat` when a response is cut off mid-session
+
+### Platform Skill/Pack Catalog
+
+- [ ] **ECO-01**: User can browse platform skills via `af skill list --platform` (shows installed checkmark; `af skill list` with no flag unchanged)
+- [ ] **ECO-02**: User can search platform pack templates via `af pack search [query]` as a new subcommand
+- [ ] **ECO-04**: User can filter catalog results and get machine output via `--limit` and `--json` on both `af skill list --platform` and `af pack search`
+
+### Company Export/Import
+
+- [ ] **ECO-03**: User can export their workspace agent config to a portable YAML file via `af company export` (uses explicit `CompanyExportSchema`, not internal `CompanyBlueprint`)
+- [ ] **ECO-05**: Exported YAML includes `_source` metadata block (workspace ID, timestamp, CLI version) for auditability and round-trip verification
+- [ ] **ECO-06**: User can import a portable company config into any workspace via `af company import`, with `--dry-run` preview and idempotent upsert by agent name
+
+## Future Requirements
+
+Features deferred from v1.5. Tracked but not in current roadmap.
+
+### Token Handling
+
+- **ACT-10**: Auto-split long inputs across multiple runs (anti-feature for v1.5 — breaks structured output; revisit if users request it)
+
+### Company Config
+
+- **ECO-07**: `af company diff` — compare local export file against live workspace state
+- **ECO-08**: `af company import --merge` — conflict resolution on import (requires stable export format to ship first)
+
+### Agent Discovery
+
+- **ACT-06**: Model descriptions in bootstrap — which model for what use case, cost per token
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Auto-continuation on truncation | Breaks structured output, burns tokens silently — Vercel AI SDK removed this intentionally |
+| Interactive TUI for pack browsing | Breaks `--json` contract, adds heavy dependency — drive humans to `_links.marketplace` |
+| `af agent chat --json` | Not meaningful for interactive mode (established v1.0 decision) |
+| Real-time streaming UI | `af agent chat` is the streaming surface; `af agent run` is tool-call pattern |
+| Platform API modifications | CLI calls `api.agenticflow.ai` — cannot modify the API |
+
+## Traceability
+
+Which phases cover which requirements. Updated during roadmap creation.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| ACT-07 | — | Pending |
+| ACT-08 | — | Pending |
+| ACT-09 | — | Pending |
+| CHAT-01 | — | Pending |
+| ECO-01 | — | Pending |
+| ECO-02 | — | Pending |
+| ECO-04 | — | Pending |
+| ECO-03 | — | Pending |
+| ECO-05 | — | Pending |
+| ECO-06 | — | Pending |
+
+**Coverage:**
+- v1.5 requirements: 10 total
+- Mapped to phases: 0
+- Unmapped: 10 ⚠️
+
+---
+*Requirements defined: 2026-04-06*
+*Last updated: 2026-04-06 after initial definition*
