@@ -62,22 +62,22 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ACT-07 | — | Pending |
-| ACT-08 | — | Pending |
-| ACT-09 | — | Pending |
-| CHAT-01 | — | Pending |
-| ECO-01 | — | Pending |
-| ECO-02 | — | Pending |
-| ECO-04 | — | Pending |
-| ECO-03 | — | Pending |
-| ECO-05 | — | Pending |
-| ECO-06 | — | Pending |
+| ACT-07 | Phase 4 | Pending |
+| ACT-08 | Phase 4 | Pending |
+| ACT-09 | Phase 4 | Pending |
+| CHAT-01 | Phase 4 | Pending |
+| ECO-01 | Phase 5 | Pending |
+| ECO-02 | Phase 5 | Pending |
+| ECO-04 | Phase 5 | Pending |
+| ECO-03 | Phase 6 | Pending |
+| ECO-05 | Phase 6 | Pending |
+| ECO-06 | Phase 6 | Pending |
 
 **Coverage:**
 - v1.5 requirements: 10 total
-- Mapped to phases: 0
-- Unmapped: 10 ⚠️
+- Mapped to phases: 10
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-06*
-*Last updated: 2026-04-06 after initial definition*
+*Last updated: 2026-04-06 after roadmap creation*

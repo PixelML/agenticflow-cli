@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Reliability & Ecosystem
-status: defining requirements
+status: roadmap created
 last_updated: "2026-04-06T00:00:00.000Z"
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -23,10 +23,20 @@ See: .planning/PROJECT.md (updated 2026-04-06)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Phase 4 — Token Limit Handling (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-06 — Milestone v1.5 started
+Status: Roadmap created, ready to plan Phase 4
+Last activity: 2026-04-06 — v1.5 roadmap created (3 phases, 10 requirements mapped)
+
+Progress: [----------] 0% (0/3 phases complete)
+
+## Roadmap Summary
+
+| Phase | Goal | Requirements | Status |
+|-------|------|--------------|--------|
+| 4. Token Limit Handling | Never silently return partial output | ACT-07, ACT-08, ACT-09, CHAT-01 | Not started |
+| 5. Platform Skill/Pack Catalog | Browse platform skills and packs from CLI | ECO-01, ECO-02, ECO-04 | Not started |
+| 6. Company Export/Import | Portable YAML workspace config | ECO-03, ECO-05, ECO-06 | Not started |
 
 ## Current Version
 
@@ -40,6 +50,7 @@ v1.3.1 on npm (`@pixelml/agenticflow-cli`)
 | v1.2.0 | agent run, blueprints, quality hardening (8 autoresearch iterations) |
 | v1.3.0 | Gemma 4, amazon-seller pack, changelog, bootstrap enhancements |
 | v1.3.1 | _links to agenticflow.ai web UI, MCP/connections URLs |
+| v1.4.0 | Action workflows, connection pre-flight, Ishi, tutor/freelancer packs, agent clone/usage/watch/chat |
 
 ## Repos
 
@@ -51,7 +62,7 @@ v1.3.1 on npm (`@pixelml/agenticflow-cli`)
 | Platform backend | `/Users/sean/WIP/Antigravity-Workspace/workflow_chef/` | AgenticFlow runtime |
 | Platform frontend | `/Users/sean/WIP/Antigravity-Workspace/WorkflowChef-Web/` | AgenticFlow web UI |
 | Paperclip | `/Users/sean/WIP/Antigravity-Workspace/paperclip/` | External orchestration client |
-| Ishi | `/Users/sean/WIP/Antigravity-Workspace/ishi-core/` | Ishi CLI (to integrate) |
+| Ishi | `/Users/sean/WIP/Antigravity-Workspace/ishi-core/` | Ishi CLI (local binary) |
 | AgenticFlow docs | `/Users/sean/WIP/Antigravity-Workspace/agenticflow-docs/` | Platform docs |
 
 ## Services (for testing)
@@ -59,6 +70,21 @@ v1.3.1 on npm (`@pixelml/agenticflow-cli`)
 - Paperclip: `http://localhost:3100` (start: `cd paperclip && pnpm dev`)
 - Gateway: `http://localhost:4100` (start: `af gateway serve --channels paperclip,webhook`)
 - AgenticFlow API: `https://api.agenticflow.ai`
+
+## Key Decisions (v1.5)
+
+| Decision | Rationale |
+|----------|-----------|
+| CHAT-01 merged into Phase 4 | Same SDK change (finishReason) already required for ACT-07; single streaming layer modification covers both surfaces |
+| Phase 4 before Phase 5 | Zero external deps — pure internal SDK change validates stream event pattern before larger feature phases |
+| Phase 5 before Phase 6 | Establishes client-injection module convention (platform-catalog.ts) used by both skill and pack commands |
+| Phase 6 last | Highest risk — export schema is a public contract; field portability decisions must be final before writing code |
+| No auto-split on truncation | Anti-feature: breaks structured output, burns tokens silently — detection-only is correct per Vercel AI SDK |
+
+## Research Flags for Planning
+
+- **Phase 5:** Verify `/v1/agent-templates/public` is accessible with API key before implementing `platform-catalog.ts`; have GitHub Skills repo fallback ready if no dedicated endpoint exists
+- **Phase 6:** Confirm exactly which of 22+ agent fields are safe to export (non-workspace-specific) before defining `CompanyExportSchema`
 
 ## Test Results Summary
 
