@@ -3934,6 +3934,31 @@ export function createProgram(): Command {
             `Thread: ${result.threadId}. Check with: af agent-threads messages --thread-id ${result.threadId}`);
         }
 
+        // ACT-07/08/09: surface token-limit truncation as a non-zero exit with actionable hint
+        if (result.status === "truncated") {
+          const hint = `af agent run --agent-id ${opts.agentId} --thread-id ${result.threadId} --message "<your follow-up message>"`;
+          printResult({
+            schema: "agenticflow.agent.run.v1",
+            status: "truncated",
+            truncated: true,
+            agent_id: opts.agentId,
+            thread_id: result.threadId,
+            response: result.response,
+            finish_reason: result.finishReason,
+            hint,
+            _links: {
+              agent: webUrl("agent", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId }),
+              thread: webUrl("thread", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId, threadId: result.threadId }),
+            },
+          });
+          if (!isJsonFlagEnabled()) {
+            process.stderr.write("Warning: Response truncated (token limit reached). Partial output above.\n");
+            process.stderr.write(`Hint: ${hint}\n`);
+          }
+          recordAgentRunUsage(opts.agentId, result.threadId, result.response ?? "");
+          process.exit(1);
+        }
+
         printResult({
           schema: "agenticflow.agent.run.v1",
           status: result.status,
