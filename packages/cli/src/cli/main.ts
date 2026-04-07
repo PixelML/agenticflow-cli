@@ -89,6 +89,14 @@ import {
   type SkillDefinition,
 } from "./skill.js";
 import { fetchPlatformSkills, fetchPlatformPacks, PlatformCatalogError } from "./platform-catalog.js";
+import {
+  exportCompany,
+  importCompany,
+  parseYaml,
+  stringifyYaml,
+  CompanyIOError,
+  type CompanyExportSchema,
+} from "./company-io.js";
 
 // --- Constants ---
 const AUTH_ENV_API_KEY = "AGENTICFLOW_PUBLIC_API_KEY";
@@ -5328,6 +5336,128 @@ export function createProgram(): Command {
         { name: "linear", display: "Linear", description: "Linear issue/comment webhooks", config: "LINEAR_API_KEY, LINEAR_AGENT_MAP" },
         { name: "webhook", display: "Generic Webhook", description: "Any JSON POST with {agent_id, message}", config: "(none)" },
       ]);
+    });
+
+  // ============================================================================
+  // af company — workspace export/import (Phase 6: ECO-03, ECO-05, ECO-06)
+  // ============================================================================
+  const companyCmd = program
+    .command("company")
+    .description("Workspace agent configuration export and import.");
+
+  companyCmd
+    .command("export")
+    .description("Export workspace agent configuration to a portable YAML file.")
+    .option("--output <file>", "Output file path", "company-export.yaml")
+    .option("--force", "Overwrite the output file if it already exists")
+    .action(async (opts: { output: string; force?: boolean }) => {
+      const client = buildClient(program.opts());
+      const cliVersion = program.version() ?? "unknown";
+      const outputPath = resolve(opts.output);
+
+      // D-05: fail with clear error if file exists and --force not passed
+      if (existsSync(outputPath) && !opts.force) {
+        fail(
+          "file_exists",
+          `Output file already exists: ${outputPath}`,
+          "Use --force to overwrite.",
+        );
+      }
+
+      let schema: CompanyExportSchema;
+      try {
+        schema = await exportCompany(client, cliVersion);
+      } catch (err) {
+        if (err instanceof CompanyIOError) {
+          fail(err.code, err.message);
+        }
+        throw err;
+      }
+
+      const yamlContent = stringifyYaml(schema);
+      writeFileSync(outputPath, yamlContent, "utf-8");
+
+      // D-07: JSON output envelope
+      const result = {
+        schema: "agenticflow.company.export.v1" as const,
+        _source: schema._source,
+        agent_count: schema.agents.length,
+        output_file: outputPath,
+        _links: {
+          workspace: schema._source.workspace_id
+            ? `https://agenticflow.ai/workspaces/${schema._source.workspace_id}`
+            : null,
+        },
+      };
+
+      if (program.opts().json) {
+        printResult(result);
+      } else {
+        console.log(`Exported ${schema.agents.length} agents to ${outputPath}`);
+      }
+    });
+
+  companyCmd
+    .command("import <file>")
+    .description("Import a portable company YAML file into the current workspace.")
+    .option("--dry-run", "Preview changes without writing to the platform")
+    .action(async (file: string, opts: { dryRun?: boolean }) => {
+      const client = buildClient(program.opts());
+      const filePath = resolve(file);
+
+      if (!existsSync(filePath)) {
+        fail("file_not_found", `Import file not found: ${filePath}`);
+      }
+
+      let raw: string;
+      try {
+        raw = readFileSync(filePath, "utf-8");
+      } catch (err) {
+        fail("file_read_error", `Could not read import file: ${(err as Error).message}`);
+      }
+
+      let schema: CompanyExportSchema;
+      try {
+        schema = parseYaml(raw) as CompanyExportSchema;
+      } catch (err) {
+        fail("yaml_parse_error", `Invalid YAML in ${filePath}: ${(err as Error).message}`);
+      }
+
+      let result;
+      try {
+        result = await importCompany(client, schema, { dryRun: opts.dryRun });
+      } catch (err) {
+        if (err instanceof CompanyIOError) {
+          fail(err.code, err.message);
+        }
+        throw err;
+      }
+
+      if (program.opts().json) {
+        printResult(result);
+        return;
+      }
+
+      // Human output (D-08 dry-run table, D-12 import result)
+      if ("would_create" in result) {
+        // Dry-run output
+        for (const name of result.would_create) {
+          console.log(`  + ${name} (would create)`);
+        }
+        for (const upd of result.would_update) {
+          const fields = upd.changed_fields.length > 0 ? upd.changed_fields.join(", ") : "no changes";
+          console.log(`  ~ ${upd.name} (would update: ${fields})`);
+        }
+        console.log(
+          `Dry-run: ${result.would_create.length} would be created, ${result.would_update.length} would be updated.`,
+        );
+      } else {
+        for (const name of result.created) console.log(`  ✓ ${name} (created)`);
+        for (const name of result.updated) console.log(`  ✓ ${name} (updated)`);
+        console.log(
+          `Imported ${result.created.length + result.updated.length} agents (${result.created.length} created, ${result.updated.length} updated).`,
+        );
+      }
     });
 
   return program;
