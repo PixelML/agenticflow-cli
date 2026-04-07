@@ -10,6 +10,16 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 
 *(Core value unchanged — validated across 8 autoresearch iterations and 4 fresh-agent tests.)*
 
+## Current Milestone: v1.6 Video Intelligence & Reliability
+
+**Goal:** Extend AF CLI into video-alert action workflows, close company import/merge, and apply orchestration boundary observability learnings from ishi v1.2 P9.
+
+**Target features:**
+- `af company diff` + `af company import --merge` (ECO-07, ECO-08)
+- Video-action workflow consuming ccav alert threshold patches (VID-01, VID-02, XPROJ-01)
+- Orchestration boundary observability — idle as authoritative turnover, distinct outcome states, boundary counters (OBS-01, OBS-02, OBS-03)
+- Model descriptions in bootstrap with cost/use-case guidance (ACT-06)
+
 ## Current State
 
 **v1.5 shipped 2026-04-07.** 3 phases, 9 plans, 17K TypeScript LOC.
@@ -65,12 +75,18 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 - ✓ **ECO-05**: `_source` metadata block (workspace ID, timestamp, CLI version) in export — v1.5 Phase 6
 - ✓ **ECO-06**: `af company import` — idempotent upsert by name, `--dry-run` preview — v1.5 Phase 6
 
-### Active (Next Milestone)
+### Active (v1.6)
 
-- [ ] **ACT-06**: Model descriptions in bootstrap — which model for what use case, cost per token
-- [ ] **QA-03**: Autoresearch score ≥ 8.5/10 *(partial — achieved 8.0–8.7; refine agent composition)*
 - [ ] **ECO-07**: `af company diff` — compare local export against live workspace state
 - [ ] **ECO-08**: `af company import --merge` — conflict resolution on import
+- [ ] **VID-01**: `af workflow run --alert-config <ccav.json>` — video-alert workflow with threshold artifact input
+- [ ] **VID-02**: Video-action pack scaffold consumable from CLI
+- [ ] **XPROJ-01**: ccav alert threshold artifact consumer contract (cross-project dep: ccav v1.1 P9)
+- [ ] **OBS-01**: Treat `idle` as authoritative session turnover signal in `af agent run/chat/stream`
+- [ ] **OBS-02**: Distinct non-error outcome states — `success | fail | skipped | empty` — in run/chat output
+- [ ] **OBS-03**: Orchestration boundary counters emitted per run (attempts, skipped, truncated)
+- [ ] **ACT-06**: Model descriptions in bootstrap — which model for what use case, cost per token
+- [ ] **QA-03**: Autoresearch score ≥ 8.5/10 *(partial — achieved 8.0–8.7; refine agent composition)*
 
 ### Out of Scope
 
@@ -143,4 +159,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 after v1.5 milestone*
+*Last updated: 2026-04-07 after v1.6 milestone start*

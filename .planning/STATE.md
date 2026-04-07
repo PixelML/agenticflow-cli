@@ -1,99 +1,80 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.5
-milestone_name: Reliability & Ecosystem
-status: executing
-last_updated: "2026-04-07T23:30:02.380Z"
+milestone: v1.6
+milestone_name: Video Intelligence & Reliability
+status: planning
+last_updated: "2026-04-07T00:00:00.000Z"
 last_activity: 2026-04-07
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # GSD State: AgenticFlow CLI
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-06)
+See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Any AI can go from `npm install` to useful agent output in under 5 minutes
-**Current focus:** Phase 05 — platform-skill-pack-catalog
+**Current focus:** Milestone v1.6 — defining requirements
 
 ## Current Position
 
-Phase: 06
-Plan: Not started
-Status: Executing Phase 05
-Last activity: 2026-04-07
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-07 — Milestone v1.6 started
 
-Progress: [----------] 0% (0/3 phases complete)
+Progress: [----------] 0% (0/4 phases complete)
 
 ## Roadmap Summary
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
-| 4. Token Limit Handling | Never silently return partial output | ACT-07, ACT-08, ACT-09, CHAT-01 | Not started |
-| 5. Platform Skill/Pack Catalog | Browse platform skills and packs from CLI | ECO-01, ECO-02, ECO-04 | Not started |
-| 6. Company Export/Import | Portable YAML workspace config | ECO-03, ECO-05, ECO-06 | Not started |
+| 7. Company Diff | Compare local export vs live workspace | ECO-07 | Not started |
+| 8. Company Merge Import | Conflict-aware import with field-level resolution | ECO-08 | Not started |
+| 9. Video Action Workflow | CLI entry point for ccav alert-threshold workflows | VID-01, VID-02, XPROJ-01 | Not started |
+| 10. Observability Hardening | Boundary counters, idle turnover, distinct outcomes | OBS-01, OBS-02, OBS-03, ACT-06 | Not started |
 
-## Current Version
+## Accumulated Context
 
-v1.3.1 on npm (`@pixelml/agenticflow-cli`)
+### Cross-project dependencies
 
-## What's Done
+| Producer | Artifact | Status |
+|----------|----------|--------|
+| ccav v1.1 P9 | alert threshold patches (.json) at `agentic-video/docs/phase9-hardening-targets.md` | pre-scoped — Phase 9 targets doc delivered |
+| ishi v1.2 P9 | claude-code-source-learnings.md — idle as authoritative turnover, distinct outcome states, boundary counting | DELIVERED |
 
-| Version | Key Feature |
-|---------|------------|
-| v1.1.0 | Paperclip integration, gateway, AI-agent UX |
-| v1.2.0 | agent run, blueprints, quality hardening (8 autoresearch iterations) |
-| v1.3.0 | Gemma 4, amazon-seller pack, changelog, bootstrap enhancements |
-| v1.3.1 | _links to agenticflow.ai web UI, MCP/connections URLs |
-| v1.4.0 | Action workflows, connection pre-flight, Ishi, tutor/freelancer packs, agent clone/usage/watch/chat |
+### Observability learnings from ishi v1.2 P9 (apply in Phase 10)
 
-## Repos
+1. **Count at orchestration boundary** — not just worker internals; skipped/empty are real outcomes
+2. **Idle = authoritative session turnover** — emit summaries on `status.type === "idle"`, not on disposal
+3. **Distinct outcome states** — `success | fail | skipped | empty` with `reason` field; never collapse
+4. **Thin transport layers** — keep gateway adapters as thin bridges; no logic in routes
+
+### v1.5 pending debt (carry forward)
+
+- Pre-existing main.test.ts failures: agent clone/usage/chat/workflow-watch (4 assertions, Phase 3 worktree clobber)
+- Phase 4 + 5 live smoke tests still `human_needed` in v1.5 VERIFICATION files
+- Phase 6 cross-workspace round-trip UAT still pending
+
+### Repos
 
 | Repo | Location | Purpose |
 |------|----------|---------|
 | CLI | `/Users/sean/WIP/Antigravity-Workspace/agenticflow-js-cli/` | The CLI itself |
-| Skills | `/Users/sean/WIP/Antigravity-Workspace/agent-skills/` | Skill packs (amazon-seller-pack) |
-| Skill template | `/Users/sean/WIP/Antigravity-Workspace/agenticflow-skill/` | Reference for creating skills |
+| Skills | `/Users/sean/WIP/Antigravity-Workspace/agent-skills/` | Skill packs |
 | Platform backend | `/Users/sean/WIP/Antigravity-Workspace/workflow_chef/` | AgenticFlow runtime |
 | Platform frontend | `/Users/sean/WIP/Antigravity-Workspace/WorkflowChef-Web/` | AgenticFlow web UI |
-| Paperclip | `/Users/sean/WIP/Antigravity-Workspace/paperclip/` | External orchestration client |
 | Ishi | `/Users/sean/WIP/Antigravity-Workspace/ishi-core/` | Ishi CLI (local binary) |
-| AgenticFlow docs | `/Users/sean/WIP/Antigravity-Workspace/agenticflow-docs/` | Platform docs |
+| ccav | `/Users/sean/wip/Antigravity-Workspace/agentic-video/` | CCTV alert video intelligence |
 
 ## Services (for testing)
 
 - Paperclip: `http://localhost:3100` (start: `cd paperclip && pnpm dev`)
 - Gateway: `http://localhost:4100` (start: `af gateway serve --channels paperclip,webhook`)
 - AgenticFlow API: `https://api.agenticflow.ai`
-
-## Key Decisions (v1.5)
-
-| Decision | Rationale |
-|----------|-----------|
-| CHAT-01 merged into Phase 4 | Same SDK change (finishReason) already required for ACT-07; single streaming layer modification covers both surfaces |
-| Phase 4 before Phase 5 | Zero external deps — pure internal SDK change validates stream event pattern before larger feature phases |
-| Phase 5 before Phase 6 | Establishes client-injection module convention (platform-catalog.ts) used by both skill and pack commands |
-| Phase 6 last | Highest risk — export schema is a public contract; field portability decisions must be final before writing code |
-| No auto-split on truncation | Anti-feature: breaks structured output, burns tokens silently — detection-only is correct per Vercel AI SDK |
-
-## Research Flags for Planning
-
-- **Phase 5:** Verify `/v1/agent-templates/public` is accessible with API key before implementing `platform-catalog.ts`; have GitHub Skills repo fallback ready if no dedicated endpoint exists
-- **Phase 6:** Confirm exactly which of 22+ agent fields are safe to export (non-workspace-specific) before defining `CompanyExportSchema`
-
-## Test Results Summary
-
-| Business | Product | UX Score | Agents |
-|----------|---------|----------|--------|
-| BlendGo Pro | Portable blender | 8.0 | 5 (3 USEFUL, 1 PARTLY, 1 FAIL) |
-| FreshSeal SG | Silicone bags | 8.0 | 5 (3 USEFUL, 2 PARTLY) |
-| Kopi Corner | Cafe | 8.7 | 1 (3 tasks: 8,7,9) |
-| Tutor | Math tutoring | 8.0 | 1 (3 tasks: all USEFUL) |
-| Bloom & Co | Flowers | 8.0 | 1 (3 tasks: 9,9,8) |
-| Clean slate UX | — | 8.0 | — (7 commands to useful output) |
