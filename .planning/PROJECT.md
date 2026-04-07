@@ -22,6 +22,18 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 **Published as:** `@pixelml/agenticflow-cli` on npm
 **Platform:** 131+ workflow nodes, 2674 MCP integrations, 19 LLM models
 
+## Current Milestone: v1.5 Reliability & Ecosystem
+
+**Goal:** Harden agent run reliability with truncation detection and expand the ecosystem surface with skills, packs, and portable company configs.
+
+**Target features:**
+- Detect truncated responses via API finish_reason, surface error + hint (never silently return partial output)
+- Auto-split suggestion or follow-up prompt guidance when truncation detected
+- `af skill list` — query platform skill/pack catalog
+- `af pack list` / `af pack search` — marketplace browse from CLI
+- `af company export` → portable YAML/JSON config
+- `af company import` → load portable config into any workspace
+
 ## Requirements
 
 ### Validated
@@ -109,5 +121,22 @@ The AgenticFlow CLI (`af`) is the command-line interface that makes AgenticFlow 
 | Agent chat: readline + `agents.stream()` textDelta | Streaming + thread continuity across turns | ✓ Good — 25/25 tests pass, tsc clean |
 | TDD throughout (RED → GREEN commits) | Catches regressions, documents expected behavior | ✓ Good — maintained across all 3 phases |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-04-06 after v1.0 milestone complete*
+*Last updated: 2026-04-06 after v1.5 milestone started*
