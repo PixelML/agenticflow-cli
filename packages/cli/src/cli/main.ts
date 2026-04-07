@@ -4170,6 +4170,20 @@ export function createProgram(): Command {
             process.stdout.write("\n");
             // Per RESEARCH pitfall #2: stream.threadId is only valid AFTER process() resolves
             if (stream.threadId) currentThreadId = stream.threadId;
+            // CHAT-01: surface token-limit truncation inline
+            try {
+              const cachedParts = await stream.parts();
+              const finishPart = cachedParts.find((p) => p.type === "finish");
+              const finishReason = (finishPart?.value as Record<string, unknown> | undefined)?.finishReason;
+              if (typeof finishReason === "string" && finishReason === "length") {
+                process.stderr.write("[Warning: Response was cut short by the model token limit.]\n");
+                process.stderr.write(
+                  `[To continue this thread: af agent chat --agent-id ${opts.agentId} --thread-id ${currentThreadId}]\n`
+                );
+              }
+            } catch {
+              // Defensive: never let truncation detection break the chat loop
+            }
           } catch (err) {
             process.stderr.write(`[Error: ${(err as Error).message}]\n`);
             // Continue loop — do not exit on transient errors
