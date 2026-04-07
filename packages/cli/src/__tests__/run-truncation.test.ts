@@ -61,8 +61,8 @@ describe("af agent run truncation (ACT-07, ACT-08, ACT-09)", () => {
 
     // printResult uses console.log(JSON.stringify(...)). Find the agenticflow.agent.run.v1 call.
     const runResult = consolLogSpy.mock.calls
-      .map((c) => { try { return JSON.parse(c[0]); } catch { return null; } })
-      .find((obj) => obj?.schema === "agenticflow.agent.run.v1");
+      .map((c: unknown[]) => { try { return JSON.parse(c[0] as string); } catch { return null; } })
+      .find((obj: unknown) => (obj as Record<string, unknown>)?.schema === "agenticflow.agent.run.v1");
     expect(runResult).toBeDefined();
     expect(runResult.truncated).toBe(true);
     expect(runResult.status).toBe("truncated");
@@ -79,8 +79,8 @@ describe("af agent run truncation (ACT-07, ACT-08, ACT-09)", () => {
     await expect(runCli()).rejects.toThrow("EXIT:1");
 
     const runResult = consolLogSpy.mock.calls
-      .map((c) => { try { return JSON.parse(c[0]); } catch { return null; } })
-      .find((obj) => obj?.schema === "agenticflow.agent.run.v1");
+      .map((c: unknown[]) => { try { return JSON.parse(c[0] as string); } catch { return null; } })
+      .find((obj: unknown) => (obj as Record<string, unknown>)?.schema === "agenticflow.agent.run.v1");
     expect(runResult).toBeDefined();
     expect(runResult.hint).toMatch(/--thread-id tid-999/);
     expect(runResult.hint).toMatch(/--agent-id ag-77/);
@@ -97,13 +97,13 @@ describe("af agent run truncation (ACT-07, ACT-08, ACT-09)", () => {
 
     // stdout (console.log) should have the truncated result
     const runResult = consolLogSpy.mock.calls
-      .map((c) => { try { return JSON.parse(c[0]); } catch { return null; } })
-      .find((obj) => obj?.schema === "agenticflow.agent.run.v1");
+      .map((c: unknown[]) => { try { return JSON.parse(c[0] as string); } catch { return null; } })
+      .find((obj: unknown) => (obj as Record<string, unknown>)?.schema === "agenticflow.agent.run.v1");
     expect(runResult).toBeDefined();
     expect(runResult.response).toBe("partial...");
 
     // stderr should have the warning
-    const stderrOutput = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    const stderrOutput = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(stderrOutput).toMatch(/truncated/i);
     expect(stderrOutput).toMatch(/Hint:/);
   });
@@ -118,8 +118,8 @@ describe("af agent run truncation (ACT-07, ACT-08, ACT-09)", () => {
     await runCli();
 
     const runResult = consolLogSpy.mock.calls
-      .map((c) => { try { return JSON.parse(c[0]); } catch { return null; } })
-      .find((obj) => obj?.schema === "agenticflow.agent.run.v1");
+      .map((c: unknown[]) => { try { return JSON.parse(c[0] as string); } catch { return null; } })
+      .find((obj: unknown) => (obj as Record<string, unknown>)?.schema === "agenticflow.agent.run.v1");
     expect(runResult).toBeDefined();
     expect(runResult.status).toBe("completed");
     expect(runResult.truncated).toBeUndefined();

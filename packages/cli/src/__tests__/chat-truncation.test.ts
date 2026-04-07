@@ -77,7 +77,7 @@ describe("af agent chat truncation (CHAT-01)", () => {
     // Loop exits via TEST_EOF on second question
     await expect(runCli()).rejects.toThrow("TEST_EOF");
 
-    const stderrOutput = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    const stderrOutput = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(stderrOutput).toMatch(/Warning.*cut short|Warning.*token limit/i);
   });
 
@@ -93,7 +93,7 @@ describe("af agent chat truncation (CHAT-01)", () => {
 
     await expect(runCli()).rejects.toThrow("TEST_EOF");
 
-    const stderrOutput = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    const stderrOutput = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(stderrOutput).toMatch(/--thread-id tid-chat-99/);
     expect(stderrOutput).toMatch(new RegExp(agentId));
   });
@@ -110,7 +110,7 @@ describe("af agent chat truncation (CHAT-01)", () => {
 
     await expect(runCli()).rejects.toThrow("TEST_EOF");
 
-    const stderrOutput = stderrSpy.mock.calls.map((c) => String(c[0])).join("");
+    const stderrOutput = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("");
     expect(stderrOutput).not.toMatch(/Warning.*cut short|Warning.*token limit/i);
     expect(stderrOutput).not.toMatch(/--thread-id/);
   });
