@@ -88,7 +88,7 @@ import {
   resolveSkillByName,
   type SkillDefinition,
 } from "./skill.js";
-import { fetchPlatformSkills, PlatformCatalogError } from "./platform-catalog.js";
+import { fetchPlatformSkills, fetchPlatformPacks, PlatformCatalogError } from "./platform-catalog.js";
 
 // --- Constants ---
 const AUTH_ENV_API_KEY = "AGENTICFLOW_PUBLIC_API_KEY";
@@ -2882,6 +2882,61 @@ export function createProgram(): Command {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         fail("pack_uninstall_failed", message);
+      }
+    });
+
+  // ── pack search ────────────────────────────────────────────────
+  packCmd
+    .command("search [query]")
+    .description("Search platform pack templates from the AgenticFlow catalog")
+    .option("--json", "Output JSON")
+    .option("--limit <n>", "Cap results to first N entries", (v) => parseInt(v, 10))
+    .action(async (query: string | undefined, opts: { json?: boolean; limit?: number }) => {
+      try {
+        const allPacks = await fetchPlatformPacks({ token: process.env.GITHUB_TOKEN });
+        const q = (query ?? "").trim().toLowerCase();
+        const filtered =
+          q.length === 0
+            ? allPacks
+            : allPacks.filter(
+                (p) =>
+                  p.name.toLowerCase().includes(q) ||
+                  (p.description ?? "").toLowerCase().includes(q),
+              );
+        const limited =
+          typeof opts.limit === "number" && opts.limit > 0
+            ? filtered.slice(0, opts.limit)
+            : filtered;
+        if (opts.json) {
+          printJson({
+            schema: "agenticflow.pack.search.v1",
+            count: limited.length,
+            query: query ?? null,
+            packs: limited.map((p) => ({
+              name: p.name,
+              description: p.description,
+              skill_count: p.skill_count,
+              _links: { browse: p._links.browse },
+            })),
+          });
+          return;
+        }
+        // Human output per D-08
+        for (const p of limited) {
+          console.log(`${p.name}  (${p.skill_count} skill${p.skill_count === 1 ? "" : "s"})`);
+          if (p.description) console.log(`  ${p.description}`);
+          console.log(`  ${p._links.browse}`);
+          console.log("");
+        }
+        console.log(
+          `${limited.length} pack${limited.length === 1 ? "" : "s"}${q ? ` matching "${query}"` : ""}`,
+        );
+      } catch (err) {
+        if (err instanceof PlatformCatalogError) {
+          fail(err.code, err.message, err.hint);
+          return;
+        }
+        throw err;
       }
     });
 
