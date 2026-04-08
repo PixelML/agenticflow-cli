@@ -63,7 +63,9 @@ Full details: `.planning/milestones/v1.5-ROADMAP.md`
   2. User can specify `--conflict-strategy local|remote|skip` to resolve conflicts without interactive prompts
   3. Agents with no conflicts are upserted silently; only conflicting agents are surfaced in output
   4. `--dry-run` on merge import shows the resolved state without writing to the workspace
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 08-01-PLAN.md — mergeImportCompany() core logic + unit tests
+- [ ] 08-02-PLAN.md — CLI wiring (--merge, --conflict-strategy) + integration tests
 
 ### Phase 9: Video Action Workflow
 **Goal**: Users can execute video-alert action workflows driven by ccav-format threshold artifact files, and scaffold new video-action packs from CLI
