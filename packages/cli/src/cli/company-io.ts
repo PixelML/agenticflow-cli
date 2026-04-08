@@ -399,3 +399,175 @@ export interface CompanyMergeDryRunResult {
   would_update: string[];
   would_skip: string[];
 }
+
+/**
+ * Conflict-aware import of a CompanyExportSchema into the current workspace.
+ *
+ * Classification (single agents.list call — Pitfall 1):
+ *   - new      → create (always)
+ *   - in_sync  → no-op (no write)
+ *   - modified → apply strategy: local=update, remote|skip=skip
+ *   - remote_only → reported only, NEVER deleted (T-08-02)
+ *
+ * dryRun=true returns CompanyMergeDryRunResult with zero writes (T-08-04).
+ *
+ * @param client    - authenticated AgenticFlowClient
+ * @param schema    - parsed local company export
+ * @param opts      - strategy and dryRun flag
+ */
+export async function mergeImportCompany(
+  client: AgenticFlowClient,
+  schema: CompanyExportSchema,
+  opts: { strategy: ConflictStrategy; dryRun?: boolean },
+): Promise<CompanyMergeResult | CompanyMergeDryRunResult> {
+  // 1. Schema version guard (T-08-01 — mirrors importCompany/diffCompany)
+  if (schema.schema !== "agenticflow.company.export.v1") {
+    throw new CompanyIOError(
+      `Unsupported schema version: ${String(schema.schema)} (expected agenticflow.company.export.v1)`,
+      "schema_version_mismatch",
+    );
+  }
+
+  const { strategy, dryRun = false } = opts;
+  const projectId = client.sdk.projectId ?? undefined;
+
+  // 2. Fetch live agents ONCE — build existingByName map (Pitfall 1: no second fetch)
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const existingAgents = extractAgentsFromListResponse(raw);
+  const existingByName = new Map<string, Record<string, unknown>>();
+  for (const agent of existingAgents) {
+    const name = agent["name"];
+    if (typeof name === "string") existingByName.set(name, agent);
+  }
+
+  // 3. Build local name set for remote_only detection
+  const localByName = new Map<string, CompanyExportAgentEntry>();
+  for (const entry of schema.agents) {
+    localByName.set(entry.name, entry);
+  }
+
+  // 4. Classify each local agent (inline — no separate diffCompany call to avoid double fetch)
+  type Classified = {
+    entry: CompanyExportAgentEntry;
+    status: DiffAgentStatus;
+    changed: string[];
+    existing?: Record<string, unknown>;
+  };
+  const classified: Classified[] = [];
+
+  for (const entry of schema.agents) {
+    const existing = existingByName.get(entry.name);
+    if (existing) {
+      const fields = changedFields(entry, existing);
+      if (fields.length > 0) {
+        classified.push({ entry, status: "modified", changed: fields, existing });
+      } else {
+        classified.push({ entry, status: "in_sync", changed: [], existing });
+      }
+    } else {
+      classified.push({ entry, status: "new", changed: [] });
+    }
+  }
+
+  // 5. Collect remote_only agents (T-08-02: never delete)
+  const remoteOnly: string[] = [];
+  for (const [name] of existingByName) {
+    if (!localByName.has(name)) {
+      remoteOnly.push(name);
+    }
+  }
+
+  // 6. dryRun: return resolved plan with zero writes (T-08-04)
+  if (dryRun) {
+    const conflicts: MergeAgentEntry[] = classified
+      .filter((c) => c.status === "modified")
+      .map((c) => ({
+        name: c.entry.name,
+        status: c.status,
+        changed_fields: c.changed,
+        resolution: strategy === "local" ? "updated" : "skipped",
+      }));
+
+    const wouldCreate = classified
+      .filter((c) => c.status === "new")
+      .map((c) => c.entry.name);
+
+    const wouldUpdate = strategy === "local"
+      ? classified.filter((c) => c.status === "modified").map((c) => c.entry.name)
+      : [];
+
+    const wouldSkip = strategy !== "local"
+      ? classified.filter((c) => c.status === "modified").map((c) => c.entry.name)
+      : [];
+
+    return {
+      schema: "agenticflow.company.merge.dry-run.v1",
+      conflict_strategy: strategy,
+      conflicts,
+      would_create: wouldCreate,
+      would_update: wouldUpdate,
+      would_skip: wouldSkip,
+    };
+  }
+
+  // 7. Apply writes — build result entries
+  const agents: MergeAgentEntry[] = [];
+
+  for (const { entry, status, changed, existing } of classified) {
+    if (status === "new") {
+      if (!projectId) {
+        throw new CompanyIOError(
+          `Cannot create agent "${entry.name}": no project_id in auth context`,
+          "missing_project_id",
+        );
+      }
+      const payload = { ...entry, project_id: projectId } as Record<string, unknown>;
+      await client.agents.create(payload);
+      agents.push({ name: entry.name, status: "new", changed_fields: [], resolution: "created" });
+    } else if (status === "in_sync") {
+      // Pitfall 4: skip no-op writes for in_sync agents
+      agents.push({ name: entry.name, status: "in_sync", changed_fields: [], resolution: "no_change" });
+    } else {
+      // modified — apply strategy
+      if (strategy === "local") {
+        const id = existing?.["id"];
+        if (typeof id !== "string") {
+          throw new CompanyIOError(
+            `Cannot update agent "${entry.name}": existing record has no id`,
+            "missing_existing_id",
+          );
+        }
+        const payload = { ...(entry as unknown as Record<string, unknown>) };
+        await client.agents.update(id, payload);
+        agents.push({ name: entry.name, status: "modified", changed_fields: changed, resolution: "updated" });
+      } else {
+        // strategy = "remote" | "skip" — keep live state
+        agents.push({ name: entry.name, status: "modified", changed_fields: changed, resolution: "skipped" });
+      }
+    }
+  }
+
+  // remote_only: report only (T-08-02: no delete)
+  for (const name of remoteOnly) {
+    agents.push({ name, status: "remote_only", changed_fields: [], resolution: "remote_only" });
+  }
+
+  // Sort alphabetically for deterministic output (mirrors diffCompany)
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+
+  // Compute summary counts from resolutions
+  const summary = {
+    created: agents.filter((a) => a.resolution === "created").length,
+    updated: agents.filter((a) => a.resolution === "updated").length,
+    skipped: agents.filter((a) => a.resolution === "skipped").length,
+    no_change: agents.filter((a) => a.resolution === "no_change").length,
+    remote_only: agents.filter((a) => a.resolution === "remote_only").length,
+  };
+
+  return {
+    schema: "agenticflow.company.merge.v1",
+    conflict_strategy: strategy,
+    summary,
+    agents,
+  };
+}
