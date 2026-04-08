@@ -92,6 +92,7 @@ import { fetchPlatformSkills, fetchPlatformPacks, PlatformCatalogError } from ".
 import {
   exportCompany,
   importCompany,
+  diffCompany,
   parseYaml,
   stringifyYaml,
   CompanyIOError,
@@ -5457,6 +5458,73 @@ export function createProgram(): Command {
         console.log(
           `Imported ${result.created.length + result.updated.length} agents (${result.created.length} created, ${result.updated.length} updated).`,
         );
+      }
+    });
+
+  companyCmd
+    .command("diff")
+    .description("Diff a local company YAML export against the live workspace")
+    .argument("<file>", "Path to local company YAML export")
+    .option("--json", "Output machine-readable JSON")
+    .addHelpText("after", "\nExit codes: 0 = in sync, 1 = differences found")
+    .action(async (file: string, opts: { json?: boolean }) => {
+      const filePath = resolve(file);
+
+      if (!existsSync(filePath)) {
+        fail(
+          "file_not_found",
+          `Company file not found: ${filePath}`,
+          "Check the path and try again",
+        );
+      }
+
+      const raw = readFileSync(filePath, "utf8");
+
+      let parsed: CompanyExportSchema;
+      try {
+        parsed = parseYaml(raw) as CompanyExportSchema;
+      } catch (err) {
+        fail(
+          "invalid_yaml",
+          `Failed to parse YAML: ${(err as Error).message}`,
+          "Verify file is valid YAML produced by 'af company export'",
+        );
+      }
+
+      const client = buildClient(program.opts());
+
+      let result;
+      try {
+        result = await diffCompany(client, parsed);
+      } catch (err) {
+        if (err instanceof CompanyIOError) {
+          fail(err.code, err.message);
+        }
+        throw err;
+      }
+
+      if (opts.json) {
+        printResult(result);
+      } else {
+        for (const agent of result.agents) {
+          if (agent.status === "new") {
+            console.log(`+ ${agent.name}`);
+          } else if (agent.status === "modified") {
+            console.log(`~ ${agent.name} (fields: ${agent.changed_fields.join(", ")})`);
+          } else if (agent.status === "remote_only") {
+            console.log(`< ${agent.name}`);
+          }
+          // in_sync agents are not printed
+        }
+        if (result.in_sync) {
+          console.log("✓ In sync — no differences found");
+        }
+      }
+
+      if (result.in_sync) {
+        process.exit(0);
+      } else {
+        process.exit(1);
       }
     });
 
