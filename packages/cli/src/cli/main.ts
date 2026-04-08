@@ -88,6 +88,18 @@ import {
   resolveSkillByName,
   type SkillDefinition,
 } from "./skill.js";
+import { fetchPlatformSkills, fetchPlatformPacks, PlatformCatalogError } from "./platform-catalog.js";
+import {
+  exportCompany,
+  importCompany,
+  diffCompany,
+  mergeImportCompany,
+  parseYaml,
+  stringifyYaml,
+  CompanyIOError,
+  type CompanyExportSchema,
+  type ConflictStrategy,
+} from "./company-io.js";
 
 // --- Constants ---
 const AUTH_ENV_API_KEY = "AGENTICFLOW_PUBLIC_API_KEY";
@@ -2884,6 +2896,62 @@ export function createProgram(): Command {
       }
     });
 
+  // ── pack search ────────────────────────────────────────────────
+  packCmd
+    .command("search [query]")
+    .description("Search platform pack templates from the AgenticFlow catalog")
+    .option("--json", "Output JSON")
+    .option("--limit <n>", "Cap results to first N entries", (v) => parseInt(v, 10))
+    .action(async (query: string | undefined, opts: { json?: boolean; limit?: number }) => {
+      const parentOpts = program.opts();
+      try {
+        const allPacks = await fetchPlatformPacks({ token: process.env.GITHUB_TOKEN });
+        const q = (query ?? "").trim().toLowerCase();
+        const filtered =
+          q.length === 0
+            ? allPacks
+            : allPacks.filter(
+                (p) =>
+                  p.name.toLowerCase().includes(q) ||
+                  (p.description ?? "").toLowerCase().includes(q),
+              );
+        const limited =
+          typeof opts.limit === "number" && opts.limit > 0
+            ? filtered.slice(0, opts.limit)
+            : filtered;
+        if (opts.json || parentOpts.json) {
+          printJson({
+            schema: "agenticflow.pack.search.v1",
+            count: limited.length,
+            query: query ?? null,
+            packs: limited.map((p) => ({
+              name: p.name,
+              description: p.description,
+              skill_count: p.skill_count,
+              _links: { browse: p._links.browse },
+            })),
+          });
+          return;
+        }
+        // Human output per D-08
+        for (const p of limited) {
+          console.log(`${p.name}  (${p.skill_count} skill${p.skill_count === 1 ? "" : "s"})`);
+          if (p.description) console.log(`  ${p.description}`);
+          console.log(`  ${p._links.browse}`);
+          console.log("");
+        }
+        console.log(
+          `${limited.length} pack${limited.length === 1 ? "" : "s"}${q ? ` matching "${query}"` : ""}`,
+        );
+      } catch (err) {
+        if (err instanceof PlatformCatalogError) {
+          fail(err.code, err.message, err.hint);
+          return;
+        }
+        throw err;
+      }
+    });
+
   // ═════════════════════════════════════════════════════════════════
   // skill (skill mesh commands)
   // ═════════════════════════════════════════════════════════════════
@@ -5225,6 +5293,287 @@ export function createProgram(): Command {
         { name: "linear", display: "Linear", description: "Linear issue/comment webhooks", config: "LINEAR_API_KEY, LINEAR_AGENT_MAP" },
         { name: "webhook", display: "Generic Webhook", description: "Any JSON POST with {agent_id, message}", config: "(none)" },
       ]);
+    });
+
+  // ============================================================================
+  // af company — workspace export/import/diff/merge (Phase 6–8: ECO-03, ECO-05, ECO-06, ECO-08)
+  // ============================================================================
+  const companyCmd = program
+    .command("company")
+    .description("Workspace agent configuration export and import.");
+
+  companyCmd
+    .command("export")
+    .description("Export workspace agent configuration to a portable YAML file.")
+    .option("--output <file>", "Output file path", "company-export.yaml")
+    .option("--force", "Overwrite the output file if it already exists")
+    .action(async (opts: { output: string; force?: boolean }) => {
+      const client = buildClient(program.opts());
+      const cliVersion = program.version() ?? "unknown";
+      const outputPath = resolve(opts.output);
+
+      if (existsSync(outputPath) && !opts.force) {
+        fail(
+          "file_exists",
+          `Output file already exists: ${outputPath}`,
+          "Use --force to overwrite.",
+        );
+      }
+
+      let schema: CompanyExportSchema;
+      try {
+        schema = await exportCompany(client, cliVersion);
+      } catch (err) {
+        if (err instanceof CompanyIOError) {
+          fail(err.code, err.message);
+        }
+        throw err;
+      }
+
+      const yamlContent = stringifyYaml(schema);
+      writeFileSync(outputPath, yamlContent, "utf-8");
+
+      const result = {
+        schema: "agenticflow.company.export.v1" as const,
+        _source: schema._source,
+        agent_count: schema.agents.length,
+        output_file: outputPath,
+        _links: {
+          workspace: schema._source.workspace_id
+            ? `https://agenticflow.ai/workspaces/${schema._source.workspace_id}`
+            : null,
+        },
+      };
+
+      if (program.opts().json) {
+        printResult(result);
+      } else {
+        console.log(`Exported ${schema.agents.length} agents to ${outputPath}`);
+      }
+    });
+
+  companyCmd
+    .command("import <file>")
+    .description("Import a portable company YAML file into the current workspace.")
+    .option("--dry-run", "Preview changes without writing to the platform")
+    .option("--merge", "Conflict-aware import with per-agent conflict report before any write")
+    .option(
+      "--conflict-strategy <strategy>",
+      "Conflict resolution: local (file wins) | remote (keep live) | skip (skip conflicting agents)",
+      "local",
+    )
+    .action(async (file: string, opts: { dryRun?: boolean; merge?: boolean; conflictStrategy?: string }) => {
+      const client = buildClient(program.opts());
+      const filePath = resolve(file);
+
+      if (!existsSync(filePath)) {
+        return void fail("file_not_found", `Import file not found: ${filePath}`);
+      }
+
+      let raw: string;
+      try {
+        raw = readFileSync(filePath, "utf-8");
+      } catch (err) {
+        return void fail("file_read_error", `Could not read import file: ${(err as Error).message}`);
+      }
+
+      let schema: CompanyExportSchema;
+      try {
+        schema = parseYaml(raw) as CompanyExportSchema;
+      } catch (err) {
+        return void fail(
+          "invalid_yaml",
+          `Failed to parse YAML: ${(err as Error).message}`,
+          "Verify file is valid YAML produced by 'af company export'",
+        );
+      }
+
+      if (opts.merge) {
+        // ── merge import path (ECO-08) ──────────────────────────────
+        const strategy = (opts.conflictStrategy ?? "local") as string;
+        if (!["local", "remote", "skip"].includes(strategy)) {
+          return void fail(
+            "invalid_conflict_strategy",
+            `Invalid --conflict-strategy value: "${strategy}"`,
+            "Use one of: local, remote, skip",
+          );
+        }
+
+        let mergeResult;
+        try {
+          mergeResult = await mergeImportCompany(client, schema, {
+            strategy: strategy as ConflictStrategy,
+            dryRun: !!opts.dryRun,
+          });
+        } catch (err) {
+          if (err instanceof CompanyIOError) {
+            return void fail(err.code, err.message);
+          }
+          throw err;
+        }
+
+        if (isJsonFlagEnabled()) {
+          printResult(mergeResult);
+          return;
+        }
+
+        // Human-readable output
+        if ("conflicts" in mergeResult) {
+          // Dry-run result
+          if (mergeResult.conflicts.length > 0) {
+            console.log("Conflicts (would be resolved by strategy):");
+            for (const agent of mergeResult.conflicts) {
+              console.log(`  ! ${agent.name} (conflict: ${agent.changed_fields.join(", ")})`);
+            }
+          }
+          if (mergeResult.would_create.length > 0) {
+            for (const name of mergeResult.would_create) {
+              console.log(`  + ${name} (would create)`);
+            }
+          }
+          if (mergeResult.would_update.length > 0) {
+            for (const name of mergeResult.would_update) {
+              console.log(`  ~ ${name} (would update)`);
+            }
+          }
+          if (mergeResult.would_skip.length > 0) {
+            for (const name of mergeResult.would_skip) {
+              console.log(`  ~ ${name} (would skip)`);
+            }
+          }
+          console.log(
+            `Dry-run (merge): ${mergeResult.would_create.length} would create, ${mergeResult.would_update.length} would update, ${mergeResult.would_skip.length} would skip.`,
+          );
+        } else {
+          // Live merge result — print conflict report BEFORE summary
+          const conflicting = mergeResult.agents.filter(
+            (a) => a.status === "modified" && a.resolution !== "skipped",
+          );
+          if (conflicting.length > 0) {
+            console.log("Conflicts resolved:");
+            for (const agent of conflicting) {
+              console.log(`  ! ${agent.name} (conflict: ${agent.changed_fields.join(", ")})`);
+            }
+          }
+          // Summary
+          const s = mergeResult.summary;
+          console.log(
+            `Merged: ${s.created} created, ${s.updated} updated, ${s.skipped} skipped, ${s.no_change} unchanged, ${s.remote_only} remote-only.`,
+          );
+        }
+      } else {
+        // ── existing import path (unchanged) ───────────────────────
+        let result;
+        try {
+          result = await importCompany(client, schema, { dryRun: opts.dryRun });
+        } catch (err) {
+          if (err instanceof CompanyIOError) {
+            fail(err.code, err.message);
+          }
+          throw err;
+        }
+
+        if (program.opts().json) {
+          printResult(result);
+          return;
+        }
+
+        if ("would_create" in result) {
+          for (const name of result.would_create) {
+            console.log(`  + ${name} (would create)`);
+          }
+          for (const upd of result.would_update) {
+            const fields = upd.changed_fields.length > 0 ? upd.changed_fields.join(", ") : "no changes";
+            console.log(`  ~ ${upd.name} (would update: ${fields})`);
+          }
+          console.log(
+            `Dry-run: ${result.would_create.length} would be created, ${result.would_update.length} would be updated.`,
+          );
+        } else {
+          for (const name of result.created) console.log(`  ✓ ${name} (created)`);
+          for (const name of result.updated) console.log(`  ✓ ${name} (updated)`);
+          console.log(
+            `Imported ${result.created.length + result.updated.length} agents (${result.created.length} created, ${result.updated.length} updated).`,
+          );
+        }
+      }
+    });
+
+  companyCmd
+    .command("diff")
+    .description("Diff a local company YAML export against the live workspace")
+    .argument("<file>", "Path to local company YAML export")
+    .option("--json", "Output machine-readable JSON")
+    .addHelpText("after", "\nExit codes: 0 = in sync, 1 = differences found")
+    .action(async (file: string, opts: { json?: boolean }) => {
+      const filePath = resolve(file);
+
+      if (!existsSync(filePath)) {
+        return void fail(
+          "file_not_found",
+          `Company file not found: ${filePath}`,
+          "Check the path and try again",
+        );
+      }
+
+      let raw: string;
+      try {
+        raw = readFileSync(filePath, "utf8");
+      } catch (err) {
+        return void fail(
+          "file_read_error",
+          `Could not read file: ${(err as Error).message}`,
+        );
+      }
+
+      let parsed: CompanyExportSchema;
+      try {
+        parsed = parseYaml(raw) as CompanyExportSchema;
+      } catch (err) {
+        return void fail(
+          "invalid_yaml",
+          `Failed to parse YAML: ${(err as Error).message}`,
+          "Verify file is valid YAML produced by 'af company export'",
+        );
+      }
+
+      const client = buildClient(program.opts());
+
+      let result;
+      try {
+        result = await diffCompany(client, parsed);
+      } catch (err) {
+        if (err instanceof CompanyIOError) {
+          return void fail(err.code, err.message);
+        }
+        throw err;
+      }
+
+      const isJson = program.opts().json || opts.json;
+
+      if (isJson) {
+        printResult(result);
+      } else {
+        for (const agent of result.agents) {
+          if (agent.status === "new") {
+            console.log(`+ ${agent.name}`);
+          } else if (agent.status === "modified") {
+            console.log(`~ ${agent.name} (fields: ${agent.changed_fields.join(", ")})`);
+          } else if (agent.status === "remote_only") {
+            console.log(`< ${agent.name}`);
+          }
+          // in_sync agents are not printed
+        }
+        if (result.in_sync) {
+          console.log("✓ In sync — no differences found");
+        }
+      }
+
+      if (result.in_sync) {
+        process.exit(0);
+      } else {
+        process.exit(1);
+      }
     });
 
   return program;
