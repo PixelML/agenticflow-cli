@@ -1,0 +1,9 @@
+{
+  "project_name": "AgenticFlow CLI",
+  "granularity": "balanced",
+  "commit_docs": true,
+  "yolo_mode": false,
+  "workflow": {
+    "_auto_chain_active": false
+  }
+}
