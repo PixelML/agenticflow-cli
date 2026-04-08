@@ -5471,20 +5471,28 @@ export function createProgram(): Command {
       const filePath = resolve(file);
 
       if (!existsSync(filePath)) {
-        fail(
+        return void fail(
           "file_not_found",
           `Company file not found: ${filePath}`,
           "Check the path and try again",
         );
       }
 
-      const raw = readFileSync(filePath, "utf8");
+      let raw: string;
+      try {
+        raw = readFileSync(filePath, "utf8");
+      } catch (err) {
+        return void fail(
+          "file_read_error",
+          `Could not read file: ${(err as Error).message}`,
+        );
+      }
 
       let parsed: CompanyExportSchema;
       try {
         parsed = parseYaml(raw) as CompanyExportSchema;
       } catch (err) {
-        fail(
+        return void fail(
           "invalid_yaml",
           `Failed to parse YAML: ${(err as Error).message}`,
           "Verify file is valid YAML produced by 'af company export'",
@@ -5498,12 +5506,14 @@ export function createProgram(): Command {
         result = await diffCompany(client, parsed);
       } catch (err) {
         if (err instanceof CompanyIOError) {
-          fail(err.code, err.message);
+          return void fail(err.code, err.message);
         }
         throw err;
       }
 
-      if (opts.json) {
+      const isJson = program.opts().json || opts.json;
+
+      if (isJson) {
         printResult(result);
       } else {
         for (const agent of result.agents) {
