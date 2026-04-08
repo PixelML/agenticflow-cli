@@ -4,8 +4,12 @@ import {
   exportCompany,
   importCompany,
   diffCompany,
+  mergeImportCompany,
   CompanyIOError,
   type CompanyExportSchema,
+  type ConflictStrategy,
+  type CompanyMergeResult,
+  type CompanyMergeDryRunResult,
 } from "../src/cli/company-io.js";
 
 const PORTABLE_FIELDS = [
@@ -384,5 +388,221 @@ describe("diffCompany", () => {
     expect(newCount).toBe(result.summary.new);
     expect(modCount).toBe(result.summary.modified);
     expect(remoteCount).toBe(result.summary.remote_only);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mergeImportCompany tests — Plan 08-01 (ECO-08)
+// ---------------------------------------------------------------------------
+
+function makeMergeClient(liveAgents: Array<Record<string, unknown>>) {
+  const created: Array<Record<string, unknown>> = [];
+  const updated: Array<{ id: string; payload: Record<string, unknown> }> = [];
+  const deleted: string[] = [];
+  return {
+    client: {
+      sdk: { workspaceId: "ws-merge", projectId: "proj-merge" },
+      agents: {
+        list: async () => liveAgents,
+        create: async (payload: Record<string, unknown>) => {
+          created.push(payload);
+          return { id: `new-${created.length}`, ...payload };
+        },
+        update: async (id: string, payload: Record<string, unknown>) => {
+          updated.push({ id, payload });
+          return { id, ...payload };
+        },
+        delete: async (id: string) => {
+          deleted.push(id);
+        },
+      },
+    } as unknown as Parameters<typeof mergeImportCompany>[0],
+    created,
+    updated,
+    deleted,
+  };
+}
+
+const ALPHA_EXPORT: CompanyExportSchema = {
+  schema: "agenticflow.company.export.v1",
+  _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+  agents: [
+    {
+      name: "Alpha",
+      description: "Alpha agent",
+      model: "claude-opus-4-6",
+      system_prompt: "You are Alpha.",
+      tools: [],
+      mcp_clients: [],
+      plugins: [],
+      sub_agents: [],
+      agent_type: "standard",
+      recursion_limit: 10,
+      visibility: "private",
+    },
+  ],
+};
+
+const ALPHA_LIVE_MERGE = {
+  id: "alpha-id",
+  name: "Alpha",
+  description: "Alpha agent",
+  model: "claude-opus-4-6",
+  system_prompt: "You are Alpha.",
+  tools: [],
+  mcp_clients: [],
+  plugins: [],
+  sub_agents: [],
+  agent_type: "standard",
+  recursion_limit: 10,
+  visibility: "private",
+};
+
+const ALPHA_LIVE_MODIFIED = {
+  ...ALPHA_LIVE_MERGE,
+  model: "gpt-4",
+  system_prompt: "Old prompt",
+};
+
+describe("mergeImportCompany", () => {
+  it("creates new agents that exist in file but not in workspace", async () => {
+    const { client, created, updated } = makeMergeClient([]);
+    const result = await mergeImportCompany(client, ALPHA_EXPORT, { strategy: "local" }) as CompanyMergeResult;
+    expect(result.schema).toBe("agenticflow.company.merge.v1");
+    expect(created).toHaveLength(1);
+    expect(updated).toHaveLength(0);
+    expect(result.summary.created).toBe(1);
+    expect(result.agents[0].name).toBe("Alpha");
+    expect(result.agents[0].resolution).toBe("created");
+  });
+
+  it("skips in_sync agents (no update call)", async () => {
+    const { client, created, updated } = makeMergeClient([ALPHA_LIVE_MERGE]);
+    const result = await mergeImportCompany(client, ALPHA_EXPORT, { strategy: "local" }) as CompanyMergeResult;
+    expect(created).toHaveLength(0);
+    expect(updated).toHaveLength(0);
+    expect(result.summary.no_change).toBe(1);
+    expect(result.agents[0].resolution).toBe("no_change");
+  });
+
+  it("strategy=local overwrites modified agents with file values (calls update)", async () => {
+    const { client, created, updated } = makeMergeClient([ALPHA_LIVE_MODIFIED]);
+    const result = await mergeImportCompany(client, ALPHA_EXPORT, { strategy: "local" }) as CompanyMergeResult;
+    expect(created).toHaveLength(0);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].id).toBe("alpha-id");
+    expect(result.summary.updated).toBe(1);
+    expect(result.agents[0].resolution).toBe("updated");
+  });
+
+  it("strategy=remote skips modified agents (no update call)", async () => {
+    const { client, created, updated } = makeMergeClient([ALPHA_LIVE_MODIFIED]);
+    const result = await mergeImportCompany(client, ALPHA_EXPORT, { strategy: "remote" }) as CompanyMergeResult;
+    expect(created).toHaveLength(0);
+    expect(updated).toHaveLength(0);
+    expect(result.summary.skipped).toBe(1);
+    expect(result.agents[0].resolution).toBe("skipped");
+  });
+
+  it("strategy=skip skips modified agents but still creates new agents", async () => {
+    const betaExport: CompanyExportSchema = {
+      schema: "agenticflow.company.export.v1",
+      _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+      agents: [
+        { name: "Alpha", model: "gpt-4-new" }, // modified vs live
+        { name: "Beta", model: "claude-opus-4-6" },  // new agent
+      ],
+    };
+    const { client, created, updated } = makeMergeClient([ALPHA_LIVE_MODIFIED]);
+    const result = await mergeImportCompany(client, betaExport, { strategy: "skip" }) as CompanyMergeResult;
+    expect(updated).toHaveLength(0);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ name: "Beta" });
+    expect(result.summary.skipped).toBe(1);
+    expect(result.summary.created).toBe(1);
+  });
+
+  it("remote_only agents are reported but never deleted (no delete call)", async () => {
+    const remoteOnlyAgent = { id: "remote-id", name: "RemoteOnly", model: "gpt-4" };
+    const emptySchema: CompanyExportSchema = {
+      schema: "agenticflow.company.export.v1",
+      _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+      agents: [],
+    };
+    const { client, created, updated, deleted } = makeMergeClient([remoteOnlyAgent]);
+    const result = await mergeImportCompany(client, emptySchema, { strategy: "local" }) as CompanyMergeResult;
+    expect(deleted).toHaveLength(0);
+    expect(created).toHaveLength(0);
+    expect(updated).toHaveLength(0);
+    expect(result.summary.remote_only).toBe(1);
+    const remoteAgent = result.agents.find((a) => a.name === "RemoteOnly");
+    expect(remoteAgent?.resolution).toBe("remote_only");
+  });
+
+  it("dry-run makes zero create/update calls and returns CompanyMergeDryRunResult", async () => {
+    const { client, created, updated } = makeMergeClient([ALPHA_LIVE_MODIFIED]);
+    const result = await mergeImportCompany(client, ALPHA_EXPORT, { strategy: "local", dryRun: true }) as CompanyMergeDryRunResult;
+    expect(created).toHaveLength(0);
+    expect(updated).toHaveLength(0);
+    expect(result.schema).toBe("agenticflow.company.merge.dry-run.v1");
+    expect(result.conflict_strategy).toBe("local");
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.would_update).toContain("Alpha");
+    expect(result.would_create).toHaveLength(0);
+  });
+
+  it("throws CompanyIOError on schema_version_mismatch", async () => {
+    const { client } = makeMergeClient([]);
+    const bad = { ...ALPHA_EXPORT, schema: "agenticflow.company.export.v2" } as unknown as CompanyExportSchema;
+    await expect(mergeImportCompany(client, bad, { strategy: "local" })).rejects.toMatchObject({
+      code: "schema_version_mismatch",
+    });
+  });
+
+  it("summary counts match resolutions", async () => {
+    const multiSchema: CompanyExportSchema = {
+      schema: "agenticflow.company.export.v1",
+      _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+      agents: [
+        { name: "Alpha", model: "gpt-4-new" },  // modified (live has gpt-4)
+        { name: "Beta", model: "claude-opus-4-6" },   // new
+        {                                              // in_sync
+          name: "Gamma",
+          model: "gpt-4",
+          description: "Gamma agent",
+          system_prompt: "You are Gamma.",
+          tools: [],
+          mcp_clients: [],
+          plugins: [],
+          sub_agents: [],
+          agent_type: "standard",
+          recursion_limit: 5,
+          visibility: "private",
+        },
+      ],
+    };
+    const gammaLive = {
+      id: "gamma-id", name: "Gamma", model: "gpt-4", description: "Gamma agent",
+      system_prompt: "You are Gamma.", tools: [], mcp_clients: [], plugins: [],
+      sub_agents: [], agent_type: "standard", recursion_limit: 5, visibility: "private",
+    };
+    const alphaLive = { id: "alpha-id", name: "Alpha", model: "gpt-4" };
+    const deltaLive = { id: "delta-id", name: "Delta", model: "gpt-4" }; // remote_only
+    const { client } = makeMergeClient([alphaLive, gammaLive, deltaLive]);
+    const result = await mergeImportCompany(client, multiSchema, { strategy: "local" }) as CompanyMergeResult;
+    expect(result.summary.created).toBe(1);   // Beta
+    expect(result.summary.updated).toBe(1);   // Alpha (strategy=local)
+    expect(result.summary.no_change).toBe(1); // Gamma
+    expect(result.summary.remote_only).toBe(1); // Delta
+    expect(result.summary.skipped).toBe(0);
+    // Verify counts match agents array
+    const agentsByResolution = result.agents.reduce((acc, a) => {
+      acc[a.resolution] = (acc[a.resolution] ?? 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    expect(agentsByResolution["created"]).toBe(result.summary.created);
+    expect(agentsByResolution["updated"]).toBe(result.summary.updated);
+    expect(agentsByResolution["no_change"]).toBe(result.summary.no_change);
+    expect(agentsByResolution["remote_only"]).toBe(result.summary.remote_only);
   });
 });
