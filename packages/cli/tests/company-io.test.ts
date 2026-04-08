@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { parse, stringify } from "yaml";
-import { exportCompany, importCompany, CompanyIOError, type CompanyExportSchema } from "../src/cli/company-io.js";
+import {
+  exportCompany,
+  importCompany,
+  diffCompany,
+  CompanyIOError,
+  type CompanyExportSchema,
+} from "../src/cli/company-io.js";
 
 const PORTABLE_FIELDS = [
   "name", "description", "model", "system_prompt", "tools",
@@ -226,5 +232,157 @@ describe("importCompany", () => {
     const { client } = makeImportClient([]);
     const bad = { ...SCHEMA_ALPHA, schema: "agenticflow.company.export.v2" } as unknown as CompanyExportSchema;
     await expect(importCompany(client, bad, { dryRun: false })).rejects.toBeInstanceOf(CompanyIOError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// diffCompany tests
+// ---------------------------------------------------------------------------
+
+function makeDiffClient(liveAgents: Array<Record<string, unknown>>) {
+  return {
+    sdk: { workspaceId: "ws-diff", projectId: "proj-diff" },
+    agents: {
+      list: async () => liveAgents,
+    },
+  } as unknown as Parameters<typeof diffCompany>[0];
+}
+
+const ALPHA_LIVE = {
+  id: "alpha-live-id",
+  name: "Alpha",
+  description: "Alpha agent",
+  model: "claude-opus-4-6",
+  system_prompt: "You are Alpha.",
+  tools: [],
+  mcp_clients: [],
+  plugins: [],
+  sub_agents: [],
+  agent_type: "standard",
+  recursion_limit: 10,
+  visibility: "private",
+};
+
+const ALPHA_LOCAL: CompanyExportSchema = {
+  schema: "agenticflow.company.export.v1",
+  _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+  agents: [
+    {
+      name: "Alpha",
+      description: "Alpha agent",
+      model: "claude-opus-4-6",
+      system_prompt: "You are Alpha.",
+      tools: [],
+      mcp_clients: [],
+      plugins: [],
+      sub_agents: [],
+      agent_type: "standard",
+      recursion_limit: 10,
+      visibility: "private",
+    },
+  ],
+};
+
+describe("diffCompany", () => {
+  it("returns in_sync=true when local matches live exactly", async () => {
+    const client = makeDiffClient([ALPHA_LIVE]);
+    const result = await diffCompany(client, ALPHA_LOCAL);
+    expect(result.schema).toBe("agenticflow.company.diff.v1");
+    expect(result.in_sync).toBe(true);
+    expect(result.summary.new).toBe(0);
+    expect(result.summary.modified).toBe(0);
+    expect(result.summary.remote_only).toBe(0);
+    expect(result.summary.in_sync).toBe(1);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].status).toBe("in_sync");
+  });
+
+  it("marks file-only agents as new", async () => {
+    const client = makeDiffClient([]); // live has nothing
+    const result = await diffCompany(client, ALPHA_LOCAL);
+    expect(result.in_sync).toBe(false);
+    expect(result.summary.new).toBe(1);
+    expect(result.agents[0].status).toBe("new");
+    expect(result.agents[0].name).toBe("Alpha");
+    expect(result.agents[0].changed_fields).toEqual([]);
+  });
+
+  it("marks workspace-only agents as remote_only", async () => {
+    const emptySchema: CompanyExportSchema = {
+      schema: "agenticflow.company.export.v1",
+      _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+      agents: [],
+    };
+    const client = makeDiffClient([ALPHA_LIVE]);
+    const result = await diffCompany(client, emptySchema);
+    expect(result.in_sync).toBe(false);
+    expect(result.summary.remote_only).toBe(1);
+    expect(result.agents[0].status).toBe("remote_only");
+    expect(result.agents[0].name).toBe("Alpha");
+    expect(result.agents[0].changed_fields).toEqual([]);
+  });
+
+  it("marks differing agents as modified with changed_fields list", async () => {
+    const liveDifferent = { ...ALPHA_LIVE, model: "gpt-4", system_prompt: "Old prompt" };
+    const client = makeDiffClient([liveDifferent]);
+    const result = await diffCompany(client, ALPHA_LOCAL);
+    expect(result.in_sync).toBe(false);
+    expect(result.summary.modified).toBe(1);
+    const agent = result.agents[0];
+    expect(agent.status).toBe("modified");
+    expect(agent.changed_fields).toContain("model");
+    expect(agent.changed_fields).toContain("system_prompt");
+  });
+
+  it("throws schema_version_mismatch on bad schema", async () => {
+    const client = makeDiffClient([]);
+    const bad = { ...ALPHA_LOCAL, schema: "agenticflow.company.export.v2" } as unknown as CompanyExportSchema;
+    await expect(diffCompany(client, bad)).rejects.toMatchObject({
+      code: "schema_version_mismatch",
+    });
+  });
+
+  it("sorts agents by name ascending for deterministic output", async () => {
+    const schema: CompanyExportSchema = {
+      schema: "agenticflow.company.export.v1",
+      _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+      agents: [
+        { name: "Zeta", model: "gpt-4" },
+        { name: "Alpha", model: "gpt-4" },
+        { name: "Milo", model: "gpt-4" },
+      ],
+    };
+    const client = makeDiffClient([]);
+    const result = await diffCompany(client, schema);
+    const names = result.agents.map((a) => a.name);
+    expect(names).toEqual(["Alpha", "Milo", "Zeta"]);
+  });
+
+  it("summary counts match agents array statuses", async () => {
+    const betaLive = { id: "beta-id", name: "Beta", model: "gpt-4" };
+    const gammaLive = { id: "gamma-id", name: "Gamma", model: "gpt-3.5" };
+    const schema: CompanyExportSchema = {
+      schema: "agenticflow.company.export.v1",
+      _source: { workspace_id: "ws-src", timestamp: "2026-04-07T12:00:00.000Z", cli_version: "1.5.0" },
+      agents: [
+        // Alpha: new (not in live)
+        { name: "Alpha", model: "gpt-4" },
+        // Beta: modified (model differs)
+        { name: "Beta", model: "claude-3" },
+      ],
+    };
+    // Gamma: remote_only (in live, not in schema)
+    const client = makeDiffClient([betaLive, gammaLive]);
+    const result = await diffCompany(client, schema);
+    expect(result.summary.new).toBe(1);
+    expect(result.summary.modified).toBe(1);
+    expect(result.summary.remote_only).toBe(1);
+    expect(result.summary.in_sync).toBe(0);
+    const newCount = result.agents.filter((a) => a.status === "new").length;
+    const modCount = result.agents.filter((a) => a.status === "modified").length;
+    const remoteCount = result.agents.filter((a) => a.status === "remote_only").length;
+    expect(newCount).toBe(result.summary.new);
+    expect(modCount).toBe(result.summary.modified);
+    expect(remoteCount).toBe(result.summary.remote_only);
   });
 });

@@ -76,7 +76,7 @@ function pickExportFields(agent: Record<string, unknown>): CompanyExportAgentEnt
 }
 
 /** Normalize agents.list() response which may be a flat array OR { agents: [...] } envelope. */
-function extractAgentsFromListResponse(raw: unknown): Record<string, unknown>[] {
+export function extractAgentsFromListResponse(raw: unknown): Record<string, unknown>[] {
   if (Array.isArray(raw)) {
     return raw as Record<string, unknown>[];
   }
@@ -260,5 +260,107 @@ export async function importCompany(
     schema: "agenticflow.company.import.v1",
     created: createdNames,
     updated: updatedNames,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// diffCompany — Plan 01 (ECO-07)
+// ---------------------------------------------------------------------------
+
+export type DiffAgentStatus = "new" | "modified" | "remote_only" | "in_sync";
+
+export interface DiffAgentEntry {
+  name: string;
+  status: DiffAgentStatus;
+  changed_fields: string[]; // empty for new/remote_only/in_sync
+}
+
+export interface CompanyDiffResult {
+  schema: "agenticflow.company.diff.v1";
+  in_sync: boolean;
+  summary: { new: number; modified: number; remote_only: number; in_sync: number };
+  agents: DiffAgentEntry[];
+}
+
+/**
+ * Compare a local CompanyExportSchema against the live workspace agents.
+ * Returns a structured diff with per-agent status and changed field names.
+ * Read-only — makes zero writes to the platform.
+ *
+ * @param client - authenticated AgenticFlowClient
+ * @param localSchema - parsed local company export
+ */
+export async function diffCompany(
+  client: AgenticFlowClient,
+  localSchema: CompanyExportSchema,
+): Promise<CompanyDiffResult> {
+  // Schema version guard (mirror importCompany exactly)
+  if (localSchema.schema !== "agenticflow.company.export.v1") {
+    throw new CompanyIOError(
+      `Unsupported schema version: ${String(localSchema.schema)} (expected agenticflow.company.export.v1)`,
+      "schema_version_mismatch",
+    );
+  }
+
+  const projectId = client.sdk.projectId ?? undefined;
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const existingAgents = extractAgentsFromListResponse(raw);
+
+  // Build name → existing agent map for O(1) lookup
+  const existingByName = new Map<string, Record<string, unknown>>();
+  for (const agent of existingAgents) {
+    const name = agent["name"];
+    if (typeof name === "string") existingByName.set(name, agent);
+  }
+
+  // Build name → local entry map
+  const localByName = new Map<string, CompanyExportAgentEntry>();
+  for (const entry of localSchema.agents) {
+    localByName.set(entry.name, entry);
+  }
+
+  const agents: DiffAgentEntry[] = [];
+
+  // Classify each local agent
+  for (const entry of localSchema.agents) {
+    const existing = existingByName.get(entry.name);
+    if (existing) {
+      const fields = changedFields(entry, existing);
+      if (fields.length > 0) {
+        agents.push({ name: entry.name, status: "modified", changed_fields: fields });
+      } else {
+        agents.push({ name: entry.name, status: "in_sync", changed_fields: [] });
+      }
+    } else {
+      agents.push({ name: entry.name, status: "new", changed_fields: [] });
+    }
+  }
+
+  // Classify remote-only agents (exist in workspace but not in local file)
+  for (const [name] of existingByName) {
+    if (!localByName.has(name)) {
+      agents.push({ name, status: "remote_only", changed_fields: [] });
+    }
+  }
+
+  // Sort alphabetically for deterministic output (D-06)
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+
+  // Compute summary counts
+  const summary = {
+    new: agents.filter((a) => a.status === "new").length,
+    modified: agents.filter((a) => a.status === "modified").length,
+    remote_only: agents.filter((a) => a.status === "remote_only").length,
+    in_sync: agents.filter((a) => a.status === "in_sync").length,
+  };
+
+  const in_sync =
+    summary.new === 0 && summary.modified === 0 && summary.remote_only === 0;
+
+  return {
+    schema: "agenticflow.company.diff.v1",
+    in_sync,
+    summary,
+    agents,
   };
 }
