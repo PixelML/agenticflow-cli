@@ -241,35 +241,3 @@ describe("AgentStream", () => {
     expect(errors[0]).toEqual({ error: "rate limit exceeded" });
   });
 });
-
-describe("AgentStream finish event with finishReason length", () => {
-  it("text() returns partial text and parts() contains finish part with finishReason 'length'", async () => {
-    const response = createMockResponse([
-      '2:[{"type":"thread_info","data":{"thread_id":"tid-123"}}]',
-      '0:"Partial answer that was cut off by the token limi"',
-      'e:{"finishReason":"length"}',
-      'd:{"finishReason":"length","usage":{"promptTokens":100,"completionTokens":4096}}',
-    ]);
-
-    const stream = new AgentStream(response);
-    const text = await stream.text();
-    expect(text).toBe("Partial answer that was cut off by the token limi");
-
-    const parts = await stream.parts();
-    const finishPart = parts.find((p) => p.type === "finish");
-    expect(finishPart).toBeDefined();
-    expect((finishPart!.value as Record<string, unknown>).finishReason).toBe("length");
-  });
-
-  it("threadId is extracted from data event in truncated stream", async () => {
-    const response = createMockResponse([
-      '2:[{"type":"thread_info","data":{"thread_id":"tid-trunc"}}]',
-      '0:"Some partial text"',
-      'd:{"finishReason":"length","usage":{"promptTokens":50,"completionTokens":4096}}',
-    ]);
-
-    const stream = new AgentStream(response);
-    await stream.text();
-    expect(stream.threadId).toBe("tid-trunc");
-  });
-});

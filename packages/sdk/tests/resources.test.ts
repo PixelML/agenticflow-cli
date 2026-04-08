@@ -2,25 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createClient } from "../src/index.js";
 import type { AgenticFlowClient } from "../src/index.js";
 
-// ── Streaming mock helper (mirrors streaming.test.ts pattern) ──────────────
-function createStreamMockResponse(lines: string[]): Response {
-  const encoder = new TextEncoder();
-  const text = lines.join("\n") + "\n";
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "x-vercel-ai-data-stream": "v1",
-    },
-  });
-}
-
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -556,80 +537,6 @@ describe("Resource integration tests", () => {
       await client.mcpClients.get("mcp-1");
       const { url } = lastCall(mockFetch);
       expect(url).toBe("https://api.test.com/v1/mcp_clients/mcp-1");
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════
-  // agents.run() truncation handling
-  // ═══════════════════════════════════════════════════════════════════
-  describe("agents.run() truncation handling", () => {
-    it("returns status 'truncated' and finishReason 'length' on token-limit stream", async () => {
-      mockFetch.mockResolvedValueOnce(
-        createStreamMockResponse([
-          '2:[{"type":"thread_info","data":{"thread_id":"tid-trunc"}}]',
-          '0:"Partial response cut by token limit"',
-          'e:{"finishReason":"length"}',
-          'd:{"finishReason":"length","usage":{"promptTokens":100,"completionTokens":4096}}',
-        ])
-      );
-
-      const result = await client.agents.run("ag-1", { message: "test" });
-      expect(result.status).toBe("truncated");
-      expect(result.finishReason).toBe("length");
-      expect(result.response).toBe("Partial response cut by token limit");
-      expect(result.response.length).toBeGreaterThan(0);
-    });
-
-    it("returns status 'completed' and finishReason 'stop' on normal completion", async () => {
-      mockFetch.mockResolvedValueOnce(
-        createStreamMockResponse([
-          '2:[{"type":"thread_info","data":{"thread_id":"tid-done"}}]',
-          '0:"Full response here"',
-          'e:{"finishReason":"stop"}',
-          'd:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":20}}',
-        ])
-      );
-
-      const result = await client.agents.run("ag-1", { message: "test" });
-      expect(result.status).toBe("completed");
-      expect(result.finishReason).toBe("stop");
-      expect(result.response).toBe("Full response here");
-    });
-
-    it("AgentRunResult includes finishReason field on both truncated and completed paths", async () => {
-      // Truncated path
-      mockFetch.mockResolvedValueOnce(
-        createStreamMockResponse([
-          '0:"partial"',
-          'd:{"finishReason":"length","usage":{"promptTokens":50,"completionTokens":4096}}',
-        ])
-      );
-      const truncated = await client.agents.run("ag-1", { message: "test" });
-      expect("finishReason" in truncated).toBe(true);
-
-      // Normal completion path
-      mockFetch.mockResolvedValueOnce(
-        createStreamMockResponse([
-          '0:"full answer"',
-          'd:{"finishReason":"stop","usage":{"promptTokens":5,"completionTokens":10}}',
-        ])
-      );
-      const completed = await client.agents.run("ag-1", { message: "test" });
-      expect("finishReason" in completed).toBe(true);
-    });
-
-    it("handles missing finish part gracefully — treats as non-truncated (Threat T-04-03)", async () => {
-      mockFetch.mockResolvedValueOnce(
-        createStreamMockResponse([
-          '2:[{"type":"thread_info","data":{"thread_id":"tid-no-finish"}}]',
-          '0:"Response with no finish event"',
-        ])
-      );
-
-      const result = await client.agents.run("ag-1", { message: "test" });
-      // Missing finish part must NOT throw and must NOT set truncated
-      expect(result.status).toBe("completed");
-      expect(result.response).toBe("Response with no finish event");
     });
   });
 

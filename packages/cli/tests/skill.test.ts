@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,36 +9,6 @@ import {
   resolveSkillByName,
   type SkillDefinition,
 } from "../src/cli/skill.js";
-import { PlatformCatalogError } from "../src/cli/platform-catalog.js";
-
-// ── Module mocks for af skill list --platform tests ──────────────────────────
-
-vi.mock("../src/cli/platform-catalog.js", () => {
-  class MockPlatformCatalogError extends Error {
-    code: string;
-    hint: string;
-    constructor(code: string, message: string, hint: string) {
-      super(message);
-      this.name = "PlatformCatalogError";
-      this.code = code;
-      this.hint = hint;
-    }
-  }
-  return {
-    fetchPlatformSkills: vi.fn(),
-    PlatformCatalogError: MockPlatformCatalogError,
-  };
-});
-
-vi.mock("../src/cli/pack-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/cli/pack-registry.js")>();
-  return {
-    ...actual,
-    listInstalledPacks: vi.fn().mockReturnValue([
-      { skill_names: ["scan-vulnerabilities"] },
-    ]),
-  };
-});
 
 function makeTempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -379,128 +349,5 @@ node_type: llm
       rmSync(pack1, { recursive: true, force: true });
       rmSync(pack2, { recursive: true, force: true });
     }
-  });
-});
-
-// ── af skill list --platform tests ───────────────────────────────────────────
-
-describe("skill list --platform", () => {
-  const TWO_PACKS_FOUR_SKILLS = [
-    { name: "scan-vulnerabilities", description: "Scan for vulns", pack: "security-pack" },
-    { name: "code-audit", description: "Audit code", pack: "security-pack" },
-    { name: "write-ad-copy", description: "Write ad copy", pack: "marketing-pack" },
-    { name: "generate-campaign", description: "Generate campaign", pack: "marketing-pack" },
-  ];
-
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
-  let consoleErrSpy: ReturnType<typeof vi.spyOn>;
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-  let fetchPlatformSkillsMock: ReturnType<typeof vi.fn>;
-
-  beforeEach(async () => {
-    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    consoleErrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as never);
-
-    // Get the mocked fetchPlatformSkills
-    const { fetchPlatformSkills } = await import("../src/cli/platform-catalog.js");
-    fetchPlatformSkillsMock = fetchPlatformSkills as ReturnType<typeof vi.fn>;
-    fetchPlatformSkillsMock.mockReset();
-    fetchPlatformSkillsMock.mockResolvedValue(TWO_PACKS_FOUR_SKILLS);
-  });
-
-  afterEach(() => {
-    consoleSpy.mockRestore();
-    consoleErrSpy.mockRestore();
-    exitSpy.mockRestore();
-    vi.clearAllMocks();
-  });
-
-  it("Test 1: --platform --json returns schema agenticflow.platform.skill.list.v1 with installed flag", async () => {
-    const { createProgram } = await import("../src/cli/main.js");
-    const program = createProgram();
-    // Suppress Commander error output
-    program.exitOverride();
-
-    await program.parseAsync(["node", "af", "skill", "list", "--platform", "--json"]);
-
-    // Find the JSON output in console.log calls
-    const jsonCall = consoleSpy.mock.calls.find((args) => {
-      try {
-        const parsed = JSON.parse(String(args[0]));
-        return parsed.schema === "agenticflow.platform.skill.list.v1";
-      } catch {
-        return false;
-      }
-    });
-    expect(jsonCall).toBeDefined();
-    const result = JSON.parse(String(jsonCall![0]));
-    expect(result.schema).toBe("agenticflow.platform.skill.list.v1");
-    expect(result.count).toBe(4);
-    expect(result.platform).toBe(true);
-    // scan-vulnerabilities is in the installed pack fixture
-    const installed = result.items.filter((i: { installed: boolean }) => i.installed);
-    expect(installed).toHaveLength(1);
-    expect(installed[0].name).toBe("scan-vulnerabilities");
-    // The other 3 should not be installed
-    const notInstalled = result.items.filter((i: { installed: boolean }) => !i.installed);
-    expect(notInstalled).toHaveLength(3);
-  });
-
-  it("Test 2: --platform --json --limit 2 returns count 2 with 2 items", async () => {
-    const { createProgram } = await import("../src/cli/main.js");
-    const program = createProgram();
-    program.exitOverride();
-
-    await program.parseAsync(["node", "af", "skill", "list", "--platform", "--json", "--limit", "2"]);
-
-    const jsonCall = consoleSpy.mock.calls.find((args) => {
-      try {
-        const parsed = JSON.parse(String(args[0]));
-        return parsed.schema === "agenticflow.platform.skill.list.v1";
-      } catch {
-        return false;
-      }
-    });
-    expect(jsonCall).toBeDefined();
-    const result = JSON.parse(String(jsonCall![0]));
-    expect(result.count).toBe(2);
-    expect(result.items).toHaveLength(2);
-  });
-
-  it("Test 3: GitHub Tree API returns 403 → process exits non-zero, hint URL in output", async () => {
-    fetchPlatformSkillsMock.mockRejectedValue(
-      new PlatformCatalogError(
-        "RATE_LIMITED",
-        "GitHub API rate limit hit (status 403)",
-        "Visit https://github.com/PixelML/skills/tree/main/packs to browse packs, or set GITHUB_TOKEN env var to raise rate limits",
-      ),
-    );
-
-    const { createProgram } = await import("../src/cli/main.js");
-    const program = createProgram();
-    program.exitOverride();
-
-    await program.parseAsync(["node", "af", "skill", "list", "--platform", "--json"]);
-
-    // process.exit should have been called with non-zero
-    expect(exitSpy).toHaveBeenCalledWith(1);
-
-    // The hint URL should appear in console output (console.log for --json, console.error for human mode)
-    const allOutput = [
-      ...consoleSpy.mock.calls.map((args) => String(args[0])),
-      ...consoleErrSpy.mock.calls.map((args) => String(args[0])),
-    ].join("\n");
-    expect(allOutput).toContain("github.com/PixelML/skills/tree/main/packs");
-  });
-
-  it("Test 4: af skill list (no --platform) does NOT call fetchPlatformSkills", async () => {
-    const { createProgram } = await import("../src/cli/main.js");
-    const program = createProgram();
-    program.exitOverride();
-
-    await program.parseAsync(["node", "af", "skill", "list"]);
-
-    expect(fetchPlatformSkillsMock.mock.calls.length).toBe(0);
   });
 });

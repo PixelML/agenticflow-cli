@@ -364,3 +364,38 @@ export async function diffCompany(
     agents,
   };
 }
+
+// ---------------------------------------------------------------------------
+// mergeImportCompany — Plan 08-01 (ECO-08)
+// ---------------------------------------------------------------------------
+
+export type ConflictStrategy = "local" | "remote" | "skip";
+
+export interface MergeAgentEntry {
+  name: string;
+  status: DiffAgentStatus;
+  changed_fields: string[];
+  resolution: "created" | "updated" | "skipped" | "no_change" | "remote_only";
+}
+
+export interface CompanyMergeResult {
+  schema: "agenticflow.company.merge.v1";
+  conflict_strategy: ConflictStrategy;
+  summary: {
+    created: number;
+    updated: number;
+    skipped: number;
+    no_change: number;
+    remote_only: number;
+  };
+  agents: MergeAgentEntry[];
+}
+
+export interface CompanyMergeDryRunResult {
+  schema: "agenticflow.company.merge.dry-run.v1";
+  conflict_strategy: ConflictStrategy;
+  conflicts: MergeAgentEntry[];
+  would_create: string[];
+  would_update: string[];
+  would_skip: string[];
+}

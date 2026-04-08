@@ -7,23 +7,9 @@ export interface AgentRunResult {
   response: string;
   /** Thread ID for conversation continuity. */
   threadId: string;
-  /** "completed" | "truncated" | "timeout" | "failed" */
-  status: "completed" | "truncated" | "timeout" | "failed" | string;
-  /**
-   * The finishReason from the stream's terminal `d:` event.
-   * "stop" on normal completion, "length" when the model hit the token limit.
-   * Undefined if the stream emitted no finish event.
-   */
-  finishReason?: string;
+  /** "completed" | "timeout" | "failed" */
+  status: string;
 }
-
-/**
- * finishReason values that indicate the model was cut off by the token limit.
- * A1 validation (04-A1-FINISHREASON.md): workflow_chef passes the raw LLM
- * finish_reason through stop_reason_map.get(reason, reason), so OpenAI's
- * "length" arrives unchanged in the stream's d: event.
- */
-const TRUNCATION_FINISH_REASONS = new Set(["length"]);
 
 /** Options for `agents.run()`. */
 export interface AgentRunOptions {
@@ -131,19 +117,8 @@ export class AgentsResource {
     const resolvedThreadId = stream.threadId ?? threadId;
 
     // 2. If we got text, return immediately
-    // Extract finishReason from the terminal d: finish event.
-    // stream.parts() is safe after stream.text() — shared _processingPromise guard, no double network read.
-    const parts = await stream.parts();
-    const finishPart = parts.find((p) => p.type === "finish");
-    const finishReason = finishPart
-      ? ((finishPart.value as Record<string, unknown> | null)?.["finishReason"] as string | undefined)
-      : undefined;
-
     if (text && text.trim()) {
-      const status = finishReason && TRUNCATION_FINISH_REASONS.has(finishReason)
-        ? "truncated"
-        : "completed";
-      return { response: text, threadId: resolvedThreadId, status, finishReason };
+      return { response: text, threadId: resolvedThreadId, status: "completed" };
     }
 
     // 3. Fallback: poll thread until processed, then fetch messages
