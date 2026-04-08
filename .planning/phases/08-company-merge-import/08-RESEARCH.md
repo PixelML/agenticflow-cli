@@ -365,7 +365,7 @@ Step 2.6: SKIPPED — Phase 8 is a pure code change. No external tools, services
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should `in_sync` agents be written (no-op update) or silently skipped?**
    - What we know: `importCompany()` calls `agents.update()` for all existing agents regardless of field changes (full replace). Merge has a classification step.
