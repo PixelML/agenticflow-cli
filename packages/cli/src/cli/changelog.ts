@@ -14,6 +14,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.4",
+    date: "2026-04-14",
+    highlights: [
+      "HOTFIX — `af workflow init` now returns `_links.workflow` with the correct Web UI URL. 3 separate fresh-agent tests all printed WRONG Web UI URLs when the runbook asked them to surface the link (one truncated, one used wrong host, one used singular `/workflow/` path). Now AIs don't have to guess — the canonical URL is in the response",
+      "HOTFIX — blueprint responses no longer mis-report `tier: 3` for workflow-kind blueprints. Previously `af bootstrap --json` and `af blueprints list/get` fell back to `tier: 3` when a blueprint had no explicit `tier`, which made AI operators call `summarize-url` a \"Tier 3 workflow blueprint\" in their reports (incorrect — it's rung 2 workflow). Now returns `tier: null` for anything without an explicit tier, so AIs rely on the canonical `kind` + `complexity` fields",
+    ],
+    for_ai: [
+      "When deploying a workflow via `af workflow init --blueprint <id> --json`, use the returned `_links.workflow` field verbatim. Don't construct URLs from workspace_id + workflow_id — the CLI does it for you now",
+      "Ignore the legacy `tier` field on blueprint responses if you're on v1.10.4+. `kind` (workflow/agent/workforce) and `complexity` (0-6 ladder rung) are the canonical fields. `tier` is kept only for backward compat with scripts from earlier versions",
+    ],
+  },
+  {
     version: "1.10.3",
     date: "2026-04-14",
     highlights: [

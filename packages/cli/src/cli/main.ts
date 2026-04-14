@@ -1250,7 +1250,10 @@ export function createProgram(): Command {
             name: b.name,
             kind: k,
             complexity: blueprintComplexity(b),
-            tier: b.tier ?? (k === "agent" ? 1 : 3),
+            // Legacy `tier` — only set if the blueprint explicitly declared one
+            // (don't backfill to 3 for workflow-kind; that misled AI operators
+            // into calling `summarize-url` a "Tier 3 workflow blueprint").
+            tier: b.tier ?? null,
             agents: b.agents.length,
             node_count: b.workflowNodes?.length ?? 0,
             use_cases: b.useCases ?? null,
@@ -3010,7 +3013,7 @@ export function createProgram(): Command {
         name: b.name,
         kind: blueprintKind(b),
         complexity: blueprintComplexity(b),
-        tier: b.tier ?? (blueprintKind(b) === "agent" ? 1 : 3),
+        tier: b.tier ?? null,
         description: b.description,
         use_cases: b.useCases ?? null,
         agent_count: b.agents.length,
@@ -3052,7 +3055,7 @@ export function createProgram(): Command {
         name: b.name,
         kind: blueprintKind(b),
         complexity: blueprintComplexity(b),
-        tier: b.tier ?? (blueprintKind(b) === "agent" ? 1 : 3),
+        tier: b.tier ?? null,
         description: b.description,
         goal: b.goal,
         use_cases: b.useCases ?? null,
@@ -4434,6 +4437,16 @@ export function createProgram(): Command {
           name: created["name"],
           node_count: translated.payload.nodes.length,
           warnings: translated.warnings,
+          // PDCA 2026-04-14: AI operators were guessing the Web UI URL from
+          // the workspace_id and hitting wrong paths (one subagent printed
+          // just `/workspaces/<id>`, another guessed `app.agenticflow.ai/workflow/<id>`
+          // which 404s). Surfacing the correct link here means no guessing.
+          _links: {
+            workflow: webUrl("workflow", {
+              workspaceId: initClient.sdk.workspaceId,
+              workflowId,
+            }),
+          },
           next_steps: [
             `af workflow get --workflow-id ${workflowId} --json  # inspect`,
             ...translated.suggested_next_steps.map((s) => s.replace(/<id>/g, workflowId)),
