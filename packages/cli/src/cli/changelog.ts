@@ -14,6 +14,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.3",
+    date: "2026-04-14",
+    highlights: [
+      "`af bootstrap --json` now includes an `invocation` block — tells any AI operator that lands on bootstrap how to call the CLI correctly (prefer `agenticflow`, fall back to `npx --yes @pixelml/agenticflow-cli`, avoid `npx af` which fetches an unrelated package). Fixes a real user incident where Claude Code hit a `ModuleNotFoundError` from an unrelated `af` on the user's system, then tried `npx af` and fetched a wrong package",
+    ],
+    for_ai: [
+      "When you first run `af bootstrap --json`, check the new `invocation` field and use the form it recommends for all subsequent commands. If `agenticflow` is on PATH, use it (collision-safe). Otherwise use `npx --yes @pixelml/agenticflow-cli <subcommand>` with the FULL package name. Never shorten to `npx af` — that's a different, unrelated package on npm",
+    ],
+  },
+  {
     version: "1.10.2",
     date: "2026-04-14",
     highlights: [

@@ -1177,6 +1177,17 @@ export function createProgram(): Command {
       const dataFresh = health;
       printResult({
         schema: "agenticflow.bootstrap.v1",
+        // PDCA 2026-04-14: real users hit name collisions (Python tool
+        // also named `af`) and wrong npx invocations (`npx af` fetches
+        // an unrelated package). Spell out the invocation priority so
+        // any AI operator that runs bootstrap can route correctly
+        // without needing the skill pack installed.
+        invocation: {
+          preferred: "agenticflow <subcommand>",
+          fallback_no_install: "npx --yes @pixelml/agenticflow-cli <subcommand>",
+          shortcut_if_verified: "af <subcommand>  (only if `af --version` prints a semver — `af` is a 2-letter name other tools sometimes claim)",
+          do_not_use: "npx af  (that fetches an unrelated npm package, NOT the AgenticFlow CLI)",
+        },
         auth: {
           authenticated: !!token,
           health,
