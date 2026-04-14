@@ -14,6 +14,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.5.1",
+    date: "2026-04-14",
+    highlights: [
+      "CLI unsets inherited NODE_TLS_REJECT_UNAUTHORIZED=0 at startup — fixes the noisy TLS warning that leaked to every invocation AND restores certificate verification for the CLI's HTTPS calls. Opt back in with AF_INSECURE_TLS=1 if you're running a local dev backend with a self-signed cert",
+      "`af agent list --name-contains <substr>` — client-side case-insensitive name filter. Stop grep-piping in busy workspaces",
+      "`af schema <resource> --field <name>` — drill into a single field's documented shape (useful for nested fields like mcp_clients, response_format, task_management_config)",
+      "`af schema agent` now documents the 12 previously-undocumented optional fields (mcp_clients, code_execution_tool_config, response_format, knowledge, skills_config, etc.) with shape hints, plus the `update` block + null_rejected_fields list (matches what `af agent update --patch` auto-strips)",
+      "`af schema workforce` — new schema entry explaining workforce create + bulk PUT /schema shape. Covers node types, edge connection_type enum (next_step | condition | ai_condition), and the agent_id requirement on type='agent' nodes",
+      "`af bootstrap --json` commands cheat-sheet now surfaces delete_agent, delete_workforce, list_agents_filtered, and get_schema_field — closes the 'how do I clean up' discoverability gap",
+    ],
+    for_ai: [
+      "Expected journey for a fresh agent operator:  (1) af whoami  →  (2) af bootstrap --json  →  (3) af playbook first-touch (or migrate-from-paperclip if coming from Paperclip)  →  (4) af schema <resource> --field <name> for any unclear payload shape  →  (5) build with --dry-run, then live  →  (6) cleanup with af <resource> delete",
+      "Use `af agent list --name-contains <substr> --fields id,name --json` to find your own test agents in a populated workspace before bulk delete",
+      "`af schema agent --field mcp_clients --json` returns the documented attach-shape with run_behavior + per-tool allow map — no more guessing",
+      "If you hit TLS cert errors against a self-signed backend, set AF_INSECURE_TLS=1 (do NOT set NODE_TLS_REJECT_UNAUTHORIZED directly — CLI now unsets it at startup)",
+    ],
+  },
+  {
     version: "1.5.0",
     date: "2026-04-14",
     highlights: [

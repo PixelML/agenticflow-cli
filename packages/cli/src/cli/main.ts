@@ -962,8 +962,32 @@ export function createProgram(): Command {
           system_prompt: "string",
           recursion_limit: "number (10-500, default: 25)",
           agent_type: "standard | autonomous (default: standard)",
+          model_user_config: "object { temperature?, max_tokens?, max_input_tokens?, reasoning_effort? }",
+          mcp_clients: "array of { mcp_client_id, run_behavior: 'auto_run' | 'confirm', description?, timeout?, tools?: {tool_name: {allowed: bool}} } — attach MCP tool providers",
+          code_execution_tool_config: "object { enable: bool, enable_file_operations?: bool } — enable Python/JS code exec",
+          file_system_tool_config: "object | null — enable file system tool",
+          attachment_config: "object | null — file attachment config",
+          response_format: "object | null — structured output schema for the agent's final response (JSON mode)",
+          knowledge: "object | null — knowledge base / RAG configuration",
+          skills_config: "object | null — skill pack configuration",
+          task_management_config: "object | null — task queue / scheduling configuration",
+          suggest_replies: "bool (default: true) — generate suggested follow-up replies",
+          auto_generate_title: "bool (default: true) — auto-title new threads",
+          welcome_message: "string — greeting on new thread",
+          suggested_messages: "array of strings — pre-populated example prompts shown to users",
+          sub_agents: "array — sub-agent configurations for agent teams",
+          plugins: "array — plugin configurations",
         },
         example: { name: "My Agent", tools: [], project_id: "YOUR_PROJECT_ID" },
+      },
+      update: {
+        note: "PUT /v1/agents/{id} — supply any subset of create fields. Prefer `af agent update --patch` to avoid round-tripping the full body.",
+        null_rejected_fields: [
+          "suggest_replies_model", "suggest_replies_model_user_config", "suggest_replies_prompt_template",
+          "knowledge", "task_management_config", "recursion_limit",
+          "file_system_tool_config", "attachment_config", "response_format", "skills_config",
+        ],
+        null_rejected_note: "These fields must be OMITTED (not sent as null) on update — server rejects null. The CLI auto-strips when you use `af agent update` (with or without --patch).",
       },
       stream: {
         required: ["messages"],
@@ -971,7 +995,30 @@ export function createProgram(): Command {
         messages_item: { required: ["content"], optional: { role: "user (default)" } },
         example: { messages: [{ content: "Hello", role: "user" }] },
       },
-      fields: ["id", "name", "description", "model", "visibility", "system_prompt", "tools", "mcp_clients", "plugins", "sub_agents", "agent_type", "recursion_limit", "created_at", "updated_at"],
+      fields: ["id", "name", "description", "model", "visibility", "system_prompt", "tools", "mcp_clients", "plugins", "sub_agents", "agent_type", "recursion_limit", "model_user_config", "code_execution_tool_config", "file_system_tool_config", "attachment_config", "response_format", "knowledge", "skills_config", "task_management_config", "suggest_replies", "auto_generate_title", "welcome_message", "suggested_messages", "created_at", "updated_at"],
+    },
+    workforce: {
+      resource: "workforce",
+      note: "AgenticFlow-native multi-agent DAG (nodes + edges). Create metadata first, then PUT /schema with the full graph.",
+      create: {
+        required: ["name"],
+        optional: {
+          description: "string",
+          recursion_limit: "number (default: 25)",
+          error_handling_policy: "object { on_error: 'stop' | 'continue' | 'route', ... }",
+          is_public: "bool (default: false)",
+        },
+        example: { name: "My Team Workforce", description: "What this team does" },
+        server_injects: "workspace_id and project_id are auto-injected from client config if absent",
+      },
+      schema: {
+        note: "PUT /v1/workspaces/{ws}/workforce/{id}/schema — atomic bulk graph replace. Server diffs current vs desired and applies create/update/delete.",
+        required: ["nodes", "edges"],
+        node_shape: { name: "string", type: "trigger | agent | output | router | condition | loop | tool | plugin | agent_team | agent_team_member | state_modifier", position: "{ x, y }", input: "object (per node_type)", meta: "object (optional)" },
+        edge_shape: { source_node_name: "string", target_node_name: "string", connection_type: "next_step | condition | ai_condition" },
+        agent_node_input: "type='agent' nodes REQUIRE a real agent_id in input. Create agents first, then reference.",
+      },
+      fields: ["id", "workspace_id", "project_id", "name", "description", "error_handling_policy", "is_public", "public_key", "current_version_id", "recursion_limit", "created_at", "updated_at"],
     },
     workflow: {
       resource: "workflow",
@@ -1085,14 +1132,18 @@ export function createProgram(): Command {
           run_agent: "af agent run --agent-id <id> --message <msg> --json",
           create_agent: "af agent create --body <json> --dry-run --json",
           list_agents: "af agent list --fields id,name,model --json",
+          list_agents_filtered: "af agent list --name-contains <substr> --fields id,name --json",
           update_agent_patch: "af agent update --agent-id <id> --patch --body '{\"field\":\"value\"}' --json",
+          delete_agent: "af agent delete --agent-id <id> --json",
           init_workforce: "af workforce init --blueprint <id> --json",
           run_workforce: "af workforce run --workforce-id <id> --trigger-data '{}'",
           publish_workforce: "af workforce publish --workforce-id <id> --json",
+          delete_workforce: "af workforce delete --workforce-id <id> --json",
           inspect_mcp_client: "af mcp-clients inspect --id <id> --json",
           deploy_to_paperclip: "af paperclip init --blueprint <id> --json   # DEPRECATED, use `af workforce init`",
           send_webhook: "curl -X POST http://localhost:4100/webhook/webhook -H 'Content-Type: application/json' -d '{\"agent_id\":\"<id>\",\"message\":\"<msg>\"}'",
           get_schema: "af schema <resource> --json",
+          get_schema_field: "af schema <resource> --field <field_name> --json",
           get_playbook: "af playbook <topic>",
           get_changelog: "af changelog --json",
         },
@@ -1217,14 +1268,15 @@ export function createProgram(): Command {
   program
     .command("schema [resource]")
     .description("Show resource schema for payload construction. AI agents: use this to discover fields before building payloads.")
-    .action((resource) => {
+    .option("--field <name>", "Drill into a single field — returns its documented shape from create.optional (or create.required). Useful for nested fields like `mcp_clients`, `response_format`, `task_management_config`.")
+    .action((resource, opts) => {
       if (!resource) {
         if (isJsonFlagEnabled()) {
           printResult({
             schema: "agenticflow.schema.index.v1",
             available: Object.keys(SCHEMAS),
             usage: "af schema <resource> --json",
-            hint: "Use 'af schema agent' to see agent create/stream payload schemas.",
+            hint: "Use 'af schema agent' to see agent create/stream payload schemas. Use 'af schema agent --field mcp_clients' to drill into a single field.",
           });
         } else {
           console.log("Available resource schemas:");
@@ -1242,6 +1294,37 @@ export function createProgram(): Command {
           `Unknown resource: ${resource}`,
           `Available: ${Object.keys(SCHEMAS).join(", ")}`,
         );
+      }
+      // Field drilldown: return just the docs for one field
+      if (opts?.field) {
+        const fieldName = opts.field as string;
+        const s = schema as Record<string, unknown>;
+        const create = (s.create as Record<string, unknown>) ?? {};
+        const required = (create.required as string[]) ?? [];
+        const optional = (create.optional as Record<string, string>) ?? {};
+        let doc: string | null = null;
+        let isRequired = false;
+        if (required.includes(fieldName)) { doc = "required"; isRequired = true; }
+        if (fieldName in optional) doc = optional[fieldName] ?? null;
+        const result = {
+          schema: "agenticflow.schema.field.v1",
+          resource: s.resource,
+          field: fieldName,
+          required: isRequired,
+          doc,
+          found: doc !== null,
+          hint: doc === null
+            ? `Field '${fieldName}' has no documented shape in the static schema. For live introspection, fetch an existing instance via 'af ${s.resource} get --${s.resource}-id <id> --json' and inspect the returned value for that field.`
+            : undefined,
+        };
+        if (isJsonFlagEnabled()) {
+          printResult(result);
+        } else {
+          console.log(`${s.resource}.${fieldName}${isRequired ? " (required)" : " (optional)"}`);
+          if (doc) console.log(`  ${doc}`);
+          if (result.hint) console.log(`  ${result.hint}`);
+        }
+        return;
       }
       if (isJsonFlagEnabled()) {
         printResult(schema);
@@ -3800,7 +3883,8 @@ export function createProgram(): Command {
     .command("list")
     .description("List agents.")
     .option("--project-id <id>", "Project ID")
-    .option("--search <query>", "Search query")
+    .option("--search <query>", "Backend search query (server-side)")
+    .option("--name-contains <substr>", "Client-side case-insensitive substring filter on agent `name`. Use for quick filtering in busy workspaces.")
     .option("--limit <n>", "Limit results")
     .option("--offset <n>", "Offset")
     .option("--fields <fields>", "Comma-separated fields to return (e.g. id,name,model)")
@@ -3812,7 +3896,16 @@ export function createProgram(): Command {
         limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
         offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
       });
-      printResult(applyFieldsFilter(data, opts.fields as string | undefined));
+      let filtered = data;
+      const nameContains = opts.nameContains as string | undefined;
+      if (nameContains && Array.isArray(data)) {
+        const needle = nameContains.toLowerCase();
+        filtered = (data as Array<Record<string, unknown>>).filter((row) => {
+          const n = row["name"];
+          return typeof n === "string" && n.toLowerCase().includes(needle);
+        });
+      }
+      printResult(applyFieldsFilter(filtered, opts.fields as string | undefined));
     });
 
   agentCmd
