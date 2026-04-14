@@ -597,24 +597,27 @@ export const BLUEPRINTS: Record<string, CompanyBlueprint> = {
       {
         role: "ceo",
         title: "Research Coordinator",
-        description: "Reads the user's question, identifies two distinct angles or sub-questions, and delegates one to each Researcher. Keeps the split CLEAN — no overlap between Researcher A and B.",
-        plugins: [
-          { nodeTypeName: "web_search" },
-        ],
+        // PDCA 2026-04-14: the coordinator previously had web_search and did
+        // 6 searches ITSELF before "delegating" — which prevented the
+        // researchers from doing independent work. Removing the search plugin
+        // forces the coordinator to split + delegate only. Its job is ONE
+        // thing: emit two labeled tasks ("Researcher A: ...", "Researcher B: ...").
+        description: "Your ONLY job is to split the user's question into TWO distinct angles and delegate one to each Researcher. Do not research yourself — your output format is exactly:\n\nResearcher A task: <specific investigable question about the first angle>\nResearcher B task: <specific investigable question about the second, complementary angle>\n\nKeep the split CLEAN — no overlap.",
+        plugins: [],
       },
       {
         role: "researcher",
         title: "Researcher A",
-        description: "Handles the first angle assigned by the Coordinator. Uses web_search + web_retrieval to produce a focused, cited mini-report on that angle ONLY.",
+        description: "You are Researcher A. Read the Coordinator's output. Find the line starting with 'Researcher A task:' — THAT is your angle. Immediately call web_search on terms from that angle. Then web_retrieval on the most promising result. Produce a focused, cited mini-report on your angle ONLY. Do NOT wait for anyone — Researcher B is working in parallel.",
         plugins: [
           { nodeTypeName: "web_search" },
           { nodeTypeName: "web_retrieval" },
         ],
       },
       {
-        role: "general",
+        role: "researcher_b",
         title: "Researcher B",
-        description: "Handles the second angle assigned by the Coordinator. Uses web_search + web_retrieval to produce a focused, cited mini-report on that angle ONLY. Runs IN PARALLEL with Researcher A.",
+        description: "You are Researcher B. Read the Coordinator's output. Find the line starting with 'Researcher B task:' — THAT is your angle. If the coordinator's output doesn't name your angle explicitly, DEDUCE it: pick the SECOND distinct angle that's complementary to Researcher A's likely focus. Immediately call web_search. Then web_retrieval. Produce a cited mini-report on your angle ONLY. You MUST call at least one tool — your first action is web_search, never 'I will await'. Runs IN PARALLEL with Researcher A — they are not sending you data.",
         plugins: [
           { nodeTypeName: "web_search" },
           { nodeTypeName: "web_retrieval" },
@@ -623,7 +626,10 @@ export const BLUEPRINTS: Record<string, CompanyBlueprint> = {
       {
         role: "cmo",
         title: "Synthesizer",
-        description: "Reads both Researcher A and B's reports and produces a unified answer that integrates both angles with attribution to each source.",
+        // PDCA round 4 (2026-04-14): previous description used IF/THEN logic
+        // that caused the model to output synthesis as Python code. Rewriting
+        // as direct prose — just describe the deliverable, not conditional logic.
+        description: "You are a writer, not a coder. Read Researcher A's report and Researcher B's report (both provided in your input, separated by '---'). Write a clear, structured prose answer that merges both angles. Cite each fact with (Researcher A) or (Researcher B). If a researcher's section looks empty or placeholder-like (e.g. 'I will await...', short stub text), note that the angle is missing in your answer — do not fabricate content for it. Output plain markdown, no code blocks, no function definitions.",
         plugins: [],
         isSynthesizer: true,
       },

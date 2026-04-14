@@ -166,8 +166,16 @@ export function workflowBlueprintToPayload(
     output_mapping: {},
   };
 
+  // Build a concrete run example using the first required input field from
+  // the blueprint's workflowInputSchema — so users see the real payload shape
+  // for this specific workflow, not a placeholder.
+  const firstField = blueprint.workflowInputSchema?.fields?.[0]?.name ?? "input_field";
+  const exampleInput = `{"${firstField}":"<your value>"}`;
   const suggested_next_steps = [
-    `af workflow run --workflow-id <id> --body '{"input":{...}}' --json  # run the workflow`,
+    // PDCA 2026-04-14: previous hint suggested `--body '{"input":{...}}'` —
+    // backend actually wants a FLAT body. Every first-try failed with 400.
+    `af workflow run --workflow-id <id> --body '${exampleInput}' --json  # run (flat body, not wrapped in {input:...})`,
+    `af workflow run --workflow-id <id> --body '${exampleInput}' --wait --json  # run and wait for completion in one call`,
     `af workflow get --workflow-id <id> --json  # inspect what was created`,
   ];
 

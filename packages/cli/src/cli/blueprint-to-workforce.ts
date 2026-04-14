@@ -221,11 +221,20 @@ function buildSystemPrompt(blueprint: CompanyBlueprint, slot: AgentSlot): string
   // explicit enough that "research" means "call the tool". Fix: when a slot
   // has web_search, make tool-calling a hard REQUIREMENT at the top of the
   // prompt, not just a recommendation in a later block.
+  // PDCA round 4 (2026-04-14): Researcher B bailed in 0.8s with "I will
+  // await search results from the coordinator" even with MANDATORY TOOL USE
+  // framed. Root cause: the "defer to another role" rule in OPERATING RULES
+  // below was read as permission to wait. Fix: add explicit FORBIDDEN
+  // PHRASES block + remove the defer-hint for plugin-equipped slots.
   const toolBlock = plugins.length
     ? [
         ``,
-        `MANDATORY TOOL USE — your slot has plugins attached. You MUST call at least one before answering, unless the question is trivially timeless (e.g. "what is 2+2"):`,
-        ...plugins.map((p) => `- ${p.nodeTypeName}`),
+        `═══ MANDATORY FIRST ACTION ═══`,
+        `Your slot has these tools attached. Your FIRST response action MUST be a tool call. Skipping this makes your work useless to the downstream synthesizer.`,
+        ...plugins.map((p) => `  - ${p.nodeTypeName}`),
+        ``,
+        `This is a PARALLEL workforce — other agents are running alongside you RIGHT NOW. You do not wait for them. You do not ask them for data. You act on the input you already have.`,
+        ``,
         hasWebSearch
           ? `- For ANY question about current events, recent releases, specific products, people, companies, or dates → call web_search FIRST. Do NOT answer from prior knowledge.`
           : null,
@@ -238,10 +247,31 @@ function buildSystemPrompt(blueprint: CompanyBlueprint, slot: AgentSlot): string
         hasImageGen
           ? `- For image requests, call agenticflow_generate_image with a SPECIFIC, descriptive prompt (not the user's vague wording).`
           : null,
-        `- NEVER say "I cannot provide information that far in the future" or "my knowledge cutoff is..." — your tools are how you get past the cutoff, USE THEM.`,
         `- Cite URLs you actually retrieved. If you have no URL, you haven't done your job yet.`,
+        ``,
+        `═══ FORBIDDEN PHRASES ═══`,
+        `NEVER begin your response with any of these — they deadlock the workforce:`,
+        `  - "I will await..." / "Once I receive..." / "Please let me know when..."`,
+        `  - "I cannot provide information that far in the future" / "my knowledge cutoff is..."`,
+        `  - "I need more information before I can..." (you have tools — use them to fill gaps)`,
+        `Instead: identify your angle or task from the input, then IMMEDIATELY call a tool.`,
       ].filter((l) => l !== null)
     : [];
+  // For non-plugin slots (generic vertical teams like dev-shop), keep the
+  // "defer to another role" rule — those slots genuinely hand off to
+  // coworkers. For plugin-equipped slots, omit it so they act independently.
+  const operatingRules = plugins.length
+    ? [
+        `OPERATING RULES:`,
+        `- Stay in your role; do not do work outside ${slot.role} scope.`,
+        `- Produce concrete, structured output the downstream node in the workforce can act on.`,
+      ]
+    : [
+        `OPERATING RULES:`,
+        `- Stay in your role; do not do work outside ${slot.role} scope.`,
+        `- When you need input from another role, name the role in your response rather than acting for them.`,
+        `- Produce concrete, structured output the downstream node in the workforce can act on.`,
+      ];
   return [
     `You are the ${slot.title} for "${blueprint.name}".`,
     ``,
@@ -254,10 +284,7 @@ function buildSystemPrompt(blueprint: CompanyBlueprint, slot: AgentSlot): string
       : null,
     ...toolBlock,
     ``,
-    `OPERATING RULES:`,
-    `- Stay in your role; do not do work outside ${slot.role} scope.`,
-    `- When you need input from another role, name the role in your response rather than acting for them.`,
-    `- Produce concrete, structured output the downstream node in the workforce can act on.`,
+    ...operatingRules,
   ]
     .filter((l) => l !== null)
     .join("\n");

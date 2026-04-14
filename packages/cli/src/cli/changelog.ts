@@ -14,6 +14,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.2",
+    date: "2026-04-14",
+    highlights: [
+      "HOTFIX — parallel-research workforce no longer returns 'awaiting Researcher B's report'. PDCA revealed the Researcher B slot bailed in 0.8s with 'I will await...' because the generic 'defer to another role' hint in the system prompt encouraged waiting. Fixes: (1) Researcher B slot description is now explicit about acting independently and finding its own angle from the coordinator's split; (2) plugin-equipped slot system prompts drop the 'defer' rule and add a FORBIDDEN PHRASES block; (3) coordinator no longer has web_search attached (prevents it from doing research itself instead of splitting); (4) synthesizer description rewritten as prose (previous IF/THEN structure caused the model to output Python code). Verified end-to-end: both researchers now fire tools, synthesizer produces prose with (Researcher A)/(Researcher B) attribution",
+      "HOTFIX — `af workforce publish` now returns correct URLs. Backend returns `/api/mas_workforces/public/...` paths that 404; CLI now overrides with the correct `/v1/workforce/public/...` paths plus adds `_links.workforce_canvas` (Web UI) and `_links.public_run_curl` (ready-to-paste curl command)",
+      "HOTFIX — `af workflow init` next_steps show the CORRECT flat body shape. Previously suggested `--body '{\"input\":{...}}'` which the server rejected with 400; now shows `--body '{\"<first-field>\":\"<your value>\"}'` using the blueprint's actual input field name. Added second hint showing `--wait` usage",
+      "`af workflow run --wait` — polls run-status until terminal and returns the final output inline. Default is still async (queued, exits) but `--wait --timeout 180 --poll-interval 3` makes workflow-run feel like a synchronous call. Exits non-zero (code 2) if the final status is failed/cancelled/error. Solves the 'output: null, did it fail?' confusion from PDCA",
+      "`af workflow run` also auto-unwraps `{\"input\":{...}}` to flat body when the top-level object contains only that key — so both shapes now work. Matches the forgiving pattern already used by `af workforce run --trigger-data`",
+    ],
+    for_ai: [
+      "parallel-research now produces real demo-quality output — the synthesizer writes prose with attribution instead of 'awaiting Researcher B's report'. Safe to use in customer demos",
+      "For workflow runs, use `af workflow run --workflow-id <id> --body '<flat_json>' --wait --json` to get the result in one call. `run-status` is only needed if you want to decouple kick-off from polling",
+      "Workforce publish now returns `_links.public_run_curl` with a pre-formatted curl command — copy-paste it directly, just fill in the message text",
+    ],
+  },
+  {
     version: "1.10.1",
     date: "2026-04-14",
     highlights: [

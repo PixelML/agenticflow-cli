@@ -135,13 +135,14 @@ const SKILL_RUN_SCHEMA_VERSION = "agenticflow.skill.run.v1";
 // ═══════════════════════════════════════════════════════════════════
 const AF_WEB_BASE = "https://agenticflow.ai";
 
-function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workspace" | "datasets" | "settings" | "connections" | "mcp" | "install-mcp", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; runId?: string; mcpSlug?: string }): string {
+function webUrl(type: "agent" | "thread" | "workflow" | "workflow-run" | "workforce" | "workspace" | "datasets" | "settings" | "connections" | "mcp" | "install-mcp", ids: { workspaceId?: string | null; agentId?: string; threadId?: string; workflowId?: string; workforceId?: string; runId?: string; mcpSlug?: string }): string {
   const ws = ids.workspaceId ?? "";
   switch (type) {
     case "agent": return `${AF_WEB_BASE}/app/workspaces/${ws}/agents/${ids.agentId}`;
     case "thread": return `${AF_WEB_BASE}/app/workspaces/${ws}/agents/${ids.agentId}/threads/${ids.threadId}`;
     case "workflow": return `${AF_WEB_BASE}/app/workspaces/${ws}/workflows/${ids.workflowId}`;
     case "workflow-run": return `${AF_WEB_BASE}/app/workspaces/${ws}/workflows/${ids.workflowId}/logs/${ids.runId}`;
+    case "workforce": return `${AF_WEB_BASE}/app/workspaces/${ws}/workforces/${ids.workforceId}`;
     case "workspace": return `${AF_WEB_BASE}/app/workspaces/${ws}`;
     case "datasets": return `${AF_WEB_BASE}/app/workspaces/${ws}/datasets`;
     case "settings": return `${AF_WEB_BASE}/app/workspaces/${ws}/settings`;
@@ -4508,19 +4509,30 @@ export function createProgram(): Command {
 
   workflowCmd
     .command("run")
-    .description("Run a workflow.")
+    .description("Run a workflow. Async by default; pass --wait to block until completion and return the final output inline.")
     .requiredOption("--workflow-id <id>", "Workflow ID")
-    .option("--input <input>", "JSON input (inline or @file)")
-    .option("--body <input>", "Alias for --input (ergonomic consistency with other `<resource> run` commands)")
+    .option("--input <input>", "JSON input (inline or @file). Flat body: '{\"url\":\"...\"}'. If wrapped as '{\"input\":{...}}', the CLI auto-unwraps.")
+    .option("--body <input>", "Alias for --input")
+    .option("--wait", "Poll run-status until terminal and return the final output inline (instead of just queueing).")
+    .option("--timeout <seconds>", "When --wait is set, max seconds to wait", "180")
+    .option("--poll-interval <seconds>", "When --wait is set, seconds between status polls", "3")
     .option("--auto-fix-connections", "Automatically prompt to fix missing connections")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
       const body: Record<string, unknown> = { workflow_id: opts.workflowId };
-      // Accept --input or --body (PDCA showed users reach for --body by analogy
-      // with agent create/update). Prefer --input if both given.
+      // Accept --input or --body. Prefer --input if both given.
       const inputArg = (opts.input as string | undefined) ?? (opts.body as string | undefined);
-      if (inputArg) body["input"] = loadJsonPayload(inputArg);
+      if (inputArg) {
+        const raw = loadJsonPayload(inputArg) as Record<string, unknown>;
+        // PDCA 2026-04-14: users reach for `{"input":{...}}` by analogy with
+        // other wrappers, but the server wants a flat body. Auto-unwrap when
+        // the top-level object is ONLY `{input: {...}}` — otherwise pass through.
+        const keys = Object.keys(raw);
+        const isWrappedOnly =
+          keys.length === 1 && keys[0] === "input" && typeof raw["input"] === "object" && raw["input"] !== null;
+        body["input"] = isWrappedOnly ? raw["input"] : raw;
+      }
       ensureLocalValidation("workflow.run", validateWorkflowRunPayload(body));
 
       const executeRun = () => token
@@ -4528,8 +4540,42 @@ export function createProgram(): Command {
         : client.workflows.runAnonymous(body);
 
       try {
-        const result = await executeRun();
-        printResult(result);
+        const result = await executeRun() as Record<string, unknown>;
+        // --wait: poll run-status until terminal (success / failed / cancelled)
+        if (opts.wait) {
+          const runId = result["id"] as string | undefined;
+          if (!runId) {
+            fail("request_failed", "Workflow run did not return an id — cannot poll for completion.");
+          }
+          const timeoutMs = Number.parseInt(opts.timeout as string, 10) * 1000;
+          const intervalMs = Number.parseInt(opts.pollInterval as string, 10) * 1000;
+          const startedAt = Date.now();
+          let lastStatus = "queued";
+          while (Date.now() - startedAt < timeoutMs) {
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+            const poll = (token
+              ? await client.workflows.getRun(runId as string)
+              : await client.workflows.getRunAnonymous(runId as string)) as Record<string, unknown>;
+            lastStatus = (poll["status"] as string) ?? lastStatus;
+            if (lastStatus === "success" || lastStatus === "failed" || lastStatus === "cancelled" || lastStatus === "error") {
+              printResult({ ...poll, wait: { polled: true, final_status: lastStatus, elapsed_ms: Date.now() - startedAt } });
+              if (lastStatus !== "success") process.exit(2);
+              return;
+            }
+          }
+          fail(
+            "workflow_run_timeout",
+            `Workflow did not reach terminal status within ${opts.timeout}s (last status: ${lastStatus})`,
+            `Check manually: af workflow run-status --run-id ${runId} --json`,
+            { run_id: runId, last_status: lastStatus },
+          );
+          return;
+        }
+        // Default (no --wait): return the queued status + remind user how to poll
+        printResult({
+          ...result,
+          _note: `Run queued. To see the output, poll: af workflow run-status --run-id ${result["id"]} --json, OR re-run with --wait to block until completion.`,
+        });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         // Detect "Connection X not found" pattern
@@ -6212,11 +6258,34 @@ export function createProgram(): Command {
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() =>
-        client.workforces.generatePublicKey(opts.workforceId, {
+      await run(async () => {
+        const raw = (await client.workforces.generatePublicKey(opts.workforceId, {
           workspaceId: opts.workspaceId,
-        }),
-      );
+        })) as Record<string, unknown>;
+        // PDCA 2026-04-14: the backend currently returns URL paths under
+        // `/api/mas_workforces/public/...` which 404. The real public API
+        // path is `/v1/workforce/public/...`. Until the backend fix ships,
+        // the CLI overrides these fields with correct, absolute URLs that
+        // a user can paste into curl / a browser / a demo slide.
+        const publicKey = raw["public_key"] as string | undefined;
+        if (!publicKey) return raw;
+        const apiBase = "https://api.agenticflow.ai";
+        const uiBase = "https://agenticflow.ai";
+        return {
+          ...raw,
+          public_key: publicKey,
+          public_url: `${uiBase}/workforce/public/${publicKey}`,
+          info_url: `${apiBase}/v1/workforce/public/${publicKey}/info`,
+          run_url: `${apiBase}/v1/workforce/public/${publicKey}/run`,
+          _links: {
+            workforce_canvas: webUrl("workforce", {
+              workspaceId: client.sdk.workspaceId,
+              workforceId: opts.workforceId,
+            }),
+            public_run_curl: `curl -X POST ${apiBase}/v1/workforce/public/${publicKey}/run -H 'Content-Type: application/json' -d '{"trigger_data":{"message":"..."}}'`,
+          },
+        };
+      });
     });
 
   workforceCmd
