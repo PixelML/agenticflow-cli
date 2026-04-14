@@ -14,6 +14,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.5.3",
+    date: "2026-04-14",
+    highlights: [
+      "Model preflight on `af agent create/update` — invalid model strings (typos, missing slash) fail fast BEFORE the agent gets created with a broken config. Unknown-but-plausible models warn but proceed (so new models work between CLI releases)",
+      "Structured error hints on 401/403/404/409/422/429 — every common HTTP failure now carries an actionable `hint` in --json output pointing at the right recovery command (`af whoami`, `af agent list`, fetch-and-reconcile, etc.)",
+      "`af agent update` emits a stderr `[info]` line naming which null-valued fields got auto-stripped. Closes the footgun where bots thought they'd cleared a field but the server never saw null. Silenced with --json (keeps stdout clean for piping)",
+    ],
+    for_ai: [
+      "If you're iterating on an agent's system prompt with `--patch`, don't also clear optional fields by sending null — the CLI strips them and the stderr info line tells you which ones were dropped",
+      "When a command fails, check the `hint` field in the error envelope before retrying — 404s point you at the matching `list` command, 422s point you at `details.payload` for field-level errors",
+      "Pass only models from `af bootstrap --json > models[]` — typos fail at validation time, not at next `agent run`. If you're trying a brand-new model and hit a warning, you can proceed (CLI is conservative — warns but doesn't block)",
+    ],
+  },
+  {
     version: "1.5.2",
     date: "2026-04-14",
     highlights: [

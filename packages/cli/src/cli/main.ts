@@ -27,9 +27,10 @@ import { WebhookConnector } from "./gateway/connectors/webhook.js";
 import type { ChannelConnector } from "./gateway/connector.js";
 import { listBlueprints, getBlueprint } from "./company-blueprints.js";
 import { CHANGELOG, getLatestChangelog } from "./changelog.js";
-import { stripNullFields } from "./utils/patch.js";
+import { stripNullFields, AGENT_UPDATE_STRIP_NULL_FIELDS } from "./utils/patch.js";
 import { inspectMcpToolsPattern } from "./utils/mcp-inspect.js";
 import { emitDeprecation } from "./utils/deprecation.js";
+import { validateModel } from "./utils/models.js";
 import {
   OperationRegistry,
   defaultSpecPath,
@@ -601,6 +602,20 @@ function buildClient(parentOpts: {
   });
 }
 
+/**
+ * Map of HTTP status codes to actionable hints AI operators can follow without
+ * additional context. Keeps error responses useful when the server's error
+ * message is terse (e.g. "Agent not found" with no follow-up).
+ */
+const STATUS_HINT_MAP: Record<number, string> = {
+  401: "Authentication failed. Run `af whoami` to check current auth, or `af login --api-key <key>` to refresh.",
+  403: "You don't have permission for this operation. Check the resource's workspace/project or your API key's scopes.",
+  404: "Resource not found. Run the matching `list` command (e.g. `af agent list --json`) to see available IDs, or double-check the ID you passed.",
+  409: "Conflict — the resource state disagrees with your request. Fetch the current state with `get` and reconcile before retrying.",
+  422: "Validation failed. Check `details.payload` for the specific field errors — pydantic returns a list with field name + expected type per issue.",
+  429: "Rate limited. Back off and retry with exponential delay.",
+};
+
 /** Wrap an async SDK call with error handling. */
 async function run(fn: () => Promise<unknown>): Promise<void> {
   try {
@@ -618,9 +633,50 @@ async function run(fn: () => Promise<unknown>): Promise<void> {
       };
       if (err.requestId) details["request_id"] = err.requestId;
       if (err.payload !== null && err.payload !== undefined) details["payload"] = err.payload;
-      fail("request_failed", message, undefined, details);
+      const hint = STATUS_HINT_MAP[err.statusCode];
+      fail("request_failed", message, hint, details);
     }
     fail("request_failed", message);
+  }
+}
+
+/**
+ * Validate the `model` field on an agent create/update payload, if present.
+ * Fail-fast on implausible strings; warn (stderr) on plausible-but-unknown
+ * strings so new models work without CLI updates.
+ */
+function preflightModel(payload: Record<string, unknown>, context: string): void {
+  if (!("model" in payload)) return;
+  const res = validateModel(payload["model"]);
+  if (!res.valid) {
+    fail("invalid_option_value", `Invalid model in ${context}: ${String(payload["model"])}.`, res.suggestion);
+  }
+  if (!res.known && res.suggestion && !isJsonFlagEnabled()) {
+    console.error(`[warn] ${res.suggestion}`);
+  }
+}
+
+/**
+ * Report which keys got stripped by stripNullFields() so callers don't think
+ * they successfully cleared a field when the CLI silently dropped it.
+ * Emitted to stderr only (keeps stdout JSON clean for piping).
+ */
+function warnOnStrippedNulls(
+  original: Record<string, unknown>,
+  stripped: Record<string, unknown>,
+): void {
+  if (isJsonFlagEnabled()) return; // don't pollute stderr on bot-driven runs
+  const dropped: string[] = [];
+  for (const key of AGENT_UPDATE_STRIP_NULL_FIELDS) {
+    if (key in original && original[key] === null && !(key in stripped)) {
+      dropped.push(key);
+    }
+  }
+  if (dropped.length > 0) {
+    console.error(
+      `[info] Stripped ${dropped.length} null-valued field(s) the server rejects on update: ${dropped.join(", ")}. ` +
+      "This is expected — server-required shape. See `af schema agent --field update --json` for the full list.",
+    );
   }
 }
 
@@ -3956,6 +4012,7 @@ export function createProgram(): Command {
       const body = loadJsonPayload(opts.body);
       hardenInput(JSON.stringify(body), "agent create body");
       ensureLocalValidation("agent.create", validateAgentCreatePayload(body));
+      preflightModel(body as Record<string, unknown>, "agent create");
       if (opts.dryRun) {
         printResult({ schema: "agenticflow.dry_run.v1", valid: true, target: "agent.create", payload: body });
         return;
@@ -3977,16 +4034,23 @@ export function createProgram(): Command {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
       ensureLocalValidation("agent.update", validateAgentUpdatePayload(body));
+      preflightModel(body as Record<string, unknown>, "agent update");
       if (opts.patch) {
         await run(() =>
           client.agents.patch(opts.agentId, body as Record<string, unknown>, {
-            prepare: (merged) => stripNullFields(merged),
+            prepare: (merged) => {
+              const stripped = stripNullFields(merged);
+              warnOnStrippedNulls(merged, stripped);
+              return stripped;
+            },
           }),
         );
       } else {
         // Full replace, but strip server-rejected nulls so a round-tripped
         // `af agent get | af agent update --body @-` workflow doesn't 422.
-        const prepared = stripNullFields(body as Record<string, unknown>);
+        const original = body as Record<string, unknown>;
+        const prepared = stripNullFields(original);
+        warnOnStrippedNulls(original, prepared);
         await run(() => client.agents.update(opts.agentId, prepared));
       }
     });
