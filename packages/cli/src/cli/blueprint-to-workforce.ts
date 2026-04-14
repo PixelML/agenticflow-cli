@@ -199,6 +199,10 @@ export function blueprintToAgentSpecs(
       model,
       description: `${slot.role} for "${blueprint.name}" workforce`,
       system_prompt: buildSystemPrompt(blueprint, slot),
+      // Match Tier 1 — 100 is the server-side cap and the safe ceiling for
+      // research/content/multi-step agents. Prevents the `completed_empty`
+      // outcome on deeper investigations without any per-run tuning.
+      recursion_limit: 100,
     };
     if (plugins.length > 0) body["plugins"] = plugins;
     return { slotKey: slot.role, slot, body };

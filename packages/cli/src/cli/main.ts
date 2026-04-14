@@ -6106,6 +6106,7 @@ export function createProgram(): Command {
     .command("get")
     .description("Get a single workforce run by ID.")
     .requiredOption("--run-id <id>", "Run ID")
+    .option("--workforce-id <id>", "Workforce ID (accepted for parity with `runs list`; not required — runs are workspace-scoped)")
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
@@ -6116,6 +6117,7 @@ export function createProgram(): Command {
     .command("stop")
     .description("Stop an in-flight workforce run.")
     .requiredOption("--run-id <id>", "Run ID")
+    .option("--workforce-id <id>", "Workforce ID (accepted for parity; not required)")
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .action(async (opts) => {
       const client = buildClient(program.opts());

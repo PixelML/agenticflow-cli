@@ -150,6 +150,12 @@ export function tier1BlueprintToAgentPayload(
     model,
     tools: [],
     plugins,
+    // recursion_limit 100 (backend max) — PDCA rounds caught the 25-default
+    // exhausting on multi-step research questions. Tier 1 agents are
+    // tool-heavy by design (web_search → web_retrieval → synthesize), so
+    // ship them with headroom. Every reasonable customer-demo prompt
+    // converges well under 100 tool calls; 100 is the server-side cap.
+    recursion_limit: 100,
   };
 
   const pluginNames = plugins.map((p) => p.plugin_id).join(", ");

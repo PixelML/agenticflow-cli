@@ -14,6 +14,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.1",
+    date: "2026-04-14",
+    highlights: [
+      "Blueprint agents ship with `recursion_limit: 100` by default (was 25). Customer-demo setup showed a 2-part research query hit recursion exhaustion at 25, returning `completed_empty` on first try. 100 is the server-side cap and clears every realistic multi-step investigation / research / content-create loop on first attempt. Applies to both Tier 1 (`af agent init --blueprint ...`) and Tier 3 workforce slots (`af workforce init --blueprint ...`)",
+      "`af workforce runs get` and `runs stop` now accept `--workforce-id` as an optional flag for parity with `runs list` (the id was already accepted by the backend — this is purely an ergonomic CLI-flag fix so AI operators don't hit `cli_parse_error` when they reach for the same flag across subcommands)",
+    ],
+    for_ai: [
+      "If you patched an older agent's recursion_limit up to dodge `completed_empty`, you no longer need to — fresh `af agent init --blueprint` + `af workforce init --blueprint` deploys now bake in 100 by default",
+      "On existing agents that still exhibit `completed_empty`: `af agent update --agent-id <id> --patch --body '{\"recursion_limit\":100}' --json` raises in place without replacing anything else",
+    ],
+  },
+  {
     version: "1.10.0",
     date: "2026-04-14",
     highlights: [
