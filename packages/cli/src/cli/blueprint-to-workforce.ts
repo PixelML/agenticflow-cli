@@ -1,30 +1,24 @@
 /**
- * Pure translator: CompanyBlueprint → MAS workforce graph (skeleton).
+ * CompanyBlueprint → MAS workforce deploy.
  *
- * Converts a Paperclip-era blueprint (agent role slots + starter tasks) into
- * a MINIMAL VALID AgenticFlow workforce graph that the user can then fill in
- * with real agents via the UI or follow-up CLI commands.
+ * Two modes:
  *
- * Why a skeleton, not a full agent graph:
- *   MAS `agent` nodes require a real `agent_id` (verified 400 on live attempt
- *   2026-04-14). The CLI cannot synthesize agents during init without either
- *   creating real agent entities (heavyweight: N API calls, model/prompt picks)
- *   or matching against marketplace templates (requires a search flow).
- *   A skeleton avoids the chicken-and-egg: deploy succeeds, user knows exactly
- *   what to wire next.
+ *   1. SKELETON (original, `blueprintToWorkforce`)
+ *      Produces a minimal trigger+output graph with blueprint metadata on the
+ *      trigger. User fills in agent nodes afterwards. Fast, no agent creation,
+ *      safe for --dry-run.
  *
- * What the skeleton contains:
- *   - One `trigger` node carrying the full blueprint metadata (slots, tasks,
- *     goal) so downstream tooling can materialize agents later.
- *   - One `output` node that echoes the message from the triggering run.
- *   - A `next_step` edge from trigger → output.
+ *   2. FULL DEPLOY (new, `blueprintToAgentSpecs` + `buildAgentWiredGraph`)
+ *      Produces agent-create specs AND a graph stub parameterised by
+ *      {slotRole → agentId}. Caller creates the agents, then feeds the map
+ *      into `buildAgentWiredGraph` to produce a fully-wired graph ready for
+ *      PUT /schema.
  *
- * What callers of this translator should then do:
- *   1. POST the workforce (metadata only).
- *   2. PUT the skeleton schema from this translator.
- *   3. Surface `next_steps` in the response telling the user:
- *      "Open the UI, add one Agent node per slot in trigger.input.planned_agents,
- *       connect them from the trigger, and publish."
+ * The two-phase design exists because MAS `agent` nodes require a real
+ * `agent_id` (the backend 400s otherwise), so we can't one-shot the graph
+ * without first materialising agents. Splitting keeps the pure translator
+ * pure and leaves the side-effectful agent-creation to the CLI command which
+ * can handle error-rollback.
  */
 
 import type { CompanyBlueprint, AgentSlot } from "./company-blueprints.js";
@@ -125,4 +119,182 @@ export function blueprintToWorkforce(
     edges,
     suggested_next_steps,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Full deploy — creates real agents + wires them into an agent-node graph
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Create-payload specification for one agent slot.
+ * Caller passes each to `client.agents.create()`, then maps the returned
+ * agent ids back into `buildAgentWiredGraph()`.
+ */
+export interface AgentSpec {
+  /** Stable slot identifier (= slot.role) used as the map key. */
+  slotKey: string;
+  /** The body to POST to /v1/agents/. Includes project_id, name, tools, etc. */
+  body: Record<string, unknown>;
+  /** Reference to the source slot, for graph wiring + failure reporting. */
+  slot: AgentSlot;
+}
+
+/**
+ * Build N agent-create payloads from a blueprint. Each agent:
+ *   - `name` prefixed with workforce name for identification
+ *   - `system_prompt` derived from slot.title + slot.description + blueprint goal
+ *   - `model` defaulted (overridable via options.model)
+ *   - `tools: []` (user attaches MCPs/tools afterwards)
+ *
+ * `project_id` is REQUIRED — caller supplies from `af bootstrap > auth.project_id`.
+ */
+export function blueprintToAgentSpecs(
+  blueprint: CompanyBlueprint,
+  options: {
+    projectId: string;
+    workforceName: string;
+    model?: string;
+    includeOptionalSlots?: boolean;
+  },
+): AgentSpec[] {
+  const model = options.model ?? "agenticflow/gemini-2.0-flash";
+  const slots = options.includeOptionalSlots
+    ? blueprint.agents
+    : blueprint.agents.filter((s) => !s.optional);
+  return slots.map((slot) => ({
+    slotKey: slot.role,
+    slot,
+    body: {
+      name: `${options.workforceName} — ${slot.title}`,
+      project_id: options.projectId,
+      tools: [],
+      model,
+      description: `${slot.role} for "${blueprint.name}" workforce`,
+      system_prompt: buildSystemPrompt(blueprint, slot),
+    },
+  }));
+}
+
+function buildSystemPrompt(blueprint: CompanyBlueprint, slot: AgentSlot): string {
+  return [
+    `You are the ${slot.title} for "${blueprint.name}".`,
+    ``,
+    `YOUR ROLE: ${slot.description}`,
+    ``,
+    `TEAM GOAL: ${blueprint.goal}`,
+    ``,
+    slot.suggestedTemplate
+      ? `REFERENCE: Behave like the AgenticFlow marketplace template "${slot.suggestedTemplate}" for this role.`
+      : null,
+    ``,
+    `OPERATING RULES:`,
+    `- Stay in your role; do not do work outside ${slot.role} scope.`,
+    `- When you need input from another role, name the role in your response rather than acting for them.`,
+    `- Produce concrete, structured output the downstream node in the workforce can act on.`,
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+}
+
+/**
+ * Build a full workforce graph that references real agent_ids.
+ *
+ * Shape:
+ *   trigger ──► coordinator_agent ──► worker_agent_1
+ *                                  ├─► worker_agent_2
+ *                                  ├─► worker_agent_3
+ *                                  └─► output (from coordinator)
+ *
+ * The first non-optional slot (typically "ceo") becomes the coordinator.
+ * Coordinator receives the trigger event, and all other agents receive
+ * their handoff from the coordinator. `output` listens on the coordinator.
+ *
+ * `agentIdBySlot` MUST contain an id for every slot in `specs` — callers
+ * produce this map by creating agents and pairing the returned ids back
+ * with `spec.slotKey`.
+ */
+export function buildAgentWiredGraph(
+  blueprint: CompanyBlueprint,
+  specs: AgentSpec[],
+  agentIdBySlot: Record<string, string>,
+): { nodes: WorkforceSchema["nodes"][number][]; edges: WorkforceSchema["edges"][number][] } {
+  if (specs.length === 0) {
+    throw new Error("No agent specs provided to buildAgentWiredGraph");
+  }
+  const coordinatorSpec = specs[0]!;
+  const coordinatorId = agentIdBySlot[coordinatorSpec.slotKey];
+  if (!coordinatorId) {
+    throw new Error(`Missing agent_id for coordinator slot "${coordinatorSpec.slotKey}"`);
+  }
+  const coordinatorNodeName = slotToNodeName(coordinatorSpec.slot);
+
+  const GRID_X = 320;
+  const GRID_Y = 180;
+
+  const nodes: WorkforceSchema["nodes"][number][] = [
+    {
+      name: "trigger",
+      type: "trigger",
+      position: { x: 0, y: GRID_Y },
+      input: {},
+      meta: {
+        source_blueprint: blueprint.id,
+        blueprint_name: blueprint.name,
+        blueprint_goal: blueprint.goal,
+        starter_tasks: blueprint.starterTasks,
+      },
+    },
+    {
+      name: coordinatorNodeName,
+      type: "agent",
+      position: { x: GRID_X, y: GRID_Y },
+      input: { agent_id: coordinatorId },
+      meta: {
+        role: coordinatorSpec.slot.role,
+        title: coordinatorSpec.slot.title,
+        is_coordinator: true,
+      },
+    },
+  ];
+
+  // Worker agent nodes, laid out to the right of the coordinator, stacked vertically
+  specs.slice(1).forEach((spec, i) => {
+    const nodeName = slotToNodeName(spec.slot);
+    const agentId = agentIdBySlot[spec.slotKey];
+    if (!agentId) {
+      throw new Error(`Missing agent_id for slot "${spec.slotKey}"`);
+    }
+    nodes.push({
+      name: nodeName,
+      type: "agent",
+      position: { x: GRID_X * 2, y: i * GRID_Y },
+      input: { agent_id: agentId },
+      meta: { role: spec.slot.role, title: spec.slot.title },
+    });
+  });
+
+  // Output node listens on the coordinator's result
+  nodes.push({
+    name: "output",
+    type: "output",
+    position: { x: GRID_X * 3, y: GRID_Y },
+    input: { message: `${blueprint.name} team response` },
+  });
+
+  const edges: WorkforceSchema["edges"][number][] = [
+    // trigger → coordinator
+    { source_node_name: "trigger", target_node_name: coordinatorNodeName, connection_type: "next_step" },
+    // coordinator → output
+    { source_node_name: coordinatorNodeName, target_node_name: "output", connection_type: "next_step" },
+  ];
+  // coordinator → each worker agent (fan-out)
+  for (const spec of specs.slice(1)) {
+    edges.push({
+      source_node_name: coordinatorNodeName,
+      target_node_name: slotToNodeName(spec.slot),
+      connection_type: "next_step",
+    });
+  }
+
+  return { nodes, edges };
 }

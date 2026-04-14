@@ -5202,15 +5202,23 @@ export function createProgram(): Command {
   workforceCmd
     .command("init")
     .description(
-      "Deploy a blueprint as an AgenticFlow-native workforce (no Paperclip). " +
-      "Translates the blueprint's agent slots into MAS nodes + edges, then PUTs the graph.",
+      "Deploy a blueprint as an AgenticFlow-native workforce. Default behavior " +
+      "(v1.6+): creates a real agent per non-optional blueprint slot, then wires " +
+      "them into a runnable DAG. Use --skeleton-only for the old v1.5 behavior " +
+      "(trigger + output + blueprint metadata, no agents).",
     )
     .requiredOption("--blueprint <slug>", "Blueprint id (run `af paperclip blueprints` to list)")
     .option("--name <name>", "Workforce name (defaults to blueprint name)")
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
-    .option("--dry-run", "Show the graph that would be deployed without writing")
+    .option("--project-id <id>", "Project ID to use for agent creation (defaults to env / client config)")
+    .option("--model <model>", "Model to use for all agent slots (default: agenticflow/gemini-2.0-flash). Pass --include-optional-slots to fill every slot", "agenticflow/gemini-2.0-flash")
+    .option("--include-optional-slots", "Also create agents for slots marked optional in the blueprint")
+    .option("--skeleton-only", "Create a skeleton (trigger + output + blueprint metadata) WITHOUT materializing agents. The v1.5 behavior; use when you plan to wire agents yourself")
+    .option("--dry-run", "Show the graph + agent specs that would be created without writing")
     .action(async (opts) => {
-      const { blueprintToWorkforce } = await import("./blueprint-to-workforce.js");
+      const { blueprintToWorkforce, blueprintToAgentSpecs, buildAgentWiredGraph } = await import(
+        "./blueprint-to-workforce.js"
+      );
       const blueprint = getBlueprint(opts.blueprint as string);
       if (!blueprint) {
         fail(
@@ -5219,49 +5227,186 @@ export function createProgram(): Command {
           "Run `af paperclip blueprints` to see available ids.",
         );
       }
-      const translated = blueprintToWorkforce(blueprint, { name: opts.name });
-      if (opts.dryRun) {
-        printResult({
-          schema: "agenticflow.dry_run.v1",
-          valid: true,
-          target: "workforce.init",
-          blueprint: blueprint.id,
-          workforce: translated.workforce,
-          node_count: translated.nodes.length,
-          edge_count: translated.edges.length,
-          nodes: translated.nodes,
-          edges: translated.edges,
+
+      // ── Skeleton-only fast path (v1.5 behavior preserved) ────────────────
+      if (opts.skeletonOnly) {
+        const translated = blueprintToWorkforce(blueprint, { name: opts.name });
+        if (opts.dryRun) {
+          printResult({
+            schema: "agenticflow.dry_run.v1",
+            valid: true,
+            target: "workforce.init",
+            mode: "skeleton",
+            blueprint: blueprint.id,
+            workforce: translated.workforce,
+            node_count: translated.nodes.length,
+            edge_count: translated.edges.length,
+            nodes: translated.nodes,
+            edges: translated.edges,
+          });
+          return;
+        }
+        const client = buildClient(program.opts());
+        await run(async () => {
+          const created = (await client.workforces.create(
+            translated.workforce as unknown as Record<string, unknown>,
+            { workspaceId: opts.workspaceId },
+          )) as Record<string, unknown>;
+          const workforceId = created["id"] as string;
+          if (!workforceId) throw new Error("Workforce create did not return an id.");
+          await client.workforces.putSchema(
+            workforceId,
+            { nodes: translated.nodes, edges: translated.edges },
+            { workspaceId: opts.workspaceId },
+          );
+          return {
+            schema: "agenticflow.workforce.init.v1",
+            workforce_id: workforceId,
+            blueprint: blueprint.id,
+            mode: "skeleton",
+            node_count: translated.nodes.length,
+            edge_count: translated.edges.length,
+            skeleton: true,
+            next_steps: translated.suggested_next_steps,
+          };
         });
         return;
       }
-      const client = buildClient(program.opts());
-      await run(async () => {
-        const created = (await client.workforces.create(
-          translated.workforce as unknown as Record<string, unknown>,
-          { workspaceId: opts.workspaceId },
-        )) as Record<string, unknown>;
-        const workforceId = created["id"] as string;
-        if (!workforceId) {
-          throw new Error("Workforce create did not return an id.");
-        }
-        await client.workforces.putSchema(
-          workforceId,
-          { nodes: translated.nodes, edges: translated.edges },
-          { workspaceId: opts.workspaceId },
+
+      // ── Full deploy path (v1.6+ default) ─────────────────────────────────
+      // Resolve project_id (required for agent create — server doesn't auto-inject on agents)
+      // Build the client eagerly so we can read its auth-config-derived projectId
+      // (auth.json > env > flag). Callers that override with --project-id win.
+      const fullClient = buildClient(program.opts());
+      const projectId =
+        (opts.projectId as string | undefined) ??
+        (program.opts().projectId as string | undefined) ??
+        process.env["AGENTICFLOW_PROJECT_ID"] ??
+        (fullClient.sdk.projectId as string | undefined);
+      if (!projectId) {
+        fail(
+          "missing_required_option",
+          "Full workforce init requires a project_id for agent creation.",
+          "Pass --project-id <id>, set AGENTICFLOW_PROJECT_ID, or run `af bootstrap --json` and copy `auth.project_id`. Alternatively use --skeleton-only to skip agent materialization.",
         );
-        return {
+      }
+
+      const workforceName = (opts.name as string | undefined) ?? blueprint.name;
+      const specs = blueprintToAgentSpecs(blueprint, {
+        projectId: projectId as string,
+        workforceName,
+        model: opts.model as string,
+        includeOptionalSlots: Boolean(opts.includeOptionalSlots),
+      });
+
+      if (opts.dryRun) {
+        // Show plan without side effects
+        const plan = {
+          schema: "agenticflow.dry_run.v1",
+          valid: true,
+          target: "workforce.init",
+          mode: "full",
+          blueprint: blueprint.id,
+          workforce: { name: workforceName, description: blueprint.description },
+          agents_to_create: specs.map((s) => ({
+            slot_role: s.slotKey,
+            title: s.slot.title,
+            model: s.body["model"],
+            preview_system_prompt: (s.body["system_prompt"] as string).slice(0, 120) + "…",
+          })),
+          estimated_node_count: specs.length + 2, // + trigger + output
+          estimated_edge_count: specs.length + 1, // trigger→coordinator + coordinator→{workers,output}
+        };
+        printResult(plan);
+        return;
+      }
+
+      const client = fullClient;
+
+      // Track created IDs so we can roll back on failure
+      let workforceId: string | null = null;
+      const createdAgentIds: string[] = [];
+
+      try {
+        // 1. Create the workforce shell (metadata only)
+        const wfCreated = (await client.workforces.create(
+          { name: workforceName, description: blueprint.description },
+          { workspaceId: opts.workspaceId, projectId: projectId as string },
+        )) as Record<string, unknown>;
+        workforceId = wfCreated["id"] as string;
+        if (!workforceId) throw new Error("Workforce create did not return an id.");
+
+        // 2. Create agents serially (easier error handling than parallel; N is small — 3-5)
+        const agentIdBySlot: Record<string, string> = {};
+        for (const spec of specs) {
+          const agent = (await client.agents.create(spec.body)) as Record<string, unknown>;
+          const agentId = agent["id"] as string | undefined;
+          if (!agentId) throw new Error(`Agent create for slot "${spec.slotKey}" did not return an id.`);
+          createdAgentIds.push(agentId);
+          agentIdBySlot[spec.slotKey] = agentId;
+        }
+
+        // 3. Build the fully-wired graph + PUT schema
+        const graph = buildAgentWiredGraph(blueprint, specs, agentIdBySlot);
+        await client.workforces.putSchema(workforceId, graph, { workspaceId: opts.workspaceId });
+
+        // 4. Return structured deploy report
+        printResult({
           schema: "agenticflow.workforce.init.v1",
           workforce_id: workforceId,
           blueprint: blueprint.id,
-          node_count: translated.nodes.length,
-          edge_count: translated.edges.length,
-          skeleton: true,
-          next_steps: translated.suggested_next_steps.concat([
-            `af workforce schema --workforce-id ${workforceId} --json  # inspect current graph`,
-            `af workforce run --workforce-id ${workforceId} --trigger-data '{}'  # smoke-test the skeleton`,
-          ]),
+          mode: "full",
+          node_count: graph.nodes.length,
+          edge_count: graph.edges.length,
+          skeleton: false,
+          agents: specs.map((s) => ({
+            slot_role: s.slotKey,
+            agent_id: agentIdBySlot[s.slotKey],
+            title: s.slot.title,
+          })),
+          next_steps: [
+            `af workforce schema --workforce-id ${workforceId} --json  # inspect the wired graph`,
+            `af workforce run --workforce-id ${workforceId} --trigger-data '{"message":"..."}'  # smoke-test`,
+            `af workforce publish --workforce-id ${workforceId} --json  # mint a public URL`,
+            `Each agent was created blank-tools; attach MCP clients or tools via 'af agent update --agent-id <id> --patch --body '{"mcp_clients":[...]}' as needed`,
+          ],
+        });
+      } catch (err) {
+        // Atomic rollback: delete any agents + workforce created so far, then re-throw
+        const rollbackErrors: string[] = [];
+        for (const agentId of createdAgentIds) {
+          try {
+            await client.agents.delete(agentId);
+          } catch (rbErr) {
+            rollbackErrors.push(`agent ${agentId}: ${rbErr instanceof Error ? rbErr.message : String(rbErr)}`);
+          }
+        }
+        if (workforceId) {
+          try {
+            await client.workforces.delete(workforceId, { workspaceId: opts.workspaceId });
+          } catch (rbErr) {
+            rollbackErrors.push(`workforce ${workforceId}: ${rbErr instanceof Error ? rbErr.message : String(rbErr)}`);
+          }
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        const details: Record<string, unknown> = {
+          rolled_back_agents: createdAgentIds,
+          rolled_back_workforce: workforceId,
         };
-      });
+        if (rollbackErrors.length > 0) details["rollback_errors"] = rollbackErrors;
+        if (err instanceof APIError && err.payload !== null && err.payload !== undefined) {
+          details["payload"] = err.payload;
+          details["status_code"] = err.statusCode;
+        }
+        fail(
+          "workforce_init_failed",
+          `Workforce init failed: ${message}`,
+          rollbackErrors.length > 0
+            ? "Rollback partially failed — check rollback_errors and delete stray resources manually."
+            : "All resources created so far were rolled back. Fix the underlying issue and retry.",
+          details,
+        );
+      }
     });
 
   // triggers  (SDK-based)

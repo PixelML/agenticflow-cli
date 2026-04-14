@@ -14,6 +14,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.6.0",
+    date: "2026-04-14",
+    highlights: [
+      "`af workforce init --blueprint <slug>` now deploys a RUNNABLE TEAM by default — creates one real agent per non-optional blueprint slot, then wires them into a DAG (trigger → coordinator → worker agents → output). Previously it produced a skeleton the user had to finish manually",
+      "Atomic rollback on failure: if workforce init fails at any step, every agent created so far is deleted and the workforce is removed. No orphans",
+      "`--skeleton-only` preserves the v1.5 behavior for users who want to wire agents manually (e.g. re-use existing agents rather than auto-create)",
+      "`--model` flag lets you pick the model for all auto-created agents (default: agenticflow/gemini-2.0-flash). `--include-optional-slots` fills every slot, not just the required ones",
+      "`--dry-run` shows both the agent-create plan AND the graph shape without touching the workspace — preview the full team before committing",
+    ],
+    for_ai: [
+      "NEW DEFAULT FLOW: `af workforce init --blueprint amazon-seller --name \"My Team\" --json` gives you a fully runnable workforce in one command. Returns {workforce_id, agents:[{slot_role, agent_id, title}], node_count, edge_count, next_steps}",
+      "Each auto-created agent starts with tools:[] — attach MCP clients or tools with `af agent update --agent-id <id> --patch --body '{\"mcp_clients\":[...]}'` after init",
+      "If init fails, the error details carry `rolled_back_agents` and `rolled_back_workforce` so you know what was undone. If rollback itself fails, `rollback_errors` lists what needs manual cleanup",
+      "Use `--dry-run` first to preview: you'll see the model per slot, a preview of each agent's system prompt, and the estimated node/edge count — no side effects",
+      "Set `--project-id` explicitly if your shell doesn't have AGENTICFLOW_PROJECT_ID — full init needs it for agent creation (server doesn't auto-inject for agent endpoints)",
+    ],
+  },
+  {
     version: "1.5.3",
     date: "2026-04-14",
     highlights: [
