@@ -14,6 +14,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.7.1",
+    date: "2026-04-14",
+    highlights: [
+      "HOTFIX: workforces created via `af workforce init --blueprint <id>` now actually RUN. Previously, the generated graph deployed successfully and validated with 0 errors but all agent nodes failed at runtime with `TypeError: expected string or buffer` because the trigger payload never reached them — the agent node `input.message` was omitted, defaulting to null",
+      "Agent nodes in blueprint-generated graphs now include templated input: coordinator gets `message: \"{{trigger.message}}\"`, workers get `message: \"{{nodes.<coordinator>.output.last_message}}\"`, output returns the coordinator's final response. Verified via the public-endpoint runtime (workforce publish → public run URL)",
+    ],
+    for_ai: [
+      "If you deployed a workforce via `af workforce init` on v1.7.0 and your users reported the run returns only a hardcoded output string, re-deploy on v1.7.1 — the graph structure is the same but the input wiring is now correct",
+      "When hand-authoring a workforce graph via `af workforce deploy --body @file`, every agent node needs `input.message` — use `{{trigger.<field>}}` for the first agent and `{{nodes.<upstream>.output.last_message}}` for downstream agents. The MAS runtime substitutes at execution time",
+    ],
+  },
+  {
     version: "1.7.0",
     date: "2026-04-14",
     highlights: [

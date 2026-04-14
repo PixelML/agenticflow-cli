@@ -248,7 +248,16 @@ export function buildAgentWiredGraph(
       name: coordinatorNodeName,
       type: "agent",
       position: { x: GRID_X, y: GRID_Y },
-      input: { agent_id: coordinatorId },
+      // Coordinator receives the user's trigger payload. The MAS runtime
+      // substitutes {{trigger.message}} with trigger_data.message at run time.
+      // Without this, the agent gets message:null and the model API throws
+      // `TypeError: expected string or buffer`. Discovered 2026-04-14 via
+      // public-endpoint runtime test (CLI v1.7.0 → v1.7.1 hotfix).
+      input: {
+        agent_id: coordinatorId,
+        message: "{{trigger.message}}",
+        thread_option: "create_new",
+      },
       meta: {
         role: coordinatorSpec.slot.role,
         title: coordinatorSpec.slot.title,
@@ -257,7 +266,9 @@ export function buildAgentWiredGraph(
     },
   ];
 
-  // Worker agent nodes, laid out to the right of the coordinator, stacked vertically
+  // Worker agent nodes receive the coordinator's last message as their input.
+  // This creates a research-then-act chain: coordinator digests user intent,
+  // workers act on the coordinator's distilled task.
   specs.slice(1).forEach((spec, i) => {
     const nodeName = slotToNodeName(spec.slot);
     const agentId = agentIdBySlot[spec.slotKey];
@@ -268,17 +279,25 @@ export function buildAgentWiredGraph(
       name: nodeName,
       type: "agent",
       position: { x: GRID_X * 2, y: i * GRID_Y },
-      input: { agent_id: agentId },
+      input: {
+        agent_id: agentId,
+        message: `{{nodes.${coordinatorNodeName}.output.last_message}}`,
+        thread_option: "create_new",
+      },
       meta: { role: spec.slot.role, title: spec.slot.title },
     });
   });
 
-  // Output node listens on the coordinator's result
+  // Output node returns the coordinator's final response to the caller.
+  // (Workers run in parallel and their outputs remain accessible via
+  // nodes.<worker>.output.last_message for users who want a custom aggregation.)
   nodes.push({
     name: "output",
     type: "output",
     position: { x: GRID_X * 3, y: GRID_Y },
-    input: { message: `${blueprint.name} team response` },
+    input: {
+      message: `{{nodes.${coordinatorNodeName}.output.last_message}}`,
+    },
   });
 
   const edges: WorkforceSchema["edges"][number][] = [
