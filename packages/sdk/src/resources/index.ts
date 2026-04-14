@@ -16,3 +16,10 @@ export {
   PublicWorkforceSubresource,
 } from "./workforces.js";
 export type { WorkforceListOptions, WorkforceSchema } from "./workforces.js";
+export {
+  MarketplaceResource,
+  AgentTemplatesResource,
+  WorkflowTemplatesResource,
+  MasTemplatesResource,
+} from "./marketplace.js";
+export type { MarketplaceItemType, MarketplaceListOptions } from "./marketplace.js";

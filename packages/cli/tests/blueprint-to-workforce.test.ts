@@ -89,7 +89,7 @@ describe("blueprintToAgentSpecs — full deploy agent create payloads (v1.6)", (
       expect(s.body["name"]).toContain("Acme Marketing");
       expect(s.body["project_id"]).toBe("proj-1");
       expect(s.body["tools"]).toEqual([]);
-      expect(s.body["model"]).toBe("agenticflow/gemini-2.0-flash");
+      expect(s.body["model"]).toBe("agenticflow/gpt-4o-mini");
       expect(typeof s.body["system_prompt"]).toBe("string");
       expect((s.body["system_prompt"] as string).length).toBeGreaterThan(50);
     }
@@ -171,8 +171,11 @@ describe("buildAgentWiredGraph — full deploy graph wiring (v1.6)", () => {
     expect(() => buildAgentWiredGraph(bp, [], {})).toThrow(/No agent specs/);
   });
 
-  it("every blueprint round-trips through full deploy without error", () => {
+  it("every agent/workforce blueprint round-trips through full deploy without error", () => {
+    // Workflow-kind blueprints (v1.10+) have empty .agents — they deploy via
+    // af workflow init, not workforce init. Exclude them from this test.
     for (const bp of listBlueprints()) {
+      if (bp.kind === "workflow") continue;
       const specs = blueprintToAgentSpecs(bp, {
         projectId: "p",
         workforceName: "T",

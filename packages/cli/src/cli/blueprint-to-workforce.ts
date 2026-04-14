@@ -157,25 +157,87 @@ export function blueprintToAgentSpecs(
     includeOptionalSlots?: boolean;
   },
 ): AgentSpec[] {
-  const model = options.model ?? "agenticflow/gemini-2.0-flash";
+  // Default model choice for Tier 3: gpt-4o-mini matches Tier 1 (PDCA
+  // 2026-04-14 — gemini-2.0-flash refuses tool calls on "latest X" prompts,
+  // gpt-4o-mini routes to tools correctly even on 6+ plugin configs).
+  const model = options.model ?? "agenticflow/gpt-4o-mini";
   const slots = options.includeOptionalSlots
     ? blueprint.agents
     : blueprint.agents.filter((s) => !s.optional);
-  return slots.map((slot) => ({
-    slotKey: slot.role,
-    slot,
-    body: {
+  return slots.map((slot) => {
+    // If the slot declares plugins (v1.8+ Tier 3 blueprints), translate them
+    // to the same AgentPluginToolConfig shape Tier 1 uses. For slots without
+    // plugins (legacy blueprints like dev-shop, marketing-agency) the agent
+    // is created blank-tools and users attach tools via `af agent update`.
+    const plugins = (slot.plugins ?? []).map((spec) => {
+      let connection: string | null = null;
+      if (spec.connectionCategory === "pixelml") {
+        throw new Error(
+          `Tier 3 blueprint slot "${slot.role}" needs pixelml connection for plugin "${spec.nodeTypeName}" — not yet supported. Use only connection=None plugins (web_search, web_retrieval, api_call, agenticflow_generate_image, string_to_json).`,
+        );
+      }
+      const inputConfig = spec.input
+        ? Object.fromEntries(
+            Object.entries(spec.input).map(([k, v]) => [
+              k,
+              { value: v.value, description: v.description ?? null },
+            ]),
+          )
+        : null;
+      return {
+        plugin_id: spec.nodeTypeName,
+        plugin_version: "v1.0.0",
+        run_behavior: "auto_run" as const,
+        connection,
+        input_config: inputConfig,
+      };
+    });
+    const body: Record<string, unknown> = {
       name: `${options.workforceName} — ${slot.title}`,
       project_id: options.projectId,
       tools: [],
       model,
       description: `${slot.role} for "${blueprint.name}" workforce`,
       system_prompt: buildSystemPrompt(blueprint, slot),
-    },
-  }));
+    };
+    if (plugins.length > 0) body["plugins"] = plugins;
+    return { slotKey: slot.role, slot, body };
+  });
 }
 
 function buildSystemPrompt(blueprint: CompanyBlueprint, slot: AgentSlot): string {
+  const plugins = slot.plugins ?? [];
+  const hasWebSearch = plugins.some((p) => p.nodeTypeName === "web_search");
+  const hasWebRetrieval = plugins.some((p) => p.nodeTypeName === "web_retrieval");
+  const hasApiCall = plugins.some((p) => p.nodeTypeName === "api_call");
+  const hasImageGen = plugins.some((p) => p.nodeTypeName === "agenticflow_generate_image");
+
+  // PDCA round 3 (2026-04-14): Researcher B slot fired NO tool calls despite
+  // having web_search and web_retrieval attached — its system prompt wasn't
+  // explicit enough that "research" means "call the tool". Fix: when a slot
+  // has web_search, make tool-calling a hard REQUIREMENT at the top of the
+  // prompt, not just a recommendation in a later block.
+  const toolBlock = plugins.length
+    ? [
+        ``,
+        `MANDATORY TOOL USE — your slot has plugins attached. You MUST call at least one before answering, unless the question is trivially timeless (e.g. "what is 2+2"):`,
+        ...plugins.map((p) => `- ${p.nodeTypeName}`),
+        hasWebSearch
+          ? `- For ANY question about current events, recent releases, specific products, people, companies, or dates → call web_search FIRST. Do NOT answer from prior knowledge.`
+          : null,
+        hasWebRetrieval
+          ? `- After web_search, use web_retrieval to pull full content from the most relevant URLs before synthesizing.`
+          : null,
+        hasApiCall
+          ? `- For HTTP-API questions or when given an endpoint, call api_call. Parse the JSON response in your reply.`
+          : null,
+        hasImageGen
+          ? `- For image requests, call agenticflow_generate_image with a SPECIFIC, descriptive prompt (not the user's vague wording).`
+          : null,
+        `- NEVER say "I cannot provide information that far in the future" or "my knowledge cutoff is..." — your tools are how you get past the cutoff, USE THEM.`,
+        `- Cite URLs you actually retrieved. If you have no URL, you haven't done your job yet.`,
+      ].filter((l) => l !== null)
+    : [];
   return [
     `You are the ${slot.title} for "${blueprint.name}".`,
     ``,
@@ -186,6 +248,7 @@ function buildSystemPrompt(blueprint: CompanyBlueprint, slot: AgentSlot): string
     slot.suggestedTemplate
       ? `REFERENCE: Behave like the AgenticFlow marketplace template "${slot.suggestedTemplate}" for this role.`
       : null,
+    ...toolBlock,
     ``,
     `OPERATING RULES:`,
     `- Stay in your role; do not do work outside ${slot.role} scope.`,
@@ -228,6 +291,16 @@ export function buildAgentWiredGraph(
   }
   const coordinatorNodeName = slotToNodeName(coordinatorSpec.slot);
 
+  // Topology selection. Default = "star" (coordinator → each worker in parallel,
+  // output reads coordinator). If any slot is marked isSynthesizer, we use
+  // "star-synthesizer" (coordinator → each non-synth worker → synthesizer →
+  // output) so fan-out/fan-in patterns like parallel-research actually return
+  // the synthesizer's final answer to the user.
+  const synthesizerSpec = specs.find((s) => s.slot.isSynthesizer);
+  const workerSpecs = specs
+    .slice(1)
+    .filter((s) => !s.slot.isSynthesizer);
+
   const GRID_X = 320;
   const GRID_Y = 180;
 
@@ -242,6 +315,7 @@ export function buildAgentWiredGraph(
         blueprint_name: blueprint.name,
         blueprint_goal: blueprint.goal,
         starter_tasks: blueprint.starterTasks,
+        topology: synthesizerSpec ? "star-synthesizer" : "star",
       },
     },
     {
@@ -266,10 +340,8 @@ export function buildAgentWiredGraph(
     },
   ];
 
-  // Worker agent nodes receive the coordinator's last message as their input.
-  // This creates a research-then-act chain: coordinator digests user intent,
-  // workers act on the coordinator's distilled task.
-  specs.slice(1).forEach((spec, i) => {
+  // Worker agent nodes — each receives the coordinator's last message.
+  workerSpecs.forEach((spec, i) => {
     const nodeName = slotToNodeName(spec.slot);
     const agentId = agentIdBySlot[spec.slotKey];
     if (!agentId) {
@@ -288,29 +360,87 @@ export function buildAgentWiredGraph(
     });
   });
 
-  // Output node returns the coordinator's final response to the caller.
-  // (Workers run in parallel and their outputs remain accessible via
-  // nodes.<worker>.output.last_message for users who want a custom aggregation.)
-  nodes.push({
-    name: "output",
-    type: "output",
-    position: { x: GRID_X * 3, y: GRID_Y },
-    input: {
-      message: `{{nodes.${coordinatorNodeName}.output.last_message}}`,
-    },
-  });
-
   const edges: WorkforceSchema["edges"][number][] = [
     // trigger → coordinator
     { source_node_name: "trigger", target_node_name: coordinatorNodeName, connection_type: "next_step" },
-    // coordinator → output
-    { source_node_name: coordinatorNodeName, target_node_name: "output", connection_type: "next_step" },
   ];
   // coordinator → each worker agent (fan-out)
-  for (const spec of specs.slice(1)) {
+  for (const spec of workerSpecs) {
     edges.push({
       source_node_name: coordinatorNodeName,
       target_node_name: slotToNodeName(spec.slot),
+      connection_type: "next_step",
+    });
+  }
+
+  if (synthesizerSpec) {
+    // Synthesizer topology — workers feed synthesizer; synthesizer feeds output.
+    const synthNodeName = slotToNodeName(synthesizerSpec.slot);
+    const synthAgentId = agentIdBySlot[synthesizerSpec.slotKey];
+    if (!synthAgentId) {
+      throw new Error(`Missing agent_id for synthesizer slot "${synthesizerSpec.slotKey}"`);
+    }
+    // Aggregate all worker outputs into the synthesizer's message input,
+    // with a labeled separator per worker so the synthesizer knows which
+    // report came from whom.
+    const aggregatedMessage = workerSpecs
+      .map(
+        (s) =>
+          `[${s.slot.title}]\n{{nodes.${slotToNodeName(s.slot)}.output.last_message}}`,
+      )
+      .join("\n\n---\n\n");
+    nodes.push({
+      name: synthNodeName,
+      type: "agent",
+      position: { x: GRID_X * 3, y: GRID_Y },
+      input: {
+        agent_id: synthAgentId,
+        message: aggregatedMessage || "{{trigger.message}}",
+        thread_option: "create_new",
+      },
+      meta: {
+        role: synthesizerSpec.slot.role,
+        title: synthesizerSpec.slot.title,
+        is_synthesizer: true,
+      },
+    });
+    // Each worker → synthesizer (fan-in)
+    for (const spec of workerSpecs) {
+      edges.push({
+        source_node_name: slotToNodeName(spec.slot),
+        target_node_name: synthNodeName,
+        connection_type: "next_step",
+      });
+    }
+    // Output reads synthesizer's final answer
+    nodes.push({
+      name: "output",
+      type: "output",
+      position: { x: GRID_X * 4, y: GRID_Y },
+      input: {
+        message: `{{nodes.${synthNodeName}.output.last_message}}`,
+      },
+    });
+    edges.push({
+      source_node_name: synthNodeName,
+      target_node_name: "output",
+      connection_type: "next_step",
+    });
+  } else {
+    // Default (no synthesizer): output reads coordinator. Workers run in
+    // parallel but their outputs only show in the full schema, not in the
+    // user-facing response.
+    nodes.push({
+      name: "output",
+      type: "output",
+      position: { x: GRID_X * 3, y: GRID_Y },
+      input: {
+        message: `{{nodes.${coordinatorNodeName}.output.last_message}}`,
+      },
+    });
+    edges.push({
+      source_node_name: coordinatorNodeName,
+      target_node_name: "output",
       connection_type: "next_step",
     });
   }

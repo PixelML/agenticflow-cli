@@ -14,6 +14,88 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.0",
+    date: "2026-04-14",
+    highlights: [
+      "**Composition ladder** — AgenticFlow's workflow/agent/workforce primitives are now surfaced as a 7-rung complexity ladder. Blueprints span rungs 0-3 + 6. CompanyBlueprint gained `kind` (workflow|agent|workforce) and `complexity` (0-6) fields; `tier` remains for backward compat",
+      "**`af workflow init --blueprint <id>`** — new command for rungs 0-2. Deploys deterministic multi-node workflows with auto-discovered LLM-provider connection",
+      "4 new workflow blueprints: `llm-hello` (rung 0), `llm-chain` (rung 1), `summarize-url` (rung 2), `api-summary` (rung 2) — all live-verified end-to-end with real data",
+      "**Bug fix — `af workforce run` with API-key auth returns a helpful error.** Backend rejects API-key auth on that path (400 `Failed to retrieve user info`); CLI now detects the specific failure and prints a clear 3-step workaround (publish + public SSE run + runs list)",
+      "**Regression fix — Tier 3 workforce slot system prompts.** PDCA showed `general` / `researcher` role slots with web_search plugins sometimes didn't call tools. Tool-calling is now MANDATORY at the top of the system prompt for any slot with plugins — fires unconditionally for current-events/post-cutoff questions",
+      "`af blueprints list --kind workflow|agent|workforce --complexity 0-6` + `af playbook composition-ladder` — dedicated discovery for the ladder",
+      "20 total blueprints now (4 workflow + 3 agent + 13 workforce)",
+      "Flag ergonomics (from PDCA): `af blueprints show` (alias for `get`), `af workflow run --body` (alias for `--input`), `af workflow run-status --run-id` (alias for `--workflow-run-id`) — fresh users reach for these variants by analogy; both now work",
+    ],
+    for_ai: [
+      "ROUTING RULE: pick the LOWEST rung that solves the user's problem. Workflow (rung 0-2) for deterministic pipelines. Agent (rung 3) for flexible tool-picking. Workforce (rung 6) only when explicit multi-agent coordination is needed. Anti-pattern: deploying a workforce when one agent suffices",
+      "Workflow blueprints need one LLM-provider connection (straico/openai/anthropic/etc.) in the workspace — `af workflow init` auto-discovers. If missing, the error tells the user exactly what connection to create",
+      "Agent blueprints (rung 3) don't need any workspace-level connection. They use AgenticFlow-native models via `agenticflow/gpt-4o-mini` directly",
+      "Workforce blueprints (rung 6): the 5 batteries-included ones (research-pair, content-duo, api-pipeline, fact-check-loop, parallel-research) have plugins pre-attached to every agent. The 8 vertical teams (dev-shop, etc.) need MCP clients attached post-deploy",
+      "If `af workforce run` fails with 'api_key:' in the error, use the printed 3-step workaround (publish + public SSE run). This is a known backend-auth limitation",
+    ],
+  },
+  {
+    version: "1.9.0",
+    date: "2026-04-14",
+    highlights: [
+      "5 new built-in-plugin workforce blueprints (`research-pair`, `content-duo`, `api-pipeline`, `fact-check-loop`, `parallel-research`) — each assembles AgenticFlow-native plugins (web_search, web_retrieval, api_call, agenticflow_generate_image, string_to_json) into 2-4 agent patterns. Batteries included: `af workforce init --blueprint <id>` now produces a workforce where every agent has its plugins pre-attached — no post-deploy tool-attachment step",
+      "Synthesizer topology: `AgentSlot.isSynthesizer: true` triggers a fan-out → fan-in DAG (coordinator → parallel workers → synthesizer → output). `parallel-research` uses this — users now see the synthesizer's unified answer, not the coordinator's plan. Regression-tested end-to-end",
+      "Tier 3 blueprints also default to `agenticflow/gpt-4o-mini` (matching Tier 1) — PDCA confirmed gemini-2.0-flash refuses tool calls on 'latest X' prompts even with explicit system-prompt rules",
+      "Deprecated commands (`af pack`, `af paperclip`, `af company`) now HIDDEN from default `af --help` output — reduces first-touch cognitive load. Still work. Unhide with `AF_SHOW_DEPRECATED=1`",
+      "New playbook: `af playbook ready-prompts` — 8 copy-paste user prompts for common scenarios. Hand to any AI with `af` access; it discovers + deploys via `bootstrap + blueprints list + marketplace list`",
+      "16 total blueprints now: 3 Tier 1 + 13 Tier 3 (5 new batteries-included + 8 legacy vertical teams). `af blueprints list --tier 1|3 --json` filters by tier",
+    ],
+    for_ai: [
+      "If the user asks for a 'parallel research' or 'compare X vs Y' workforce, use `af workforce init --blueprint parallel-research --json`. The topology now routes correctly: coordinator splits the question, 2 researchers work in parallel, a synthesizer merges and feeds the output node",
+      "The 5 new blueprints (research-pair, content-duo, api-pipeline, fact-check-loop, parallel-research) have plugins pre-attached to every agent slot — users don't need any follow-up `af agent update --patch` to add tools. Validated via live end-to-end runs",
+      "All Tier 3 blueprints default to gpt-4o-mini. Use `--model agenticflow/gemini-2.0-flash` only when you accept that the agents will sometimes refuse 'latest X' questions citing their cutoff",
+      "Deprecated commands are still in the CLI but hidden from `--help`. If a user asks 'how do I do X with `af pack`', suggest `af workforce init --blueprint <id>` instead — `af pack` sunset is 2026-10-14",
+    ],
+  },
+  {
+    version: "1.8.2",
+    date: "2026-04-14",
+    highlights: [
+      "HOTFIX: `af agent run` now detects silent-empty completion. PDCA round 2 (2026-04-14) showed the backend sometimes returns `{status: \"completed\", response: \"\"}` when the agent exhausts its recursion_limit in a tool loop — a non-interactive caller had no signal anything went wrong. Fix: reclassify as `status: \"completed_empty\"`, add a `warning` field with remediation (inspect thread messages, raise recursion_limit, or refine prompt), and exit non-zero (code 2) so `&&`-chained scripts halt",
+    ],
+    for_ai: [
+      "When `af agent run` returns `status: \"completed_empty\"`, the response text is empty and you MUST NOT treat it as success. The `warning` field names the thread id — fetch with `af agent-threads messages --thread-id <id>` to see where the agent got stuck, then either tighten the prompt or raise the agent's recursion_limit. The exit code is 2 so bash `&&` chains halt automatically",
+      "Real successes still return `status: \"completed\"` (no `_empty` suffix). Only treat `completed` as done",
+    ],
+  },
+  {
+    version: "1.8.1",
+    date: "2026-04-14",
+    highlights: [
+      "HOTFIX: Tier 1 blueprints now default to `agenticflow/gpt-4o-mini` instead of `agenticflow/gemini-2.0-flash`. PDCA round (2 fresh subagents) showed Gemini 2.0 Flash refuses `web_search` on 'latest X' prompts citing its cutoff — even when the system prompt explicitly forbids cutoff-based refusals. gpt-4o-mini follows the system prompt, calls web_search, returns real post-cutoff URLs + dates. Override via `af agent init --model <other>`",
+      "Strengthened the Tier 1 system prompt: per-plugin guidance (web_search routing, query construction, web_retrieval follow-ups, api_call specifics), explicit 'NEVER refuse from knowledge cutoff' rule, and 'call a tool FIRST, then answer' default",
+      "New dedicated discovery surface: `af blueprints list [--tier 1|3] [--fields ...]` + `af blueprints get --id <slug>`. Previously blueprints were only discoverable via `agent init --help` text or `bootstrap --json > blueprints[]` — fresh users kept looking for a dedicated catalog command",
+      "`af agent get` now accepts `--id <id>` as alias for `--agent-id <id>` (consistency with `marketplace get --id` and `mcp-clients get --id`), and supports `--fields <list>` for response projection",
+    ],
+    for_ai: [
+      "The default model for Tier 1 agent init is now gpt-4o-mini. Pass `--model agenticflow/gemma-4-31b-it` or similar only when you have a specific reason — the default was chosen because it reliably follows the 'call tools first, don't refuse from cutoff' rule",
+      "Use `af blueprints list --tier 1 --json` to find Tier 1 blueprints without a backend roundtrip. Prior 'scattered discovery' friction eliminated",
+      "Mix-and-match ID flag patterns: `--id` works on agent get, marketplace get, marketplace try, mcp-clients get, blueprints get. `--agent-id` still the canonical on agent-specific commands. When in doubt pass both won't hurt — the CLI prefers --agent-id if both given",
+    ],
+  },
+  {
+    version: "1.8.0",
+    date: "2026-04-14",
+    highlights: [
+      "Tier 1 blueprints — 3 new single-agent blueprints (`research-assistant`, `content-creator`, `api-helper`) that deploy via `af agent init --blueprint <id>`. Each creates ONE agent pre-wired with AgenticFlow-native plugins (web_search, web_retrieval, api_call, agenticflow_generate_image, string_to_json). Works in any workspace — no MAS Workforce feature, no external connections. Existing 8 workforce blueprints are tagged `tier: 3`",
+      "`af marketplace *` — live backend catalog surfaced. `marketplace list --type agent_template|workflow_template|mas_template` browses /v1/marketplace/items (discovered undocumented endpoint in the live backend), `marketplace get --id <id>` fetches full detail with embedded template snapshot, `marketplace try --id <id>` auto-detects type and clones into your workspace. Complements blueprints (offline, version-locked); does not replace them",
+      "`af templates duplicate workforce` — parity with the agent/workflow duplicate flow for MAS templates. Accepts --template-id (marketplace mas item), --template-file, or --workforce-id (latest version of a source workforce). Warns about cross-workspace agent_id references that will 400 on runs",
+      "New playbook `marketplace-vs-blueprint` — decision table, command reference, cross-workspace caveats. Plus `af bootstrap --json > blueprints[]` now carries `tier` + `deploy_command` so AI operators pick the right surface without reading descriptions",
+      "SDK 1.6.0 adds MarketplaceResource, AgentTemplatesResource, WorkflowTemplatesResource, MasTemplatesResource",
+    ],
+    for_ai: [
+      "Pick the right deploy surface by `blueprint.tier`: tier 1 → `af agent init --blueprint <id>`; tier 3 → `af workforce init --blueprint <id>`. `af bootstrap --json > blueprints[]` returns both fields plus a ready `deploy_command`",
+      "When the user wants something the 11 blueprints don't cover, browse the live catalog: `af marketplace list --type <kind> --search <q> --json`. Clone with `af marketplace try --id <item_id> --json` — it auto-detects agent vs workflow vs MAS",
+      "MAS template clones (tier 3 marketplace items) reference source-workspace agent_ids. Check the `warnings` field on the try response and duplicate source agents separately, or the workforce will 400 on runs",
+      "Tier 1 agent init is ~2 seconds and needs no workspace-ID body injection (regular agent create path). Tier 3 workforce init still needs project_id — same as v1.7",
+    ],
+  },
+  {
     version: "1.7.1",
     date: "2026-04-14",
     highlights: [

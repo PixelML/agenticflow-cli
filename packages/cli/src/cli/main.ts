@@ -25,7 +25,7 @@ import { PaperclipConnector } from "./gateway/connectors/paperclip.js";
 import { LinearConnector } from "./gateway/connectors/linear.js";
 import { WebhookConnector } from "./gateway/connectors/webhook.js";
 import type { ChannelConnector } from "./gateway/connector.js";
-import { listBlueprints, getBlueprint } from "./company-blueprints.js";
+import { listBlueprints, getBlueprint, blueprintKind, blueprintComplexity } from "./company-blueprints.js";
 import { CHANGELOG, getLatestChangelog } from "./changelog.js";
 import { stripNullFields, AGENT_UPDATE_STRIP_NULL_FIELDS } from "./utils/patch.js";
 import { inspectMcpToolsPattern } from "./utils/mcp-inspect.js";
@@ -1207,10 +1207,14 @@ export function createProgram(): Command {
           list_agents_filtered: "af agent list --name-contains <substr> --fields id,name --json",
           update_agent_patch: "af agent update --agent-id <id> --patch --body '{\"field\":\"value\"}' --json",
           delete_agent: "af agent delete --agent-id <id> --json",
-          init_workforce: "af workforce init --blueprint <id> --json",
+          init_agent_from_blueprint: "af agent init --blueprint <tier1-id> --json   # Tier 1 single-agent + plugins, works in any workspace",
+          init_workforce: "af workforce init --blueprint <id> --json   # Tier 3 multi-agent DAG (requires MAS feature)",
           run_workforce: "af workforce run --workforce-id <id> --trigger-data '{}'",
           publish_workforce: "af workforce publish --workforce-id <id> --json",
           delete_workforce: "af workforce delete --workforce-id <id> --json",
+          browse_marketplace: "af marketplace list --type agent_template|workflow_template|mas_template --json",
+          try_marketplace_item: "af marketplace try --id <item_id> --dry-run --json   # clone an item into your workspace",
+          duplicate_workforce_template: "af templates duplicate workforce --template-id <marketplace_mas_id> --dry-run --json",
           inspect_mcp_client: "af mcp-clients inspect --id <id> --json",
           deploy_to_paperclip: "af paperclip init --blueprint <id> --json   # DEPRECATED, use `af workforce init`",
           send_webhook: "curl -X POST http://localhost:4100/webhook/webhook -H 'Content-Type: application/json' -d '{\"agent_id\":\"<id>\",\"message\":\"<msg>\"}'",
@@ -1227,12 +1231,22 @@ export function createProgram(): Command {
           "agenticflow/deepseek-v3.2",
           "agenticflow/qwen-3.5-flash",
         ],
-        blueprints: listBlueprints().map((b) => ({
-          id: b.id,
-          name: b.name,
-          agents: b.agents.length,
-          native_target: "workforce",
-        })),
+        blueprints: listBlueprints().map((b) => {
+          const k = blueprintKind(b);
+          return {
+            id: b.id,
+            name: b.name,
+            kind: k,
+            complexity: blueprintComplexity(b),
+            tier: b.tier ?? (k === "agent" ? 1 : 3),
+            agents: b.agents.length,
+            node_count: b.workflowNodes?.length ?? 0,
+            use_cases: b.useCases ?? null,
+            // Deploy verb matches kind: workflow/agent/workforce → af <verb> init
+            deploy_command: `af ${k} init --blueprint ${b.id} --json`,
+            native_target: k,
+          };
+        }),
         playbooks: listPlaybooks().map((p) => p.topic),
         whats_new: getLatestChangelog(),
         _links: {
@@ -2710,6 +2724,194 @@ export function createProgram(): Command {
       }
     });
 
+  // `templates duplicate workforce` — clone a MAS template into a fresh
+  // workforce. Unlike agent/workflow templates, MAS templates already
+  // contain `nodes[]` + `edges[]` ready to feed into workforce.putSchema.
+  // Agent nodes inside the template reference real agent_ids of the SOURCE
+  // workspace — those will 400 on schema PUT if they aren't accessible from
+  // the target workspace. We surface this as a warning on dry-run.
+  templatesDuplicateCmd
+    .command("workforce")
+    .description(
+      "Duplicate a MAS/workforce template into a new workforce. Accepts --template-id " +
+      "(mas_template id, e.g. from `af marketplace list --type mas_template`) or " +
+      "--template-file (a local JSON snapshot).",
+    )
+    .option("--template-id <id>", "MAS template ID (UUID of the mas_template row, NOT the source workforce ULID)")
+    .option("--template-file <path>", "Local MAS template JSON file (with nodes, edges, name)")
+    .option("--workforce-id <id>", "Source workforce ULID (passed to /v1/mas-templates/?workforce_id=X to enumerate versions)")
+    .option("--workspace-id <id>", "Target workspace ID override")
+    .option("--project-id <id>", "Target project ID override")
+    .option("--name <name>", "Name for the duplicated workforce (defaults to template name + suffix)")
+    .option("--name-suffix <suffix>", "Suffix if --name is not provided", " [Copy]")
+    .option("--dry-run", "Print the create payload + schema without writing")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const client = buildClient(parentOpts);
+      const templateId = opts.templateId as string | undefined;
+      const templateFile = opts.templateFile as string | undefined;
+      const sourceWorkforceId = opts.workforceId as string | undefined;
+
+      const provided = [templateId, templateFile, sourceWorkforceId].filter(Boolean).length;
+      if (provided === 0) {
+        fail(
+          "missing_required_option",
+          "Provide one of: --template-id <mas_template_id>, --template-file <path>, or --workforce-id <src_workforce_ulid>.",
+          "Browse MAS templates via: af marketplace list --type mas_template --json",
+        );
+      }
+      if (provided > 1) {
+        fail(
+          "invalid_request_options",
+          "Pass only one of --template-id, --template-file, --workforce-id.",
+        );
+      }
+
+      // Resolve the template snapshot (must contain nodes[] + edges[] + name)
+      let template: Record<string, unknown>;
+      let templateSource: "file" | "api_mas" | "api_versions" | "marketplace_item";
+      if (templateFile) {
+        template = loadJsonPayload(`@${templateFile}`) as Record<string, unknown>;
+        templateSource = "file";
+      } else if (templateId) {
+        // Try marketplace detail first (returns mas_template_detail with nodes/edges)
+        try {
+          const item = (await client.sdk.get(`/v1/marketplace/items/${templateId}`)).data as Record<string, unknown>;
+          const detail = item["mas_template_detail"];
+          if (detail && typeof detail === "object") {
+            template = detail as Record<string, unknown>;
+            templateSource = "marketplace_item";
+          } else {
+            throw new Error("Marketplace item has no mas_template_detail");
+          }
+        } catch {
+          // Fallback: direct MAS template id via versions endpoint requires workforce_id,
+          // so we can only reach this path via the marketplace item. Surface a clear error.
+          fail(
+            "template_not_found",
+            `No MAS template detail found for id "${templateId}".`,
+            "The id must be a marketplace item id (from `af marketplace list --type mas_template`) or a mas_template row id reachable via marketplace lookup.",
+          );
+          return;
+        }
+      } else {
+        // --workforce-id path: enumerate versions, pick the latest
+        try {
+          const versions = (await client.sdk.get("/v1/mas-templates", {
+            queryParams: { workforce_id: sourceWorkforceId as string, limit: 1, offset: 0 },
+          })).data as unknown;
+          const list = Array.isArray(versions) ? versions : [];
+          if (list.length === 0) {
+            fail(
+              "template_not_found",
+              `No MAS template versions found for workforce ${sourceWorkforceId}.`,
+              "Use 'af workforce versions list --workforce-id <id>' to confirm versions exist.",
+            );
+          }
+          template = list[0] as Record<string, unknown>;
+          templateSource = "api_versions";
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          fail("request_failed", message);
+          return;
+        }
+      }
+
+      const projectId = resolveProjectId(opts.projectId as string | undefined);
+      if (!projectId && !opts.dryRun) {
+        fail(
+          "missing_project_id",
+          "Project ID is required to create a duplicated workforce.",
+          "Set AGENTICFLOW_PROJECT_ID or pass --project-id.",
+        );
+      }
+      const workspaceId = resolveWorkspaceId(opts.workspaceId as string | undefined);
+      if (!workspaceId && !opts.dryRun) {
+        fail(
+          "missing_workspace_id",
+          "Workspace ID is required to create a duplicated workforce.",
+          "Set AGENTICFLOW_WORKSPACE_ID or pass --workspace-id.",
+        );
+      }
+
+      const srcName = (template["name"] as string | undefined) ?? "Workforce";
+      const targetName =
+        (opts.name as string | undefined) ??
+        `${srcName}${(opts.nameSuffix as string | undefined) ?? " [Copy]"}`;
+      const nodes = Array.isArray(template["nodes"]) ? (template["nodes"] as unknown[]) : [];
+      const edges = Array.isArray(template["edges"]) ? (template["edges"] as unknown[]) : [];
+
+      // Cross-workspace agent-node warnings — MAS templates reference real
+      // agent_ids of the source workspace, which will typically 400 on PUT
+      // in a different workspace.
+      const agentNodeIds: string[] = [];
+      for (const n of nodes) {
+        if (n && typeof n === "object") {
+          const node = n as Record<string, unknown>;
+          if (node["type"] === "agent" || node["type"] === "agent_team_member") {
+            const input = (node["input"] as Record<string, unknown> | undefined) ?? {};
+            const agentId = input["agent_id"];
+            if (typeof agentId === "string") agentNodeIds.push(agentId);
+          }
+        }
+      }
+
+      if (opts.dryRun) {
+        printResult({
+          schema: TEMPLATE_DUPLICATE_SCHEMA_VERSION,
+          kind: "workforce",
+          dry_run: true,
+          template_source: templateSource,
+          workforce: { name: targetName, description: template["description"] ?? null },
+          node_count: nodes.length,
+          edge_count: edges.length,
+          referenced_agent_ids: agentNodeIds,
+          warnings: agentNodeIds.length
+            ? [
+                `Template references ${agentNodeIds.length} agent_id(s) from the source workspace. ` +
+                `These must also exist (or be duplicated) in the target workspace or schema PUT will 400.`,
+              ]
+            : [],
+        });
+        return;
+      }
+
+      try {
+        const created = (await client.workforces.create(
+          { name: targetName, description: template["description"] ?? null },
+          { workspaceId: workspaceId as string, projectId: projectId as string },
+        )) as Record<string, unknown>;
+        const workforceId = created["id"] as string;
+        if (!workforceId) throw new Error("Workforce create did not return an id.");
+        await client.workforces.putSchema(
+          workforceId,
+          {
+            nodes: nodes as ReadonlyArray<Record<string, unknown>>,
+            edges: edges as ReadonlyArray<Record<string, unknown>>,
+          },
+          { workspaceId: workspaceId as string },
+        );
+        printResult({
+          schema: TEMPLATE_DUPLICATE_SCHEMA_VERSION,
+          kind: "workforce",
+          dry_run: false,
+          template_source: templateSource,
+          workforce_id: workforceId,
+          name: targetName,
+          node_count: nodes.length,
+          edge_count: edges.length,
+          warnings: agentNodeIds.length
+            ? [
+                `Duplicated workforce references ${agentNodeIds.length} agent_id(s) from the source workspace — run it to verify the agents resolve in this workspace. If not, duplicate the source agents first.`,
+              ]
+            : [],
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", message);
+      }
+    });
+
   templatesCmd
     .command("index")
     .description("Inspect a local template cache manifest.")
@@ -2750,17 +2952,495 @@ export function createProgram(): Command {
     });
 
   // ═════════════════════════════════════════════════════════════════
+  // blueprints (CLI-shipped starter catalog — the dedicated discovery surface)
+  // ═════════════════════════════════════════════════════════════════
+  // Historically blueprints were only discoverable by reading `agent init --help`
+  // text or via `bootstrap --json > blueprints[]`. PDCA round (2026-04-14)
+  // showed fresh users hit "no single `blueprints list` command" friction —
+  // they'd look for a dedicated catalog command first. This group provides it
+  // as a thin wrapper over the in-process registry (no backend call).
+  const blueprintsCmd = program
+    .command("blueprints")
+    .description(
+      "Browse CLI-shipped blueprints (offline, versioned starter patterns). " +
+      "Tier 1 = single agent (af agent init), Tier 3 = workforce (af workforce init). " +
+      "For the live user/admin-curated catalog, use `af marketplace` instead.",
+    );
+
+  // Shared helper — keep blueprints list/get/bootstrap in sync on deploy_command.
+  const deployCommandForBlueprint = (b: import("./company-blueprints.js").CompanyBlueprint): string => {
+    const k = blueprintKind(b);
+    return `af ${k} init --blueprint ${b.id} --json`;
+  };
+
+  blueprintsCmd
+    .command("list")
+    .description("List all CLI-shipped blueprints with kind + complexity + deploy command. No backend call.")
+    .option("--kind <kind>", "Filter by kind: workflow | agent | workforce")
+    .option("--complexity <n>", "Filter by ladder rung: 0-6 (0=simplest, 6=workforce DAG)")
+    .option("--tier <n>", "[LEGACY] Filter by tier: 1 or 3 (superseded by --kind)")
+    .option("--fields <fields>", "Comma-separated fields (id,name,kind,complexity,tier,deploy_command,use_cases,description)")
+    .action((opts) => {
+      const kindFilter = opts.kind as string | undefined;
+      if (kindFilter && !["workflow", "agent", "workforce"].includes(kindFilter)) {
+        fail("invalid_option_value", `--kind must be workflow | agent | workforce; got ${kindFilter}`);
+      }
+      const complexityFilter = opts.complexity != null ? parseInt(opts.complexity as string, 10) : undefined;
+      if (complexityFilter != null && (complexityFilter < 0 || complexityFilter > 6)) {
+        fail("invalid_option_value", `--complexity must be 0-6; got ${opts.complexity}`);
+      }
+      const tierFilter = opts.tier ? parseInt(opts.tier as string, 10) : undefined;
+      if (tierFilter != null && tierFilter !== 1 && tierFilter !== 3) {
+        fail("invalid_option_value", `--tier must be 1 or 3; got ${opts.tier}`);
+      }
+      const all = listBlueprints().map((b) => ({
+        id: b.id,
+        name: b.name,
+        kind: blueprintKind(b),
+        complexity: blueprintComplexity(b),
+        tier: b.tier ?? (blueprintKind(b) === "agent" ? 1 : 3),
+        description: b.description,
+        use_cases: b.useCases ?? null,
+        agent_count: b.agents.length,
+        node_count: b.workflowNodes?.length ?? 0,
+        deploy_command: deployCommandForBlueprint(b),
+      }));
+      let filtered = all;
+      if (kindFilter) filtered = filtered.filter((b) => b.kind === kindFilter);
+      if (complexityFilter != null) filtered = filtered.filter((b) => b.complexity === complexityFilter);
+      if (tierFilter != null) filtered = filtered.filter((b) => b.tier === tierFilter);
+      printResult(applyFieldsFilter(filtered, opts.fields as string | undefined));
+    });
+
+  blueprintsCmd
+    .command("get")
+    .aliases(["show"])
+    .description("Get full details of a specific blueprint (agents, plugins, starter tasks, or workflow nodes). Alias: `show`.")
+    .option("--id <id>", "Blueprint id (e.g. research-assistant, dev-shop, summarize-url)")
+    .option("--blueprint <id>", "Alias for --id")
+    .action((opts) => {
+      const id = (opts.id as string | undefined) ?? (opts.blueprint as string | undefined);
+      if (!id) {
+        fail(
+          "missing_required_option",
+          "Blueprint id is required.",
+          "Pass --id <slug>. See `af blueprints list` for available ids.",
+        );
+      }
+      const b = getBlueprint(id as string);
+      if (!b) {
+        fail(
+          "invalid_option_value",
+          `Unknown blueprint id: ${id}`,
+          "Run `af blueprints list --json` for available ids.",
+        );
+      }
+      printResult({
+        id: b.id,
+        name: b.name,
+        kind: blueprintKind(b),
+        complexity: blueprintComplexity(b),
+        tier: b.tier ?? (blueprintKind(b) === "agent" ? 1 : 3),
+        description: b.description,
+        goal: b.goal,
+        use_cases: b.useCases ?? null,
+        agents: b.agents.map((a) => ({
+          role: a.role,
+          title: a.title,
+          description: a.description,
+          optional: Boolean(a.optional),
+          plugins: (a.plugins ?? []).map((p) => p.nodeTypeName),
+          is_synthesizer: a.isSynthesizer ?? false,
+          suggested_template: a.suggestedTemplate ?? null,
+        })),
+        workflow_nodes: b.workflowNodes?.map((n) => ({
+          name: n.name,
+          node_type: n.nodeType,
+          title: n.title,
+          description: n.description,
+        })),
+        workflow_input_schema: b.workflowInputSchema ?? null,
+        starter_tasks: b.starterTasks,
+        deploy_command: deployCommandForBlueprint(b),
+      });
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // marketplace (unified catalog: agent / workflow / MAS templates)
+  // ═════════════════════════════════════════════════════════════════
+  // Complements blueprints: blueprints ship with the CLI (offline, versioned,
+  // tier-aware), marketplace is the live backend catalog of user- and
+  // admin-curated templates. `af marketplace try` reuses the existing
+  // `templates duplicate` helpers so cloning works the same way.
+  const marketplaceCmd = program
+    .command("marketplace")
+    .description(
+      "Browse the live AgenticFlow marketplace catalog (unified agent / workflow / MAS templates). " +
+      "Complements blueprints (CLI-shipped, offline). Clone with `marketplace try` or " +
+      "`templates duplicate <kind>`.",
+    );
+
+  marketplaceCmd
+    .command("list")
+    .description("Browse marketplace items. Pageable. Filter by --type, --search, --featured, --free.")
+    .option("--type <type>", "Filter: agent_template | workflow_template | mas_template")
+    .option("--search <query>", "Server-side search query")
+    .option("--featured", "Only featured items")
+    .option("--free", "Only free items")
+    .option("--limit <n>", "Limit", "50")
+    .option("--offset <n>", "Offset", "0")
+    .option("--fields <fields>", "Comma-separated fields to return (id,name,type,description,creator)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const type = opts.type as string | undefined;
+      if (type != null && !["agent_template", "workflow_template", "mas_template"].includes(type)) {
+        fail(
+          "invalid_option_value",
+          `--type must be agent_template, workflow_template, or mas_template; got "${type}".`,
+        );
+      }
+      await run(async () => {
+        const data = (await client.marketplace.list({
+          limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1) ?? 50,
+          offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0) ?? 0,
+          type: type as "agent_template" | "workflow_template" | "mas_template" | undefined,
+          search: opts.search as string | undefined,
+          featured: opts.featured ? true : undefined,
+          isFree: opts.free ? true : undefined,
+        })) as Record<string, unknown>;
+        // Strip embedded *_template_detail blobs on list — they're huge and
+        // rarely needed for browsing. Fetch via `marketplace get` when needed.
+        const items = (data["items"] as Array<Record<string, unknown>> | undefined) ?? [];
+        const compact = items.map((it) => {
+          const c = { ...it };
+          delete c["agent_template_detail"];
+          delete c["workflow_template_detail"];
+          delete c["mas_template_detail"];
+          return c;
+        });
+        // `--fields` filters per-item, not the top-level pagination envelope
+        const filteredItems = applyFieldsFilter(compact, opts.fields as string | undefined);
+        return { ...data, items: filteredItems };
+      });
+    });
+
+  marketplaceCmd
+    .command("get")
+    .description("Get a marketplace item with full embedded template detail (ready to clone).")
+    .requiredOption("--id <id>", "Marketplace item id (from `marketplace list`)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.marketplace.get(opts.id));
+    });
+
+  marketplaceCmd
+    .command("try")
+    .description(
+      "Clone a marketplace item into your workspace. Auto-detects type " +
+      "(agent_template → uses `templates duplicate agent`, workflow_template → " +
+      "`templates duplicate workflow`, mas_template → `templates duplicate workforce`).",
+    )
+    .requiredOption("--id <id>", "Marketplace item id")
+    .option("--workspace-id <id>", "Target workspace ID")
+    .option("--project-id <id>", "Target project ID")
+    .option("--name-suffix <suffix>", "Suffix for duplicated resource name", " [from marketplace]")
+    .option("--dry-run", "Build the create payload without writing")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      let item: Record<string, unknown>;
+      try {
+        item = (await client.marketplace.get(opts.id)) as Record<string, unknown>;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", `Could not load marketplace item "${opts.id}": ${message}`);
+        return;
+      }
+      const type = item["type"] as string | undefined;
+      const projectId = resolveProjectId(opts.projectId as string | undefined);
+      if (!projectId && !opts.dryRun) {
+        fail(
+          "missing_project_id",
+          "Project ID is required to clone marketplace items.",
+          "Set AGENTICFLOW_PROJECT_ID or pass --project-id.",
+        );
+      }
+      const workspaceId = resolveWorkspaceId(opts.workspaceId as string | undefined);
+      if (!workspaceId && !opts.dryRun) {
+        fail(
+          "missing_workspace_id",
+          "Workspace ID is required to clone marketplace items.",
+          "Set AGENTICFLOW_WORKSPACE_ID or pass --workspace-id.",
+        );
+      }
+      const nameSuffix = (opts.nameSuffix as string | undefined) ?? " [from marketplace]";
+
+      if (type === "agent_template") {
+        const templateId = item["agent_template_id"] as string | undefined;
+        if (!templateId) fail("template_not_found", "Marketplace agent item has no agent_template_id.");
+        // Reuse the agent-duplicate flow end-to-end: fetch the real agent
+        // template by id, materialize tool workflows, create the agent.
+        let agentTemplate: Record<string, unknown>;
+        try {
+          agentTemplate = (
+            await client.sdk.get(`/v1/agent-templates/${templateId}`)
+          ).data as Record<string, unknown>;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          fail("request_failed", `Unable to fetch agent template ${templateId}: ${message}`);
+          return;
+        }
+        const toolRefs = extractAgentTemplateWorkflowReferences(agentTemplate);
+        const duplicatedTools: Array<{
+          workflowTemplateId: string;
+          workflowId: string;
+          runBehavior: "auto_run" | "request_confirmation";
+          description: string | null;
+          timeout: number;
+          inputConfig: Record<string, unknown> | null;
+        }> = [];
+
+        if (opts.dryRun) {
+          let preview: Record<string, unknown>;
+          try {
+            preview = buildAgentCreatePayloadFromTemplate(
+              agentTemplate,
+              projectId as string,
+              duplicatedTools,
+              nameSuffix,
+            );
+          } catch (err) {
+            fail("template_payload_invalid", err instanceof Error ? err.message : String(err));
+            return;
+          }
+          printResult({
+            schema: "agenticflow.marketplace.try.v1",
+            marketplace_item: opts.id,
+            type,
+            dry_run: true,
+            agent_template_id: templateId,
+            tool_workflow_count: toolRefs.length,
+            agent_create_payload: preview,
+          });
+          return;
+        }
+
+        // Materialize tool workflows first
+        for (const ref of toolRefs) {
+          try {
+            const wfTemplate = (
+              await client.sdk.get(`/v1/workflow_templates/${ref.workflowTemplateId}`)
+            ).data;
+            const wfPayload = buildWorkflowCreatePayloadFromTemplate(
+              wfTemplate,
+              projectId as string,
+              " [from marketplace — Tool]",
+            );
+            ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(wfPayload));
+            const createdWf = await client.workflows.create(wfPayload, workspaceId as string);
+            const createdWfId = (createdWf as Record<string, unknown>)["id"] as string;
+            duplicatedTools.push({
+              workflowTemplateId: ref.workflowTemplateId,
+              workflowId: createdWfId,
+              runBehavior: ref.runBehavior,
+              description: ref.description,
+              timeout: ref.timeout,
+              inputConfig: ref.inputConfig,
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            fail(
+              "request_failed",
+              `Failed to clone tool workflow ${ref.workflowTemplateId}: ${message}`,
+              "Clone fewer tools via 'templates duplicate agent --skip-missing-tools' or contact the template creator.",
+            );
+            return;
+          }
+        }
+
+        let agentPayload: Record<string, unknown>;
+        try {
+          agentPayload = buildAgentCreatePayloadFromTemplate(
+            agentTemplate,
+            projectId as string,
+            duplicatedTools,
+            nameSuffix,
+          );
+        } catch (err) {
+          fail("template_payload_invalid", err instanceof Error ? err.message : String(err));
+          return;
+        }
+        ensureLocalValidation("agent.create", validateAgentCreatePayload(agentPayload));
+
+        await run(async () => {
+          const created = (await client.agents.create(agentPayload)) as Record<string, unknown>;
+          return {
+            schema: "agenticflow.marketplace.try.v1",
+            marketplace_item: opts.id,
+            type,
+            dry_run: false,
+            agent_id: created["id"],
+            name: created["name"],
+            tool_workflow_count: duplicatedTools.length,
+            _links: {
+              agent: webUrl("agent", {
+                workspaceId: client.sdk.workspaceId,
+                agentId: created["id"] as string,
+              }),
+            },
+          };
+        });
+        return;
+      }
+
+      if (type === "workflow_template") {
+        const templateId = item["workflow_template_id"] as string | undefined;
+        if (!templateId) fail("template_not_found", "Marketplace workflow item has no workflow_template_id.");
+        let wfTemplate: Record<string, unknown>;
+        try {
+          wfTemplate = (
+            await client.sdk.get(`/v1/workflow_templates/${templateId}`)
+          ).data as Record<string, unknown>;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          fail("request_failed", `Unable to fetch workflow template ${templateId}: ${message}`);
+          return;
+        }
+        let wfPayload: Record<string, unknown>;
+        try {
+          wfPayload = buildWorkflowCreatePayloadFromTemplate(
+            wfTemplate,
+            projectId as string,
+            nameSuffix,
+          );
+        } catch (err) {
+          fail("template_payload_invalid", err instanceof Error ? err.message : String(err));
+          return;
+        }
+        ensureLocalValidation("workflow.create", validateWorkflowCreatePayload(wfPayload));
+
+        if (opts.dryRun) {
+          printResult({
+            schema: "agenticflow.marketplace.try.v1",
+            marketplace_item: opts.id,
+            type,
+            dry_run: true,
+            workflow_template_id: templateId,
+            workflow_create_payload: wfPayload,
+          });
+          return;
+        }
+        await run(async () => {
+          const created = (await client.workflows.create(
+            wfPayload,
+            workspaceId as string,
+          )) as Record<string, unknown>;
+          return {
+            schema: "agenticflow.marketplace.try.v1",
+            marketplace_item: opts.id,
+            type,
+            dry_run: false,
+            workflow_id: created["id"],
+            name: created["name"],
+          };
+        });
+        return;
+      }
+
+      if (type === "mas_template") {
+        const detail = item["mas_template_detail"] as Record<string, unknown> | null | undefined;
+        if (!detail) {
+          fail(
+            "template_not_found",
+            "Marketplace MAS item has no mas_template_detail — the item may have been unlisted.",
+          );
+          return;
+        }
+        const srcName = (detail["name"] as string | undefined) ?? "Workforce";
+        const targetName = `${srcName}${nameSuffix}`;
+        const nodes = Array.isArray(detail["nodes"]) ? (detail["nodes"] as unknown[]) : [];
+        const edges = Array.isArray(detail["edges"]) ? (detail["edges"] as unknown[]) : [];
+
+        // Detect cross-workspace agent_id references
+        const agentNodeIds: string[] = [];
+        for (const n of nodes) {
+          if (n && typeof n === "object") {
+            const node = n as Record<string, unknown>;
+            if (node["type"] === "agent" || node["type"] === "agent_team_member") {
+              const input = (node["input"] as Record<string, unknown> | undefined) ?? {};
+              if (typeof input["agent_id"] === "string") agentNodeIds.push(input["agent_id"] as string);
+            }
+          }
+        }
+
+        if (opts.dryRun) {
+          printResult({
+            schema: "agenticflow.marketplace.try.v1",
+            marketplace_item: opts.id,
+            type,
+            dry_run: true,
+            workforce: { name: targetName, description: detail["description"] ?? null },
+            node_count: nodes.length,
+            edge_count: edges.length,
+            referenced_agent_ids: agentNodeIds,
+            warnings: agentNodeIds.length
+              ? [
+                  `Template references ${agentNodeIds.length} agent_id(s) from the source workspace.`,
+                ]
+              : [],
+          });
+          return;
+        }
+
+        await run(async () => {
+          const created = (await client.workforces.create(
+            { name: targetName, description: detail["description"] ?? null },
+            { workspaceId: workspaceId as string, projectId: projectId as string },
+          )) as Record<string, unknown>;
+          const workforceId = created["id"] as string;
+          if (!workforceId) throw new Error("Workforce create did not return an id.");
+          await client.workforces.putSchema(
+            workforceId,
+            {
+              nodes: nodes as ReadonlyArray<Record<string, unknown>>,
+              edges: edges as ReadonlyArray<Record<string, unknown>>,
+            },
+            { workspaceId: workspaceId as string },
+          );
+          return {
+            schema: "agenticflow.marketplace.try.v1",
+            marketplace_item: opts.id,
+            type,
+            dry_run: false,
+            workforce_id: workforceId,
+            name: targetName,
+            node_count: nodes.length,
+            edge_count: edges.length,
+            warnings: agentNodeIds.length
+              ? [
+                  `Workforce references ${agentNodeIds.length} agent_id(s) from the source workspace. Run it to verify — if missing, duplicate source agents first.`,
+                ]
+              : [],
+          };
+        });
+        return;
+      }
+
+      fail("unsupported_type", `Unknown marketplace item type: ${type}`, "Supported: agent_template, workflow_template, mas_template.");
+    });
+
+  // ═════════════════════════════════════════════════════════════════
   // pack (git-native pack control plane)
   // ═════════════════════════════════════════════════════════════════
   const packCmd = program
     .command("pack")
     .description(
-      "Pack lifecycle commands (init, validate, simulate, run, install, list, uninstall). " +
-      "DEPRECATED in v1.7.0 — the \"pack\" concept has been collapsed into blueprints. " +
-      "The 3 legacy packs (amazon-seller-pack, tutor-pack, freelancer-pack) are all " +
-      "available as workforce blueprints now. Use `af workforce init --blueprint <id>` " +
-      "instead. Sunset 2026-10-14.",
+      "[DEPRECATED v1.7.0 — sunset 2026-10-14] Pack lifecycle. Use `af workforce init --blueprint <id>` instead.",
     );
+  // Hide from default `--help` unless user passes AF_SHOW_DEPRECATED=1 or --help-all.
+  // PDCA rounds 1+2 (2026-04-14) flagged deprecated-command blurbs as top-level help noise.
+  if (!(process.env["AF_SHOW_DEPRECATED"] === "1")) {
+    (packCmd as unknown as { _hidden?: boolean })._hidden = true;
+  }
 
   // Single deprecation warning per subcommand per session (dedup in emitDeprecation).
   // Mirrors the paperclip hook pattern.
@@ -3635,6 +4315,122 @@ export function createProgram(): Command {
     .description("Workflow management commands.");
 
   workflowCmd
+    .command("init")
+    .description(
+      "Deploy a workflow blueprint — rung 0-2 on the composition ladder. " +
+      "Deterministic multi-node flow (llm/web_retrieval/api_call/string_to_json). " +
+      "Auto-discovers an LLM-provider connection in your workspace if any of the " +
+      "nodes need one.",
+    )
+    .requiredOption("--blueprint <slug>", "Workflow blueprint id (e.g. llm-hello, llm-chain, summarize-url, api-summary). See `af blueprints list --kind workflow --json`.")
+    .option("--name <name>", "Workflow name (defaults to blueprint name)")
+    .option("--project-id <id>", "Project ID (defaults to env / auth config)")
+    .option("--workspace-id <id>", "Workspace ID (defaults to env / auth config)")
+    .option("--llm-connection-id <id>", "Override auto-discovered LLM connection id")
+    .option("--dry-run", "Show the workflow-create payload without writing")
+    .action(async (opts) => {
+      const b = getBlueprint(opts.blueprint as string);
+      if (!b) {
+        fail("invalid_option_value", `Unknown blueprint id: ${opts.blueprint}`, "Run `af blueprints list --kind workflow --json`.");
+      }
+      if (blueprintKind(b) !== "workflow") {
+        fail(
+          "invalid_option_value",
+          `Blueprint "${opts.blueprint}" is kind "${blueprintKind(b)}", not "workflow".`,
+          `Deploy with: af ${blueprintKind(b)} init --blueprint ${opts.blueprint}`,
+        );
+      }
+
+      const { workflowBlueprintToPayload, findWorkspaceLLMConnection } = await import("./blueprint-to-workflow.js");
+      const initClient = buildClient(program.opts());
+      const projectId =
+        (opts.projectId as string | undefined) ??
+        (program.opts().projectId as string | undefined) ??
+        process.env["AGENTICFLOW_PROJECT_ID"] ??
+        (initClient.sdk.projectId as string | undefined);
+      if (!projectId && !opts.dryRun) {
+        fail(
+          "missing_project_id",
+          "Project ID is required to create a workflow.",
+          "Pass --project-id <id> or set AGENTICFLOW_PROJECT_ID.",
+        );
+      }
+
+      // Auto-discover an LLM-provider connection if the blueprint needs one.
+      let llmConnectionId: string | null = (opts.llmConnectionId as string | undefined) ?? null;
+      const needsLLM = (b.workflowNodes ?? []).some((n) => n.nodeType === "llm");
+      if (needsLLM && !llmConnectionId && !opts.dryRun) {
+        try {
+          const conns = (await initClient.connections.list()) as Array<{ id: string; category?: string }>;
+          llmConnectionId = findWorkspaceLLMConnection(conns);
+        } catch {
+          // Tolerate list failure; fall through with llmConnectionId=null so the
+          // warning fires below.
+        }
+      }
+
+      let translated: import("./blueprint-to-workflow.js").WorkflowBlueprintTranslation;
+      try {
+        translated = workflowBlueprintToPayload(b, {
+          projectId: (projectId as string) ?? "DRY_RUN_PROJECT_ID",
+          workflowName: opts.name as string | undefined,
+          llmConnectionId,
+        });
+      } catch (err) {
+        fail("invalid_blueprint", err instanceof Error ? err.message : String(err));
+        return;
+      }
+
+      if (translated.missing_connections.length > 0 && !opts.dryRun) {
+        fail(
+          "missing_connection",
+          `Workflow "${b.id}" requires a connection that wasn't found in the workspace: ${translated.missing_connections.join(", ")}.`,
+          `Create one via \`af connections create --body ...\` or in the UI, then re-run. Alternatively pass --llm-connection-id <id> to use a specific existing connection.`,
+        );
+      }
+
+      if (opts.dryRun) {
+        printResult({
+          schema: "agenticflow.dry_run.v1",
+          valid: true,
+          target: "workflow.init",
+          blueprint: b.id,
+          kind: "workflow",
+          complexity: blueprintComplexity(b),
+          workflow_name: translated.payload.name,
+          node_count: translated.payload.nodes.length,
+          warnings: translated.warnings,
+          missing_connections: translated.missing_connections,
+          payload: translated.payload,
+        });
+        return;
+      }
+
+      await run(async () => {
+        const created = (await initClient.workflows.create(
+          translated.payload as unknown as Record<string, unknown>,
+          opts.workspaceId as string | undefined,
+        )) as Record<string, unknown>;
+        const workflowId = created["id"] as string | undefined;
+        if (!workflowId) throw new Error("Workflow create did not return an id.");
+        return {
+          schema: "agenticflow.workflow.init.v1",
+          workflow_id: workflowId,
+          blueprint: b.id,
+          kind: "workflow",
+          complexity: blueprintComplexity(b),
+          name: created["name"],
+          node_count: translated.payload.nodes.length,
+          warnings: translated.warnings,
+          next_steps: [
+            `af workflow get --workflow-id ${workflowId} --json  # inspect`,
+            ...translated.suggested_next_steps.map((s) => s.replace(/<id>/g, workflowId)),
+          ],
+        };
+      });
+    });
+
+  workflowCmd
     .command("list")
     .description("List workflows.")
     .option("--workspace-id <id>", "Workspace ID (overrides global)")
@@ -3715,12 +4511,16 @@ export function createProgram(): Command {
     .description("Run a workflow.")
     .requiredOption("--workflow-id <id>", "Workflow ID")
     .option("--input <input>", "JSON input (inline or @file)")
+    .option("--body <input>", "Alias for --input (ergonomic consistency with other `<resource> run` commands)")
     .option("--auto-fix-connections", "Automatically prompt to fix missing connections")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
       const body: Record<string, unknown> = { workflow_id: opts.workflowId };
-      if (opts.input) body["input"] = loadJsonPayload(opts.input);
+      // Accept --input or --body (PDCA showed users reach for --body by analogy
+      // with agent create/update). Prefer --input if both given.
+      const inputArg = (opts.input as string | undefined) ?? (opts.body as string | undefined);
+      if (inputArg) body["input"] = loadJsonPayload(inputArg);
       ensureLocalValidation("workflow.run", validateWorkflowRunPayload(body));
 
       const executeRun = () => token
@@ -3881,15 +4681,24 @@ export function createProgram(): Command {
 
   workflowCmd
     .command("run-status")
-    .description("Get workflow run status.")
-    .requiredOption("--workflow-run-id <id>", "Workflow run ID")
+    .description("Get workflow run status. Accepts --run-id (alias) or --workflow-run-id (canonical).")
+    .option("--workflow-run-id <id>", "Workflow run ID (canonical)")
+    .option("--run-id <id>", "Alias for --workflow-run-id (returned as `id` from `workflow run`)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
+      const runId = (opts.workflowRunId as string | undefined) ?? (opts.runId as string | undefined);
+      if (!runId) {
+        fail(
+          "missing_required_option",
+          "Run ID is required.",
+          "Pass --workflow-run-id <id> or --run-id <id> (alias). The id is returned as `id` from `af workflow run`.",
+        );
+      }
       if (token) {
-        await run(() => client.workflows.getRun(opts.workflowRunId));
+        await run(() => client.workflows.getRun(runId as string));
       } else {
-        await run(() => client.workflows.getRunAnonymous(opts.workflowRunId));
+        await run(() => client.workflows.getRunAnonymous(runId as string));
       }
     });
 
@@ -4056,15 +4865,26 @@ export function createProgram(): Command {
   agentCmd
     .command("get")
     .description("Get an agent by ID.")
-    .requiredOption("--agent-id <id>", "Agent ID")
+    .option("--agent-id <id>", "Agent ID (canonical)")
+    .option("--id <id>", "Agent ID (alias — consistent with marketplace/mcp-clients get)")
+    .option("--fields <fields>", "Comma-separated fields to return (e.g. id,name,model,plugins)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
-      if (token) {
-        await run(() => client.agents.get(opts.agentId));
-      } else {
-        await run(() => client.agents.getAnonymous(opts.agentId));
+      const agentId = (opts.agentId as string | undefined) ?? (opts.id as string | undefined);
+      if (!agentId) {
+        fail(
+          "missing_required_option",
+          "Agent ID is required.",
+          "Pass --agent-id <id> (canonical) or --id <id> (alias).",
+        );
       }
+      await run(async () => {
+        const data = token
+          ? await client.agents.get(agentId as string)
+          : await client.agents.getAnonymous(agentId as string);
+        return applyFieldsFilter(data, opts.fields as string | undefined);
+      });
     });
 
   agentCmd
@@ -4216,17 +5036,37 @@ export function createProgram(): Command {
             `Thread: ${result.threadId}. Check with: af agent-threads messages --thread-id ${result.threadId}`);
         }
 
+        // PDCA round 2 (2026-04-14): the backend sometimes returns
+        // `status: "completed"` with an empty `response` when the agent
+        // exhausts its recursion_limit in a tool loop without producing a
+        // final assistant message. Silent success looks identical to real
+        // success for a non-interactive caller — surface it explicitly.
+        const responseText = typeof result.response === "string" ? result.response : "";
+        const isEmpty = result.status === "completed" && responseText.trim().length === 0;
+
         printResult({
           schema: "agenticflow.agent.run.v1",
-          status: result.status,
+          status: isEmpty ? "completed_empty" : result.status,
           agent_id: opts.agentId,
           thread_id: result.threadId,
           response: result.response,
+          ...(isEmpty
+            ? {
+                warning:
+                  "Agent returned no text output despite status=completed. This usually means " +
+                  "the agent exhausted its recursion_limit in a tool loop without producing a final message. " +
+                  `Inspect: af agent-threads messages --thread-id ${result.threadId} --json. ` +
+                  "Fixes: refine the prompt to converge faster, or raise recursion_limit on the agent via " +
+                  "`af agent update --patch --body '{\"recursion_limit\": 50}'`.",
+              }
+            : {}),
           _links: {
             agent: webUrl("agent", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId }),
             thread: webUrl("thread", { workspaceId: client.sdk.workspaceId, agentId: opts.agentId, threadId: result.threadId }),
           },
         });
+        // Non-zero exit for empty completion so `&&`-chained scripts halt.
+        if (isEmpty) process.exit(2);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         fail("agent_run_failed", message);
@@ -4246,6 +5086,99 @@ export function createProgram(): Command {
         description: "",
         visibility: "private",
         recursion_limit: 25,
+      });
+    });
+
+  agentCmd
+    .command("init")
+    .description(
+      "Deploy a Tier 1 blueprint as a single agent with built-in AgenticFlow plugins. " +
+      "Works in any workspace (no external connections, no MAS/workforce feature). " +
+      "For Tier 3 (multi-agent) blueprints, use `af workforce init --blueprint <id>` instead.",
+    )
+    .requiredOption("--blueprint <slug>", "Tier 1 blueprint id (research-assistant, content-creator, api-helper). See `af bootstrap --json > blueprints[]`.")
+    .option("--name <name>", "Agent name (defaults to blueprint name)")
+    .option("--project-id <id>", "Project ID (defaults to env / auth config)")
+    .option("--model <model>", "Model for the agent (default: agenticflow/gpt-4o-mini — reliably calls tools. gemini-2.0-flash refuses on 'latest X' prompts)", "agenticflow/gpt-4o-mini")
+    .option("--dry-run", "Show the agent-create payload without writing")
+    .action(async (opts) => {
+      const blueprint = getBlueprint(opts.blueprint as string);
+      if (!blueprint) {
+        fail(
+          "invalid_option_value",
+          `Unknown blueprint id: ${opts.blueprint}`,
+          "Run `af blueprints list --json` or `af bootstrap --json` to see available blueprints (look for `tier: 1` entries).",
+        );
+      }
+      if (blueprint.tier !== 1) {
+        fail(
+          "invalid_option_value",
+          `Blueprint "${opts.blueprint}" is tier ${blueprint.tier ?? 3}, not tier 1.`,
+          `Tier ${blueprint.tier ?? 3} blueprints deploy via: af workforce init --blueprint ${opts.blueprint}`,
+        );
+      }
+
+      const { tier1BlueprintToAgentPayload } = await import("./blueprint-to-agent.js");
+
+      // Resolve project_id for agent create (fullClient carries auth-derived defaults)
+      const initClient = buildClient(program.opts());
+      const projectId =
+        (opts.projectId as string | undefined) ??
+        (program.opts().projectId as string | undefined) ??
+        process.env["AGENTICFLOW_PROJECT_ID"] ??
+        (initClient.sdk.projectId as string | undefined);
+      if (!projectId) {
+        fail(
+          "missing_required_option",
+          "Tier 1 agent init requires a project_id.",
+          "Pass --project-id <id>, set AGENTICFLOW_PROJECT_ID, or run `af bootstrap --json` and copy `auth.project_id`.",
+        );
+      }
+
+      let payload: import("./blueprint-to-agent.js").AgentInitPayload;
+      try {
+        payload = tier1BlueprintToAgentPayload(blueprint, {
+          projectId: projectId as string,
+          agentName: opts.name as string | undefined,
+          model: opts.model as string | undefined,
+        });
+      } catch (err) {
+        fail("invalid_blueprint", err instanceof Error ? err.message : String(err));
+        return; // unreachable, satisfies control flow
+      }
+
+      if (opts.dryRun) {
+        printResult({
+          schema: "agenticflow.dry_run.v1",
+          valid: true,
+          target: "agent.init",
+          blueprint: blueprint.id,
+          tier: 1,
+          agent: payload.body,
+          plugin_count: (payload.body["plugins"] as unknown[]).length,
+        });
+        return;
+      }
+
+      await run(async () => {
+        const created = (await initClient.agents.create(payload.body)) as Record<string, unknown>;
+        const agentId = created["id"] as string | undefined;
+        if (!agentId) throw new Error("Agent create did not return an id.");
+        return {
+          schema: "agenticflow.agent.init.v1",
+          agent_id: agentId,
+          blueprint: blueprint.id,
+          tier: 1,
+          name: created["name"],
+          plugin_count: (payload.body["plugins"] as unknown[]).length,
+          plugins: (payload.body["plugins"] as Array<Record<string, unknown>>).map((p) => p["plugin_id"]),
+          _links: {
+            agent: webUrl("agent", { workspaceId: initClient.sdk.workspaceId, agentId }),
+          },
+          next_steps: payload.suggested_next_steps.map((s) =>
+            s.replace(/<id>/g, agentId),
+          ),
+        };
       });
     });
 
@@ -5090,11 +6023,33 @@ export function createProgram(): Command {
           workspaceId: opts.workspaceId,
         });
         if (!response.ok) {
+          // PDCA 2026-04-14 confirmed the authenticated workforce-run path
+          // rejects API-key auth with 400 "Failed to retrieve user info for
+          // user_id: api_key:...". Detect and point users at the known-
+          // working fallback (publish + public run URL) instead of failing
+          // opaquely.
+          let bodyText = "";
+          try { bodyText = await response.text(); } catch { /* ignore */ }
+          const isApiKeyUserLookup =
+            response.status === 400 &&
+            /api_key:/i.test(bodyText) &&
+            /user info|user_id/i.test(bodyText);
+          if (isApiKeyUserLookup) {
+            fail(
+              "workforce_run_api_key_unsupported",
+              `Authenticated workforce run is not currently supported with API-key auth (backend 400 on user lookup). Body: ${bodyText.slice(0, 200)}`,
+              `Workaround: publish the workforce and call the public endpoint.\n` +
+                `  1. af workforce publish --workforce-id ${opts.workforceId} --json  # returns public_key\n` +
+                `  2. curl -X POST https://api.agenticflow.ai/v1/workforce/public/<public_key>/run -H 'Content-Type: application/json' -d '${JSON.stringify(triggerBody)}'\n` +
+                `  3. Poll: af workforce runs list --workforce-id ${opts.workforceId} --json`,
+              { status_code: response.status, body: bodyText.slice(0, 500) },
+            );
+          }
           fail(
             "request_failed",
             `Workforce run failed with status ${response.status}`,
             undefined,
-            { status_code: response.status },
+            { status_code: response.status, body: bodyText.slice(0, 500) },
           );
         }
         const reader = response.body?.getReader();
@@ -5644,9 +6599,12 @@ export function createProgram(): Command {
   const paperclipCmd = program
     .command("paperclip")
     .description(
-      "Publish and control AgenticFlow agents on a Paperclip instance. " +
-      "DEPRECATED — prefer `af workforce *` for AgenticFlow-native deploy. See: af playbook migrate-from-paperclip.",
+      "[DEPRECATED — sunset 2026-10-14] Paperclip publish/run. Use `af workforce *` instead. See: af playbook migrate-from-paperclip.",
     );
+  // Hide from default `--help` — PDCA 2026-04-14 flagged it as noise.
+  if (!(process.env["AF_SHOW_DEPRECATED"] === "1")) {
+    (paperclipCmd as unknown as { _hidden?: boolean })._hidden = true;
+  }
 
   // Emit a single deprecation warning per subcommand invocation (session-scoped
   // dedup in emitDeprecation). This fires BEFORE the action runs, so even --help
@@ -6390,7 +7348,13 @@ export function createProgram(): Command {
   // ============================================================================
   const companyCmd = program
     .command("company")
-    .description("Workspace agent configuration export and import.");
+    .description(
+      "[LEGACY] Workspace agent config export/import. Consider `af workforce *` for newer work.",
+    );
+  // Hide from default `--help` — the workforce surface is the current path. Unhide via AF_SHOW_DEPRECATED=1.
+  if (!(process.env["AF_SHOW_DEPRECATED"] === "1")) {
+    (companyCmd as unknown as { _hidden?: boolean })._hidden = true;
+  }
 
   companyCmd
     .command("export")

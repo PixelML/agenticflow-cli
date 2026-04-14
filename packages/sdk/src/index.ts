@@ -55,6 +55,12 @@ import { DatabaseResource } from "./resources/database.js";
 import { McpClientsResource } from "./resources/mcp-clients.js";
 import { TriggersResource } from "./resources/triggers.js";
 import { WorkforcesResource } from "./resources/workforces.js";
+import {
+  MarketplaceResource,
+  AgentTemplatesResource,
+  WorkflowTemplatesResource,
+  MasTemplatesResource,
+} from "./resources/marketplace.js";
 
 export interface AgenticFlowClient {
   /** Agent CRUD, streaming, publishing, uploads */
@@ -79,6 +85,14 @@ export interface AgenticFlowClient {
   triggers: TriggersResource;
   /** MAS workforce CRUD, schema, runs, versions, public — AgenticFlow-native multi-agent deploy */
   workforces: WorkforcesResource;
+  /** Unified marketplace catalog — agent, workflow, and MAS templates */
+  marketplace: MarketplaceResource;
+  /** Public agent-template browse + fetch */
+  agentTemplates: AgentTemplatesResource;
+  /** Public workflow-template browse + fetch (by id, by category) */
+  workflowTemplates: WorkflowTemplatesResource;
+  /** MAS (workforce) template version history, scoped to a source workforce */
+  masTemplates: MasTemplatesResource;
   /** Low-level SDK instance for advanced / raw requests */
   sdk: AgenticFlowSDK;
 }
@@ -116,6 +130,10 @@ export function createClient(options: AgenticFlowSDKOptions = {}): AgenticFlowCl
     mcpClients: new McpClientsResource(sdk),
     triggers: new TriggersResource(sdk),
     workforces: new WorkforcesResource(sdk),
+    marketplace: new MarketplaceResource(sdk),
+    agentTemplates: new AgentTemplatesResource(sdk),
+    workflowTemplates: new WorkflowTemplatesResource(sdk),
+    masTemplates: new MasTemplatesResource(sdk),
     sdk,
   };
 }
