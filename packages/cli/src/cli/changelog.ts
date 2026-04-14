@@ -14,6 +14,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.6.4",
+    date: "2026-04-14",
+    highlights: [
+      "`af bootstrap` now surfaces a `data_fresh` boolean and `data_fresh_hint` when the backend health check fails — empty `agents`/`workforces` arrays no longer look identical to 'workspace is empty'. Also added `auth.health_error` with the underlying fetch error message",
+      "`af bootstrap --strict` exits non-zero when backend health is false — use in CI to prevent downstream mutations against a degraded workspace",
+      "`af workforce list --name-contains <substr> --fields id,name --json` — same client-side filter + projection as `af agent list` and `af mcp-clients list`. Closes a documentation lie where the flag was advertised but not implemented",
+      "`af workforce init --blueprint --help` no longer references the deprecated `af paperclip blueprints` as the canonical list source. Points at `af bootstrap --json > blueprints[]` with inline slug names",
+      "README + CONTEXT.md + the gitbook-hosted `docs/09-developers/cli/` pages updated to v1.6 surface (native workforce lead, `--patch`, MCP inspect, paperclip deprecation notice, error-envelope shape)",
+    ],
+    for_ai: [
+      "After `af bootstrap --json`, check `data_fresh`. If false, the empty lists are UNVERIFIED — don't assume the workspace is empty. Fix network/auth before mutating",
+      "In CI, run `af bootstrap --strict` instead of the bare form — non-zero exit guards the rest of the pipeline",
+      "`af workforce list --fields id,name --name-contains <substr> --json` now works (was documented but broken in prior versions) — use it to find your own test workforces before bulk delete",
+    ],
+  },
+  {
     version: "1.6.3",
     date: "2026-04-14",
     highlights: [

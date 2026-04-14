@@ -1139,22 +1139,27 @@ export function createProgram(): Command {
   program
     .command("bootstrap")
     .description("Single-command AI agent setup: verify auth, list agents, return schemas. Combines context + doctor + schema + agent list.")
-    .action(async () => {
+    .option("--strict", "Exit non-zero when the backend health check fails. Useful in CI / for scripts that shouldn't proceed into a degraded workspace.")
+    .action(async (opts) => {
       // Combine everything an AI needs in one response
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
 
       let health = false;
+      let healthError: string | null = null;
       let agents: unknown[] = [];
       try {
         const sdk = client.sdk;
         const resp = await sdk.get("/v1/health");
         health = resp.ok;
-      } catch { /* unhealthy */ }
+        if (!resp.ok) healthError = `HTTP ${resp.statusCode}`;
+      } catch (err) {
+        healthError = err instanceof Error ? err.message : String(err);
+      }
 
       try {
         agents = (await client.agents.list({ limit: 10 })) as unknown[];
-      } catch { /* no agents or unauth */ }
+      } catch { /* no agents or unauth — list stays empty */ }
 
       // Workforces are the AgenticFlow-native multi-agent primitive. Fetch
       // the first 10 for the bootstrap snapshot. Tolerate failure (endpoint
@@ -1164,14 +1169,24 @@ export function createProgram(): Command {
         workforces = (await client.workforces.list({ limit: 10 })) as unknown[];
       } catch { /* no workforces or unauth */ }
 
+      // Annotate data-freshness so callers know whether the empty arrays mean
+      // "nothing there" or "couldn't verify because backend was unreachable".
+      // Matches codex-round-1 friction point F1 — previously an empty agents[]
+      // looked identical whether the workspace was empty or the API was down.
+      const dataFresh = health;
       printResult({
         schema: "agenticflow.bootstrap.v1",
         auth: {
           authenticated: !!token,
           health,
+          health_error: healthError,
           workspace_id: client.sdk.workspaceId,
           project_id: client.sdk.projectId,
         },
+        data_fresh: dataFresh,
+        data_fresh_hint: dataFresh
+          ? undefined
+          : "Backend unreachable — `agents`, `workforces`, and the `blueprints` array are the local/bundled shape only. Empty lists DO NOT mean 'nothing in your workspace'. Fix network/auth before mutating.",
         agents: Array.isArray(agents)
           ? agents.slice(0, 10).map((a) => {
             const ag = a as Record<string, unknown>;
@@ -1228,6 +1243,11 @@ export function createProgram(): Command {
           datasets: webUrl("datasets", { workspaceId: client.sdk.workspaceId }),
         },
       });
+      // --strict turns degraded-backend into a non-zero exit so CI / automation
+      // doesn't race ahead into mutations against an unreachable API.
+      if (opts.strict && !health) {
+        process.exit(1);
+      }
     });
 
   // ═════════════════════════════════════════════════════════════════
@@ -4833,13 +4853,26 @@ export function createProgram(): Command {
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .option("--limit <n>", "Limit")
     .option("--offset <n>", "Offset")
+    .option("--name-contains <substr>", "Client-side case-insensitive substring filter on workforce `name`.")
+    .option("--fields <fields>", "Comma-separated fields to return (e.g. id,name,is_public). Applies after --name-contains.")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.workforces.list({
-        workspaceId: opts.workspaceId,
-        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
-        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
-      }));
+      await run(async () => {
+        const rows = await client.workforces.list({
+          workspaceId: opts.workspaceId,
+          limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+          offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        });
+        let out = rows;
+        const needle = (opts.nameContains as string | undefined)?.toLowerCase();
+        if (needle && Array.isArray(out)) {
+          out = (out as Array<Record<string, unknown>>).filter((r) => {
+            const n = r["name"];
+            return typeof n === "string" && n.toLowerCase().includes(needle);
+          });
+        }
+        return applyFieldsFilter(out, opts.fields as string | undefined);
+      });
     });
 
   workforceCmd
@@ -5228,7 +5261,7 @@ export function createProgram(): Command {
       "them into a runnable DAG. Use --skeleton-only for the old v1.5 behavior " +
       "(trigger + output + blueprint metadata, no agents).",
     )
-    .requiredOption("--blueprint <slug>", "Blueprint id (run `af paperclip blueprints` to list)")
+    .requiredOption("--blueprint <slug>", "Blueprint id. See `af bootstrap --json > blueprints[]` for available ids (dev-shop, marketing-agency, sales-team, content-studio, support-center, amazon-seller).")
     .option("--name <name>", "Workforce name (defaults to blueprint name)")
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .option("--project-id <id>", "Project ID to use for agent creation (defaults to env / client config)")
