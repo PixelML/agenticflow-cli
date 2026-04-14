@@ -14,6 +14,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.6.2",
+    date: "2026-04-14",
+    highlights: [
+      "README.md rewritten for v1.6 — leads with `af workforce init`, documents `--patch`, `af mcp-clients inspect`, schema `--field` drilldown, new env vars (AF_SILENCE_DEPRECATIONS, AF_INSECURE_TLS), and marks paperclip surface deprecated with sunset 2026-10-14. Synced to the `README.md` shown on npm",
+      "CONTEXT.md rewritten for AI-agent operators — new 'The journey' section walks from orient → learn → shape → preview → build → test → iterate → ship → cleanup",
+      "`af context --json` updated: invariants now surface --patch preference, MCP inspect-before-attach, and hint/details.payload recovery pattern. New `journey` + `bootstrap_sequence` arrays replace the old `af doctor` lead",
+      "Env-var inventory in context now includes AF_SILENCE_DEPRECATIONS and AF_INSECURE_TLS",
+    ],
+    for_ai: [
+      "If your onboarding stalls on Paperclip docs, pull the latest README — v1.6.2 leads with `af workforce init`, paperclip is clearly demoted with a 2026-10-14 sunset",
+      "`af context --json` now returns a `journey` array with the 9-step build→ship flow the CLI is designed to support",
+      "The invariants list is updated — start with `af bootstrap --json` (not `af doctor`), prefer `--patch` for iteration, inspect MCPs before attach",
+    ],
+  },
+  {
     version: "1.6.1",
     date: "2026-04-14",
     highlights: [
