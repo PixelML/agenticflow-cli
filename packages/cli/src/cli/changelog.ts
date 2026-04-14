@@ -14,6 +14,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.6.1",
+    date: "2026-04-14",
+    highlights: [
+      "Playbook freshness pass — three onboarding playbooks (`first-touch`, `amazon-seller`, `company-from-scratch`) now lead with `af workforce init` (v1.6 native deploy) and show the deprecated `af paperclip init` path as a secondary option with a sunset date",
+      "`deploy-to-paperclip` playbook got a prominent `⚠️ DEPRECATED` header pointing at `af playbook migrate-from-paperclip` and the sunset 2026-10-14",
+      "`amazon-seller` playbook expanded: shows `--include-optional-slots` to create all 5 agents, attach-MCP-per-agent recipe pointing at `mcp-client-quirks`, and smoke-run/publish commands",
+      "Verified: all 6 blueprints translate cleanly through `--dry-run` (node/edge math correct). Full e2e `content-studio` deploy creates + wires + validates + tears down cleanly",
+    ],
+    for_ai: [
+      "When `af bootstrap --json` returns workforces=0 and the user wants a team, the FIRST thing to show them is `af workforce init --blueprint <id> --dry-run --json` — the playbooks now lead with this, no longer with paperclip",
+      "For Amazon Singapore sellers, run `af playbook amazon-seller` — it shows the one-command native deploy path first, with `--include-optional-slots` for the full 5-agent team",
+      "`af playbook deploy-to-paperclip` now explicitly flags itself deprecated and points at `migrate-from-paperclip` — follow that path unless the user has an existing Paperclip instance",
+    ],
+  },
+  {
     version: "1.6.0",
     date: "2026-04-14",
     highlights: [
