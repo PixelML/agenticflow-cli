@@ -135,6 +135,44 @@ export const BLUEPRINTS: Record<string, CompanyBlueprint> = {
       { title: "Quarterly pricing strategy", description: "Develop pricing strategy for the next quarter. Include: cost breakdown (product cost, shipping to FBA, referral fee by category, FBA fulfillment fee, storage fee), margin analysis at current price, promotional pricing for upcoming Singapore events (check actual calendar — Hari Raya, Mother's Day, 6.6, 7.7, GSS, National Day, 9.9, 11.11, 12.12 depending on quarter), bundle pricing options, and minimum price floor.", assigneeRole: "ceo", priority: "medium" },
     ],
   },
+  "tutor": {
+    id: "tutor",
+    name: "Tutoring Business Team",
+    description: "An AI team for tutoring businesses and education professionals — curriculum design, assessments, progress tracking, parent communication, and business operations. Absorbed from the legacy tutor-pack in CLI v1.7.0.",
+    goal: "Run a sustainable tutoring practice with consistent curriculum, clear student progress, and strong parent engagement",
+    agents: [
+      { role: "ceo", title: "Tutor Business Manager", description: "Practice operations, scheduling, pricing, and overall strategy", suggestedTemplate: "Strategist" },
+      { role: "cmo", title: "Parent Communication Specialist", description: "Parent updates, enrollment comms, quarterly progress reports, retention outreach", suggestedTemplate: "Support Agent" },
+      { role: "engineer", title: "Curriculum Designer", description: "Lesson plans, learning objectives, pacing guides aligned to student goals and exam boards", suggestedTemplate: "Content Writer" },
+      { role: "researcher", title: "Student Progress Tracker", description: "Learning analytics, weak-area detection, intervention recommendations from assessment data", suggestedTemplate: "Market Researcher" },
+      { role: "general", title: "Quiz & Assessment Creator", description: "Formative + summative assessments, answer keys, difficulty calibration", suggestedTemplate: "Content Writer", optional: true },
+    ],
+    starterTasks: [
+      { title: "Design a 4-week curriculum for a new student", description: "Given a student's current level, target goal (exam, grade, topic mastery), and weekly lesson frequency, produce a 4-week plan with weekly objectives, concrete lesson activities, and a mid-point checkpoint assessment. Ask the tutor for actual student details — do not fabricate.", assigneeRole: "engineer", priority: "high" },
+      { title: "Draft first parent progress report template", description: "Create a parent-facing monthly progress report template: current level, this month's wins, areas still developing, specific practice suggestions for the home, next month's focus. Tone: warm, specific, actionable — never generic.", assigneeRole: "cmo", priority: "high" },
+      { title: "Build a 10-question diagnostic quiz", description: "For the student's subject and level, generate a 10-question diagnostic covering the core prerequisite skills. Include answer key, common-misconception notes per question, and suggested remediation if the student misses each item.", assigneeRole: "general", priority: "medium" },
+      { title: "Quarterly business review", description: "Given the tutor's current enrollment, monthly retention, hourly rate, and typical hours/week, compute: revenue run-rate, gross margin if they hire a contract tutor, and 3 concrete growth levers (pricing, referrals, group sessions) ranked by expected impact vs effort.", assigneeRole: "ceo", priority: "medium" },
+    ],
+  },
+  "freelancer": {
+    id: "freelancer",
+    name: "Freelancer Operations Team",
+    description: "An AI team for freelancers, consultants, and independent professionals — client research, proposals, contracts, invoicing, status updates, and business development. Absorbed from the legacy freelancer-pack in CLI v1.7.0.",
+    goal: "Let a solo freelancer operate like a staffed agency: consistent proposals, on-time invoicing, proactive client updates, and a steady pipeline",
+    agents: [
+      { role: "ceo", title: "Business Development Manager", description: "Pipeline health, proposal strategy, positioning, pricing decisions", suggestedTemplate: "Strategist" },
+      { role: "cmo", title: "Client Communication Agent", description: "Weekly status updates, scope-change comms, onboarding and offboarding touchpoints", suggestedTemplate: "Support Agent" },
+      { role: "engineer", title: "Project Scope Writer", description: "Statements of work, deliverables definition, acceptance criteria, assumptions and exclusions", suggestedTemplate: "Content Writer" },
+      { role: "researcher", title: "Client Research Analyst", description: "Pre-outreach research on target companies + decision-makers; discovery-call prep briefs", suggestedTemplate: "Market Researcher" },
+      { role: "general", title: "Invoice & Contract Generator", description: "MSA / SOW / invoice drafting from a deal brief; payment-terms consistency", suggestedTemplate: "Content Writer", optional: true },
+    ],
+    starterTasks: [
+      { title: "Draft a Statement of Work for a new engagement", description: "From a one-paragraph deal brief (client, scope, timeline, budget), produce a complete SOW: deliverables with acceptance criteria, milestones with payment triggers, assumptions, exclusions, change-request process, IP ownership, and termination clause. Flag any missing information the freelancer should confirm before sending.", assigneeRole: "engineer", priority: "high" },
+      { title: "Write a weekly client status email", description: "From a short brief of what was done this week + blockers + next-week focus, draft a client-facing status email: brief, specific, outcome-oriented, no jargon. Ends with one clear ask (approval, blocker, or check-in). Max 200 words.", assigneeRole: "cmo", priority: "high" },
+      { title: "Pre-meeting research brief for a prospect", description: "For a named target company and decision-maker, produce a 1-page discovery-call brief: company recent news, likely pain points aligned to the freelancer's service, the decision-maker's background, and 5 discovery questions ranked by signal value. Use only information the freelancer provides or publicly searchable facts — do not fabricate.", assigneeRole: "researcher", priority: "medium" },
+      { title: "Quarterly business review", description: "Given bookings, utilisation, AR aging, and pipeline, produce a quarterly review: revenue vs target, utilisation delta, top 3 pipeline risks, and 3 concrete actions for next quarter (positioning, pricing, ops) ranked by impact vs effort.", assigneeRole: "ceo", priority: "medium" },
+    ],
+  },
 };
 
 export function listBlueprints(): CompanyBlueprint[] {

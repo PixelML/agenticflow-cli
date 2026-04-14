@@ -2754,7 +2754,31 @@ export function createProgram(): Command {
   // ═════════════════════════════════════════════════════════════════
   const packCmd = program
     .command("pack")
-    .description("Pack lifecycle commands (init, validate, simulate, run, install, list, uninstall).");
+    .description(
+      "Pack lifecycle commands (init, validate, simulate, run, install, list, uninstall). " +
+      "DEPRECATED in v1.7.0 — the \"pack\" concept has been collapsed into blueprints. " +
+      "The 3 legacy packs (amazon-seller-pack, tutor-pack, freelancer-pack) are all " +
+      "available as workforce blueprints now. Use `af workforce init --blueprint <id>` " +
+      "instead. Sunset 2026-10-14.",
+    );
+
+  // Single deprecation warning per subcommand per session (dedup in emitDeprecation).
+  // Mirrors the paperclip hook pattern.
+  packCmd.hook("preAction", (thisCommand, actionCommand) => {
+    const segments: string[] = [];
+    let cur: Command | null = actionCommand;
+    while (cur && cur !== program) {
+      segments.unshift(cur.name());
+      cur = cur.parent ?? null;
+    }
+    const commandPath = `af ${segments.join(" ")}`;
+    emitDeprecation({
+      command: commandPath,
+      replacement: "af workforce init --blueprint <id>  (tutor, freelancer, and amazon-seller now ship as native blueprints)",
+      playbook: "migrate-from-paperclip",
+      sunset: "2026-10-14",
+    });
+  });
 
   packCmd
     .command("init <name>")

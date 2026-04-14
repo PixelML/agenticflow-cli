@@ -17,7 +17,7 @@ describe("slotToNodeName", () => {
 describe("blueprintToWorkforce — skeleton graph (v1.5)", () => {
   it("translates every shipped blueprint without throwing", () => {
     const bps = listBlueprints();
-    expect(bps.length).toBeGreaterThanOrEqual(6);
+    expect(bps.length).toBeGreaterThanOrEqual(8);
     for (const bp of bps) {
       const out = blueprintToWorkforce(bp);
       expect(out.workforce.name).toBe(bp.name);

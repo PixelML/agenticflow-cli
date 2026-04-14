@@ -14,6 +14,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.7.0",
+    date: "2026-04-14",
+    highlights: [
+      "Two new workforce blueprints — `tutor` (5 agents: Tutor Business Manager, Parent Communication Specialist, Curriculum Designer, Student Progress Tracker, Quiz & Assessment Creator) and `freelancer` (5 agents: Business Development Manager, Client Communication Agent, Project Scope Writer, Client Research Analyst, Invoice & Contract Generator). Both available via `af workforce init --blueprint tutor|freelancer`",
+      "`af pack *` deprecated. The legacy pack concept is collapsed into blueprints — the 3 old packs (amazon-seller-pack, tutor-pack, freelancer-pack) are all now native workforce blueprints. `af pack *` still works (stderr warning per subcommand per session) but will be removed on 2026-10-14. Silence with AF_SILENCE_DEPRECATIONS=1 while migrating",
+      "Concept consolidation: AgenticFlow now has ONE way to deploy a pre-made team — `af workforce init --blueprint <id>` — not three (pack vs blueprint vs paperclip). Reduces vocabulary from 3 nouns to 2 (blueprint, playbook)",
+    ],
+    for_ai: [
+      "When a user asks you to set up a business on AgenticFlow, check the 8 blueprints first (dev-shop, marketing-agency, sales-team, content-studio, support-center, amazon-seller, tutor, freelancer). If there's a match, use `af workforce init --blueprint <id>`. Only fall back to `af agent create` when no blueprint fits",
+      "Tutoring and freelancer businesses now have dedicated blueprints — do NOT use `af pack install tutor-pack`; use `af workforce init --blueprint tutor --name \"<name>\" --json` instead",
+      "All 8 blueprints support --dry-run, --skeleton-only, --include-optional-slots, and --model as documented",
+    ],
+  },
+  {
     version: "1.6.4",
     date: "2026-04-14",
     highlights: [
