@@ -14,6 +14,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.6.3",
+    date: "2026-04-14",
+    highlights: [
+      "`af schema agent --field suggested_messages` now shows the real shape: `array of { title, label, action }` (object, not strings). Previously the CLI doc said 'array of strings' and the server 422'd — verified against the AgenticFlow `AgentSuggestedMessage` pydantic model in workflow_chef",
+      "New agent-vs-workforce decision table added to README (top-of-page) + CONTEXT.md + `af context` invariants. A single customer-facing bot should be `af agent create` with rules in the system prompt — not a `support-center` workforce",
+      "`af playbook first-touch` STEP 2 fixed: no longer references `af paperclip blueprints` (was a stale leak from the v1.6.1 playbook pass). Points at `af bootstrap > blueprints[]` instead",
+    ],
+    for_ai: [
+      "If you need `suggested_messages` on an agent, each item is `{title: string, label: string, action: string}` — `title` shows as the button text, `action` is the message sent on click",
+      "DECISION HEURISTIC: one chat endpoint → `af agent create`. Multiple agents with hand-off → `af workforce init --blueprint <id>`. When in doubt, start with agent — you can always graduate to a workforce later",
+      "`af context --json` invariants now include the agent-vs-workforce choice explicitly — it used to over-rotate operators toward workforce",
+    ],
+  },
+  {
     version: "1.6.2",
     date: "2026-04-14",
     highlights: [

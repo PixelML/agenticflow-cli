@@ -32,10 +32,14 @@ af workforce init --blueprint dev-shop --name "My Dev Team" --json
 
 ## What you can build
 
-- **Single agents** — `af agent create/run/update/delete`, with `--patch` for surgical iteration
-- **Multi-agent workforces** — `af workforce init --blueprint <id>` deploys a runnable DAG (trigger → coordinator → workers → output) with real agents auto-created and wired up
-- **Workflows** — `af workflow create/run/run-status` for DAG-style workflow automation
-- **MCP tool integrations** — `af mcp-clients list/inspect` to audit + attach Google Docs/Sheets, Notion, Slack, GitHub, etc.
+| You want… | Use | Because |
+|---|---|---|
+| A single chat endpoint / customer-facing bot / one assistant | **`af agent create`** then `af agent run` | One prompt handles routing. Iterate with `af agent update --patch` |
+| Multiple agents that hand off (research → write, triage → specialist, dev shop, marketing agency, Amazon seller team, …) | **`af workforce init --blueprint <id>`** | Creates workforce + N agents + wired DAG in one command. Atomic rollback on failure |
+| A DAG of prompt/tool/logic nodes (not necessarily multi-agent) | **`af workflow create`** then `af workflow run` | Classic workflow engine |
+| Attach Google Docs/Sheets/Slack/Notion to an agent | **`af mcp-clients list/inspect`** then `af agent update --patch` | Inspect before attach to avoid Pipedream write-capability traps |
+
+Don't reach for a workforce when a single agent suffices — the 6 built-in workforce blueprints are for genuine multi-agent orchestration (dev-shop, marketing-agency, sales-team, content-studio, support-center, amazon-seller).
 
 ## Authentication
 

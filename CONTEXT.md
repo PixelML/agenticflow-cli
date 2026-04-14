@@ -67,6 +67,16 @@ Other env vars worth knowing:
 - `AF_SILENCE_DEPRECATIONS=1` — suppress `af paperclip` deprecation notices while migrating
 - `AF_INSECURE_TLS=1` — opt-in to insecure TLS for self-signed dev backends (CLI now unsets inherited `NODE_TLS_REJECT_UNAUTHORIZED=0` at startup)
 
+## Choosing: agent vs. workforce
+
+| Use case | Pick | Why |
+|---|---|---|
+| One customer-facing chat endpoint, a single assistant, a support bot | `af agent create` | One prompt handles routing. No DAG overhead. Iterate with `--patch` |
+| Multiple agents with hand-off: research → write pipeline, triage → specialist, dev shop, content studio, amazon seller team | `af workforce init --blueprint <id>` | One command creates workforce + N agents + wired DAG. Atomic rollback on failure |
+| DAG of prompt / tool / logic nodes (not necessarily multi-agent) | `af workflow create` | Classic workflow engine |
+
+**Don't workforce-init a single-bot use case** — a `support-center` workforce for "answer product questions and escalate billing" is over-engineering. Use one `af agent create` with rules in the system prompt. Workforces are for genuine orchestration between roles.
+
 ## The journey — what the CLI helps you build
 
 ```
