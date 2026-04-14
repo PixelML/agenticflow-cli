@@ -14,6 +14,25 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.5.2",
+    date: "2026-04-14",
+    highlights: [
+      "`af workforce run --trigger-data '{...}'` now auto-wraps in the server's required `{trigger_data: ...}` envelope. Previously you had to pass `{\"trigger_data\":{\"topic\":\"AI\"}}` which felt like a CLI bug. Explicit wrapping still works (pass-through)",
+      "`af workforce delete` returns the consistent `agenticflow.delete.v1` envelope instead of bare `null`. Scripts now get the same shape as `af agent delete`",
+      "`af mcp-clients list --name-contains <substr> --fields id,name` — same filter + projection flags as `af agent list`. Essential for workspaces with dozens of MCP clients",
+      "`af mcp-clients inspect` surfaces the underlying `fetch_error` + `classification_reason` when tools can't be enumerated. Stops returning a misleading `pattern: unknown` that callers might treat as 'safe to attach'",
+      "`af schema <resource> --field <name>` now resolves against top-level schema keys too (not just create.optional). Lets you drill into `schema`, `update`, `stream` subtrees — e.g. `af schema workforce --field schema --json` returns the node_shape + edge_shape + agent_node_input docs",
+      "`af schema agent` clarifies that `project_id` is REQUIRED on create (server does NOT auto-inject for agents, unlike workforces). Separates the contract per resource",
+    ],
+    for_ai: [
+      "When you hit a 422 `body.trigger_data missing` on `workforce run`, upgrade to 1.5.2 — the CLI now auto-wraps",
+      "If `mcp-clients inspect` returns `classification_reason: 'fetch_failed'` or `'unauthenticated'`, DO NOT attach that client to an agent — re-auth in the web UI first",
+      "Filter MCP clients with `af mcp-clients list --name-contains 'google docs' --fields id,name --json` — no more grep-piping",
+      "Drill into any schema subtree: `af schema workforce --field schema --json` returns graph shape; `af schema agent --field mcp_clients --json` returns attach shape",
+      "Consistent delete envelope: every `af <resource> delete` returns `{schema:'agenticflow.delete.v1', deleted:true, id, resource}` on success",
+    ],
+  },
+  {
     version: "1.5.1",
     date: "2026-04-14",
     highlights: [

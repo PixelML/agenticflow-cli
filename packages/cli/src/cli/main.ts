@@ -953,6 +953,7 @@ export function createProgram(): Command {
   const SCHEMAS: Record<string, unknown> = {
     agent: {
       resource: "agent",
+      note: "`project_id` is REQUIRED in the body on agent create (server does NOT auto-inject from client config, unlike workforces). The CLI's local validator enforces this — grab the value from `af bootstrap --json > auth.project_id`. The `workspace_id` scoping is handled server-side via API key.",
       create: {
         required: ["name", "tools", "project_id"],
         optional: {
@@ -1295,33 +1296,56 @@ export function createProgram(): Command {
           `Available: ${Object.keys(SCHEMAS).join(", ")}`,
         );
       }
-      // Field drilldown: return just the docs for one field
+      // Field drilldown: resolve `--field X` against multiple schema locations.
+      // We look in this order: top-level sibling key (e.g. `schema`, `update`,
+      // `stream`), then create.required, then create.optional. This lets the
+      // drilldown return rich subtree docs (like `schema` node/edge shapes on
+      // the workforce resource) rather than "not found".
       if (opts?.field) {
         const fieldName = opts.field as string;
         const s = schema as Record<string, unknown>;
-        const create = (s.create as Record<string, unknown>) ?? {};
-        const required = (create.required as string[]) ?? [];
-        const optional = (create.optional as Record<string, string>) ?? {};
-        let doc: string | null = null;
+        let doc: unknown = null;
+        let location: string | null = null;
         let isRequired = false;
-        if (required.includes(fieldName)) { doc = "required"; isRequired = true; }
-        if (fieldName in optional) doc = optional[fieldName] ?? null;
+
+        if (fieldName in s && fieldName !== "resource" && fieldName !== "fields") {
+          doc = s[fieldName];
+          location = "top_level";
+        } else {
+          const create = (s.create as Record<string, unknown>) ?? {};
+          const required = (create.required as string[]) ?? [];
+          const optional = (create.optional as Record<string, string>) ?? {};
+          if (required.includes(fieldName)) {
+            doc = "required";
+            isRequired = true;
+            location = "create.required";
+          } else if (fieldName in optional) {
+            doc = optional[fieldName] ?? null;
+            location = "create.optional";
+          }
+        }
+        const found = doc !== null && doc !== undefined;
         const result = {
           schema: "agenticflow.schema.field.v1",
           resource: s.resource,
           field: fieldName,
           required: isRequired,
+          location,
           doc,
-          found: doc !== null,
-          hint: doc === null
-            ? `Field '${fieldName}' has no documented shape in the static schema. For live introspection, fetch an existing instance via 'af ${s.resource} get --${s.resource}-id <id> --json' and inspect the returned value for that field.`
+          found,
+          hint: !found
+            ? `Field '${fieldName}' has no documented shape in the static schema. Candidates: top-level keys (${Object.keys(s).filter((k) => !["resource", "fields"].includes(k)).join(", ")}); create.required; create.optional. For live introspection, fetch an existing instance via 'af ${s.resource} get --${s.resource}-id <id> --json' and inspect the returned value for that field.`
             : undefined,
         };
         if (isJsonFlagEnabled()) {
           printResult(result);
         } else {
-          console.log(`${s.resource}.${fieldName}${isRequired ? " (required)" : " (optional)"}`);
-          if (doc) console.log(`  ${doc}`);
+          console.log(`${s.resource}.${fieldName}${isRequired ? " (required)" : ""}${location ? ` [${location}]` : ""}`);
+          if (typeof doc === "string") {
+            console.log(`  ${doc}`);
+          } else if (doc !== null && doc !== undefined) {
+            console.log(JSON.stringify(doc, null, 2).split("\n").map((l) => "  " + l).join("\n"));
+          }
           if (result.hint) console.log(`  ${result.hint}`);
         }
         return;
@@ -4550,6 +4574,8 @@ export function createProgram(): Command {
     .option("--project-id <id>", "Project ID")
     .option("--limit <n>", "Limit")
     .option("--offset <n>", "Offset")
+    .option("--name-contains <substr>", "Client-side case-insensitive substring filter on client `name`. Essential in busy workspaces with dozens of MCP clients.")
+    .option("--fields <fields>", "Comma-separated fields to return (e.g. id,name,is_authenticated). Applies after --name-contains filter.")
     .option(
       "--verify-auth",
       "Reconcile is_authenticated by calling `get` for each client — slower " +
@@ -4558,23 +4584,47 @@ export function createProgram(): Command {
     )
     .action(async (opts) => {
       const client = buildClient(program.opts());
+      // Helper: apply client-side name filter + fields projection to a list response
+      const postFilter = (rows: unknown): unknown => {
+        let out = rows;
+        const nameContains = opts.nameContains as string | undefined;
+        if (nameContains && Array.isArray(out)) {
+          const needle = nameContains.toLowerCase();
+          out = (out as Array<Record<string, unknown>>).filter((r) => {
+            const n = r["name"];
+            return typeof n === "string" && n.toLowerCase().includes(needle);
+          });
+        }
+        return applyFieldsFilter(out, opts.fields as string | undefined);
+      };
       if (!opts.verifyAuth) {
-        await run(() => client.mcpClients.list({
-          workspaceId: opts.workspaceId,
-          projectId: opts.projectId,
-          limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
-          offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
-        }));
+        await run(async () => {
+          const rows = await client.mcpClients.list({
+            workspaceId: opts.workspaceId,
+            projectId: opts.projectId,
+            limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+            offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+          });
+          return postFilter(rows);
+        });
         return;
       }
-      // --verify-auth: list, then re-check each row's auth via get()
+      // --verify-auth: list, filter, then re-check each remaining row's auth via get()
       await run(async () => {
-        const rows = (await client.mcpClients.list({
+        let rows = (await client.mcpClients.list({
           workspaceId: opts.workspaceId,
           projectId: opts.projectId,
           limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
           offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
         })) as Array<Record<string, unknown>>;
+        const nameContains = opts.nameContains as string | undefined;
+        if (nameContains) {
+          const needle = nameContains.toLowerCase();
+          rows = rows.filter((r) => {
+            const n = r["name"];
+            return typeof n === "string" && n.toLowerCase().includes(needle);
+          });
+        }
         const verified = await Promise.all(
           rows.map(async (row) => {
             const id = row["id"] as string | undefined;
@@ -4593,7 +4643,7 @@ export function createProgram(): Command {
             }
           }),
         );
-        return verified;
+        return applyFieldsFilter(verified, opts.fields as string | undefined);
       });
     });
 
@@ -4641,16 +4691,41 @@ export function createProgram(): Command {
               ? ((toolsBox as { tools: Array<Record<string, unknown>> }).tools)
               : [];
         const report = inspectMcpToolsPattern(tools);
+        // Surface the underlying fetch/auth error when the tools list couldn't
+        // be enumerated — previously we silently returned pattern="unknown",
+        // which callers mistook for "safe to attach." Now the `fetch_error`
+        // + `classification_reason` make the failure explicit.
+        const fetchError = raw["error"] as string | undefined;
+        const isAuth = raw["is_authenticated"];
+        const classification_reason =
+          tools.length > 0
+            ? "tools_enumerated"
+            : fetchError
+              ? "fetch_failed"
+              : isAuth === false
+                ? "unauthenticated"
+                : "unknown";
+        const additional_quirks = [...report.quirks];
+        if (tools.length === 0 && (fetchError || isAuth === false)) {
+          additional_quirks.unshift(
+            `Cannot classify this MCP client's tools — ${classification_reason}. ` +
+            (fetchError ? `Server reported: ${fetchError}. ` : "") +
+            `Do NOT attach this client to an agent until the underlying issue is resolved. ` +
+            `Re-auth via the AgenticFlow web UI (workspaces/<ws>/mcp/${clientId}).`
+          );
+        }
         return {
           schema: "agenticflow.mcp_client.inspect.v1",
           client_id: clientId,
           client_name: raw["name"] ?? null,
-          is_authenticated: raw["is_authenticated"] ?? null,
+          is_authenticated: isAuth ?? null,
           tool_count: tools.length,
           pattern: report.pattern, // "pipedream" | "composio" | "mixed" | "unknown"
+          classification_reason,
+          fetch_error: fetchError ?? null,
           write_capable_tools: report.writeCapable,
           pipedream_instruction_only_tools: report.pipedreamTools,
-          known_quirks: report.quirks,
+          known_quirks: additional_quirks,
           playbook: "af playbook mcp-client-quirks",
         };
       });
@@ -4750,9 +4825,20 @@ export function createProgram(): Command {
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() =>
-        client.workforces.delete(opts.workforceId, { workspaceId: opts.workspaceId }),
-      );
+      try {
+        await client.workforces.delete(opts.workforceId, { workspaceId: opts.workspaceId });
+        // Server returns 204/null on success — wrap in the same delete envelope
+        // that `af agent delete` uses so scripts get a consistent shape.
+        printResult({
+          schema: "agenticflow.delete.v1",
+          deleted: true,
+          id: opts.workforceId,
+          resource: "workforce",
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        fail("request_failed", message);
+      }
     });
 
   workforceCmd
@@ -4836,13 +4922,29 @@ export function createProgram(): Command {
       "Exits when the stream closes.",
     )
     .requiredOption("--workforce-id <id>", "Workforce ID")
-    .option("--trigger-data <json>", "Trigger data (inline JSON or @file)", "{}")
+    .option(
+      "--trigger-data <json>",
+      "Trigger input as inline JSON or @file. Pass the data your trigger node expects " +
+      "(e.g. `{\"topic\":\"AI\"}`) — the CLI automatically wraps it in the server's " +
+      "required `{trigger_data: ...}` envelope. If you pass `{\"trigger_data\":{...}}` " +
+      "explicitly, it's left as-is.",
+      "{}",
+    )
     .option("--workspace-id <id>", "Workspace ID (overrides env)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      const triggerData = loadJsonPayload(opts.triggerData) as Record<string, unknown>;
+      const raw = loadJsonPayload(opts.triggerData) as Record<string, unknown>;
+      // Server accepts `{trigger_data: {...}}`. If the caller already wrapped
+      // it (explicitly nested under trigger_data), pass through. Otherwise,
+      // wrap the user's payload. This is the ergonomics fix for friction S6 —
+      // previously passing `{topic:"..."}` returned `422: body.trigger_data
+      // missing` which looked like a CLI bug, not a payload shape bug.
+      const triggerBody: Record<string, unknown> =
+        "trigger_data" in raw && typeof raw["trigger_data"] === "object" && raw["trigger_data"] !== null
+          ? raw
+          : { trigger_data: raw };
       try {
-        const response = await client.workforces.run(opts.workforceId, triggerData, {
+        const response = await client.workforces.run(opts.workforceId, triggerBody, {
           workspaceId: opts.workspaceId,
         });
         if (!response.ok) {
