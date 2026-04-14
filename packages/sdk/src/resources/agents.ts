@@ -57,6 +57,37 @@ export class AgentsResource {
     return (await this.client.put(`/v1/agents/${agentId}`, { json: payload })).data;
   }
 
+  /**
+   * Partial update: fetch current agent, merge `partial` over it, PUT the result.
+   * Emulates PATCH semantics on a PUT-only endpoint. Caller is responsible for
+   * stripping server-rejected-null fields (see utils/patch.ts#stripNullFields
+   * in the CLI package) if their partial could contain them.
+   */
+  async patch(
+    agentId: string,
+    partial: Record<string, unknown>,
+    options: {
+      /** Optional hook to transform the merged payload before PUT (e.g. strip nulls). */
+      prepare?: (merged: Record<string, unknown>) => Record<string, unknown>;
+    } = {},
+  ): Promise<unknown> {
+    const current = (await this.get(agentId)) as Record<string, unknown>;
+    const merged = { ...current, ...partial };
+    // Deep-merge for nested objects
+    for (const key of Object.keys(partial)) {
+      const baseVal = current[key];
+      const patchVal = partial[key];
+      if (
+        baseVal !== null && typeof baseVal === "object" && !Array.isArray(baseVal) &&
+        patchVal !== null && typeof patchVal === "object" && !Array.isArray(patchVal)
+      ) {
+        merged[key] = { ...(baseVal as Record<string, unknown>), ...(patchVal as Record<string, unknown>) };
+      }
+    }
+    const body = options.prepare ? options.prepare(merged) : merged;
+    return this.update(agentId, body);
+  }
+
   // ── Delete ─────────────────────────────────────────────────────────
   async delete(agentId: string): Promise<unknown> {
     return (await this.client.delete(`/v1/agents/${agentId}`)).data;

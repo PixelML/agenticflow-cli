@@ -10,3 +10,9 @@ export { McpClientsResource } from "./mcp-clients.js";
 export { TriggersResource } from "./triggers.js";
 export { PaperclipResource } from "./paperclip.js";
 export type { PaperclipConfig, PaperclipCompany, PaperclipAgent } from "./paperclip.js";
+export {
+  WorkforcesResource,
+  WorkforceVersionsSubresource,
+  PublicWorkforceSubresource,
+} from "./workforces.js";
+export type { WorkforceListOptions, WorkforceSchema } from "./workforces.js";

@@ -17,6 +17,7 @@ import {
   DEFAULT_BASE_URL,
   AGENTICFLOW_API_KEY,
   PaperclipResource,
+  APIError,
   type AgenticFlowClient,
 } from "@pixelml/agenticflow-sdk";
 import { startGateway, type GatewayConfig } from "./gateway/server.js";
@@ -26,6 +27,9 @@ import { WebhookConnector } from "./gateway/connectors/webhook.js";
 import type { ChannelConnector } from "./gateway/connector.js";
 import { listBlueprints, getBlueprint } from "./company-blueprints.js";
 import { CHANGELOG, getLatestChangelog } from "./changelog.js";
+import { stripNullFields } from "./utils/patch.js";
+import { inspectMcpToolsPattern } from "./utils/mcp-inspect.js";
+import { emitDeprecation } from "./utils/deprecation.js";
 import {
   OperationRegistry,
   defaultSpecPath,
@@ -604,6 +608,18 @@ async function run(fn: () => Promise<unknown>): Promise<void> {
     printResult(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Surface server-side error details (payload, status_code, request_id) when we
+    // have them. This converts opaque HTTP errors like a bare "500 An unexpected
+    // error occurred" into a structured `details` object that AI operators and
+    // humans can both inspect. Non-APIError exceptions fall through unchanged.
+    if (err instanceof APIError) {
+      const details: Record<string, unknown> = {
+        status_code: err.statusCode,
+      };
+      if (err.requestId) details["request_id"] = err.requestId;
+      if (err.payload !== null && err.payload !== undefined) details["payload"] = err.payload;
+      fail("request_failed", message, undefined, details);
+    }
     fail("request_failed", message);
   }
 }
@@ -1036,6 +1052,14 @@ export function createProgram(): Command {
         agents = (await client.agents.list({ limit: 10 })) as unknown[];
       } catch { /* no agents or unauth */ }
 
+      // Workforces are the AgenticFlow-native multi-agent primitive. Fetch
+      // the first 10 for the bootstrap snapshot. Tolerate failure (endpoint
+      // may 404 in very old backends).
+      let workforces: unknown[] = [];
+      try {
+        workforces = (await client.workforces.list({ limit: 10 })) as unknown[];
+      } catch { /* no workforces or unauth */ }
+
       printResult({
         schema: "agenticflow.bootstrap.v1",
         auth: {
@@ -1050,12 +1074,23 @@ export function createProgram(): Command {
             return { id: ag.id, name: ag.name, model: ag.model };
           })
           : [],
+        workforces: Array.isArray(workforces)
+          ? workforces.slice(0, 10).map((w) => {
+            const wf = w as Record<string, unknown>;
+            return { id: wf["id"], name: wf["name"], is_public: wf["is_public"] };
+          })
+          : [],
         schemas: Object.keys(SCHEMAS),
         commands: {
           run_agent: "af agent run --agent-id <id> --message <msg> --json",
           create_agent: "af agent create --body <json> --dry-run --json",
           list_agents: "af agent list --fields id,name,model --json",
-          deploy_to_paperclip: "af paperclip init --blueprint <id> --json",
+          update_agent_patch: "af agent update --agent-id <id> --patch --body '{\"field\":\"value\"}' --json",
+          init_workforce: "af workforce init --blueprint <id> --json",
+          run_workforce: "af workforce run --workforce-id <id> --trigger-data '{}'",
+          publish_workforce: "af workforce publish --workforce-id <id> --json",
+          inspect_mcp_client: "af mcp-clients inspect --id <id> --json",
+          deploy_to_paperclip: "af paperclip init --blueprint <id> --json   # DEPRECATED, use `af workforce init`",
           send_webhook: "curl -X POST http://localhost:4100/webhook/webhook -H 'Content-Type: application/json' -d '{\"agent_id\":\"<id>\",\"message\":\"<msg>\"}'",
           get_schema: "af schema <resource> --json",
           get_playbook: "af playbook <topic>",
@@ -1069,7 +1104,12 @@ export function createProgram(): Command {
           "agenticflow/deepseek-v3.2",
           "agenticflow/qwen-3.5-flash",
         ],
-        blueprints: listBlueprints().map((b) => ({ id: b.id, name: b.name, agents: b.agents.length })),
+        blueprints: listBlueprints().map((b) => ({
+          id: b.id,
+          name: b.name,
+          agents: b.agents.length,
+          native_target: "workforce",
+        })),
         playbooks: listPlaybooks().map((p) => p.topic),
         whats_new: getLatestChangelog(),
         _links: {
@@ -3811,11 +3851,27 @@ export function createProgram(): Command {
     .description("Update an agent.")
     .requiredOption("--agent-id <id>", "Agent ID")
     .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .option(
+      "--patch",
+      "Partial update: fetch current agent, merge body over it, PUT the result. " +
+      "Lets you pass just the fields you want to change.",
+    )
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
       ensureLocalValidation("agent.update", validateAgentUpdatePayload(body));
-      await run(() => client.agents.update(opts.agentId, body));
+      if (opts.patch) {
+        await run(() =>
+          client.agents.patch(opts.agentId, body as Record<string, unknown>, {
+            prepare: (merged) => stripNullFields(merged),
+          }),
+        );
+      } else {
+        // Full replace, but strip server-rejected nulls so a round-tripped
+        // `af agent get | af agent update --body @-` workflow doesn't 422.
+        const prepared = stripNullFields(body as Record<string, unknown>);
+        await run(() => client.agents.update(opts.agentId, prepared));
+      }
     });
 
   agentCmd
@@ -4401,23 +4457,552 @@ export function createProgram(): Command {
     .option("--project-id <id>", "Project ID")
     .option("--limit <n>", "Limit")
     .option("--offset <n>", "Offset")
+    .option(
+      "--verify-auth",
+      "Reconcile is_authenticated by calling `get` for each client — slower " +
+      "but catches the case where list() reports auth=true but get() reveals " +
+      "the underlying provider session is expired. N+1 call; use sparingly.",
+    )
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.mcpClients.list({
-        workspaceId: opts.workspaceId,
-        projectId: opts.projectId,
-        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
-        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
-      }));
+      if (!opts.verifyAuth) {
+        await run(() => client.mcpClients.list({
+          workspaceId: opts.workspaceId,
+          projectId: opts.projectId,
+          limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+          offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        }));
+        return;
+      }
+      // --verify-auth: list, then re-check each row's auth via get()
+      await run(async () => {
+        const rows = (await client.mcpClients.list({
+          workspaceId: opts.workspaceId,
+          projectId: opts.projectId,
+          limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+          offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        })) as Array<Record<string, unknown>>;
+        const verified = await Promise.all(
+          rows.map(async (row) => {
+            const id = row["id"] as string | undefined;
+            if (!id) return { ...row, verified_auth: null };
+            try {
+              const fresh = (await client.mcpClients.get(id)) as Record<string, unknown>;
+              return {
+                ...row,
+                list_is_authenticated: row["is_authenticated"] ?? null,
+                verified_is_authenticated: fresh["is_authenticated"] ?? null,
+                verified_auth_mismatch:
+                  row["is_authenticated"] !== fresh["is_authenticated"],
+              };
+            } catch (err) {
+              return { ...row, verified_auth_error: err instanceof Error ? err.message : String(err) };
+            }
+          }),
+        );
+        return verified;
+      });
     });
 
   mcpClientsCmd
     .command("get")
     .description("Get MCP client details.")
-    .requiredOption("--client-id <id>", "MCP client ID")
+    // Accept both --client-id (canonical) and --id (alias, matches list output's `id` field)
+    .option("--client-id <id>", "MCP client ID (canonical)")
+    .option("--id <id>", "MCP client ID (alias for --client-id)")
+    .action(async (opts) => {
+      const clientId = (opts.clientId as string | undefined) ?? (opts.id as string | undefined);
+      if (!clientId) {
+        fail(
+          "missing_required_option",
+          "Either --client-id or --id must be provided.",
+          "Both flags accept the same value; they are aliases. Use --id to match the `id` field from `af mcp-clients list`.",
+        );
+      }
+      const client = buildClient(program.opts());
+      await run(() => client.mcpClients.get(clientId));
+    });
+
+  mcpClientsCmd
+    .command("inspect")
+    .description(
+      "Diagnose an MCP client's tool-schema pattern (Pipedream vs Composio vs " +
+      "mixed) and flag known quirks before attaching it to an agent. See " +
+      "`af playbook mcp-client-quirks` for why this matters.",
+    )
+    .option("--client-id <id>", "MCP client ID (canonical)")
+    .option("--id <id>", "MCP client ID (alias for --client-id)")
+    .action(async (opts) => {
+      const clientId = (opts.clientId as string | undefined) ?? (opts.id as string | undefined);
+      if (!clientId) {
+        fail("missing_required_option", "Either --client-id or --id must be provided.");
+      }
+      const client = buildClient(program.opts());
+      await run(async () => {
+        const raw = (await client.mcpClients.get(clientId)) as Record<string, unknown>;
+        const toolsBox = raw["tools"];
+        const tools: Array<Record<string, unknown>> =
+          Array.isArray(toolsBox)
+            ? (toolsBox as Array<Record<string, unknown>>)
+            : toolsBox && typeof toolsBox === "object" && Array.isArray((toolsBox as { tools?: unknown[] }).tools)
+              ? ((toolsBox as { tools: Array<Record<string, unknown>> }).tools)
+              : [];
+        const report = inspectMcpToolsPattern(tools);
+        return {
+          schema: "agenticflow.mcp_client.inspect.v1",
+          client_id: clientId,
+          client_name: raw["name"] ?? null,
+          is_authenticated: raw["is_authenticated"] ?? null,
+          tool_count: tools.length,
+          pattern: report.pattern, // "pipedream" | "composio" | "mixed" | "unknown"
+          write_capable_tools: report.writeCapable,
+          pipedream_instruction_only_tools: report.pipedreamTools,
+          known_quirks: report.quirks,
+          playbook: "af playbook mcp-client-quirks",
+        };
+      });
+    });
+
+  // ═════════════════════════════════════════════════════════════════
+  // workforce  (SDK-based, AgenticFlow-native multi-agent deploy)
+  // ═════════════════════════════════════════════════════════════════
+  const workforceCmd = program
+    .command("workforce")
+    .description(
+      "MAS workforce management — AgenticFlow-native multi-agent teams. " +
+      "A workforce is a DAG of nodes (agents, routers, conditions) connected by edges. " +
+      "Prefer this over `af paperclip` for deploys to AgenticFlow itself.",
+    );
+
+  workforceCmd
+    .command("list")
+    .description("List workforces in the workspace.")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.mcpClients.get(opts.clientId));
+      await run(() => client.workforces.list({
+        workspaceId: opts.workspaceId,
+        limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+        offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+      }));
+    });
+
+  workforceCmd
+    .command("get")
+    .description("Get workforce metadata by ID (not the full graph — use `schema`).")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.workforces.get(opts.workforceId, { workspaceId: opts.workspaceId }));
+    });
+
+  workforceCmd
+    .command("create")
+    .description("Create a workforce (metadata only — attach nodes/edges with `deploy`).")
+    .requiredOption("--body <body>", "JSON body (inline or @file) — requires `name`; optional: description, error_handling_policy, is_public, recursion_limit")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .option("--dry-run", "Validate without creating")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body);
+      hardenInput(JSON.stringify(body), "workforce create body");
+      if (opts.dryRun) {
+        printResult({
+          schema: "agenticflow.dry_run.v1",
+          valid: true,
+          target: "workforce.create",
+          payload: body,
+        });
+        return;
+      }
+      await run(() =>
+        client.workforces.create(body as Record<string, unknown>, { workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceCmd
+    .command("update")
+    .description("Update workforce metadata. Use `--patch` for partial updates.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file)")
+    .option("--patch", "Partial update: fetch current, merge body, PUT")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body) as Record<string, unknown>;
+      if (opts.patch) {
+        await run(async () => {
+          const current = (await client.workforces.get(opts.workforceId, {
+            workspaceId: opts.workspaceId,
+          })) as Record<string, unknown>;
+          const merged = { ...current, ...body };
+          return client.workforces.update(opts.workforceId, merged, {
+            workspaceId: opts.workspaceId,
+          });
+        });
+      } else {
+        await run(() =>
+          client.workforces.update(opts.workforceId, body, { workspaceId: opts.workspaceId }),
+        );
+      }
+    });
+
+  workforceCmd
+    .command("delete")
+    .description("Delete a workforce. This is destructive — confirm the ID first.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.delete(opts.workforceId, { workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceCmd
+    .command("schema")
+    .description("Get the full graph (nodes + edges) for a workforce.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.getSchema(opts.workforceId, { workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceCmd
+    .command("deploy")
+    .description(
+      "Atomically replace a workforce's graph with nodes + edges from a file. " +
+      "Uses PUT /schema (server diffs current vs desired).",
+    )
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .requiredOption("--body <body>", "JSON body (inline or @file) with `nodes` and `edges` arrays")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .option("--dry-run", "Validate shape locally without PUT")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const body = loadJsonPayload(opts.body) as Record<string, unknown>;
+      if (!Array.isArray(body["nodes"]) || !Array.isArray(body["edges"])) {
+        fail(
+          "invalid_payload",
+          "Workforce deploy body must have `nodes` and `edges` arrays.",
+          "Fetch the current shape with `af workforce schema --workforce-id <id> --json` to see the expected format.",
+        );
+      }
+      if (opts.dryRun) {
+        printResult({
+          schema: "agenticflow.dry_run.v1",
+          valid: true,
+          target: "workforce.deploy",
+          node_count: (body["nodes"] as unknown[]).length,
+          edge_count: (body["edges"] as unknown[]).length,
+        });
+        return;
+      }
+      await run(() =>
+        client.workforces.putSchema(
+          opts.workforceId,
+          { nodes: body["nodes"] as Array<Record<string, unknown>>, edges: body["edges"] as Array<Record<string, unknown>> },
+          { workspaceId: opts.workspaceId },
+        ),
+      );
+    });
+
+  workforceCmd
+    .command("validate")
+    .description("Run server-side validation (cycle detection, dangling edges, etc.).")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.validate(opts.workforceId, { workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceCmd
+    .command("node-types")
+    .description("List available MAS node types (agents, routers, conditions, tools, logic).")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.listNodeTypes({ workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceCmd
+    .command("run")
+    .description(
+      "Execute a workforce. Streams SSE events — each event prints as one JSON line. " +
+      "Exits when the stream closes.",
+    )
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--trigger-data <json>", "Trigger data (inline JSON or @file)", "{}")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const triggerData = loadJsonPayload(opts.triggerData) as Record<string, unknown>;
+      try {
+        const response = await client.workforces.run(opts.workforceId, triggerData, {
+          workspaceId: opts.workspaceId,
+        });
+        if (!response.ok) {
+          fail(
+            "request_failed",
+            `Workforce run failed with status ${response.status}`,
+            undefined,
+            { status_code: response.status },
+          );
+        }
+        const reader = response.body?.getReader();
+        if (!reader) {
+          fail("request_failed", "No response body from workforce run.");
+        }
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(":")) continue;
+            // SSE "data: ..." or bare NDJSON; emit verbatim
+            const payload = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
+            if (payload) console.log(payload);
+          }
+        }
+        if (buffer.trim()) console.log(buffer.trim());
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof APIError) {
+          const details: Record<string, unknown> = { status_code: err.statusCode };
+          if (err.requestId) details["request_id"] = err.requestId;
+          if (err.payload !== null && err.payload !== undefined) details["payload"] = err.payload;
+          fail("request_failed", message, undefined, details);
+        }
+        fail("request_failed", message);
+      }
+    });
+
+  // Runs sub-commands ---------------------------------------------------
+  const workforceRunsCmd = workforceCmd
+    .command("runs")
+    .description("Workforce execution run management.");
+
+  workforceRunsCmd
+    .command("list")
+    .description("List runs for a workforce.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.listRuns(opts.workforceId, { workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceRunsCmd
+    .command("get")
+    .description("Get a single workforce run by ID.")
+    .requiredOption("--run-id <id>", "Run ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.workforces.getRun(opts.runId, { workspaceId: opts.workspaceId }));
+    });
+
+  workforceRunsCmd
+    .command("stop")
+    .description("Stop an in-flight workforce run.")
+    .requiredOption("--run-id <id>", "Run ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.workforces.stopRun(opts.runId, { workspaceId: opts.workspaceId }));
+    });
+
+  // Versions sub-commands -----------------------------------------------
+  const workforceVersionsCmd = workforceCmd
+    .command("versions")
+    .description("Workforce version snapshots — draft, publish, restore.");
+
+  workforceVersionsCmd
+    .command("list")
+    .description("List versions for a workforce.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .option("--limit <n>", "Limit")
+    .option("--offset <n>", "Offset")
+    .option("--drafts-only", "Only show draft versions")
+    .option("--published-only", "Only show published versions")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      if (opts.draftsOnly && opts.publishedOnly) {
+        fail("invalid_option_value", "Cannot combine --drafts-only and --published-only.");
+      }
+      await run(async () => {
+        if (opts.draftsOnly) {
+          return client.workforces.versions.drafts(opts.workforceId, {
+            workspaceId: opts.workspaceId,
+          });
+        }
+        if (opts.publishedOnly) {
+          return client.workforces.versions.published(opts.workforceId, {
+            workspaceId: opts.workspaceId,
+          });
+        }
+        return client.workforces.versions.list(opts.workforceId, {
+          workspaceId: opts.workspaceId,
+          limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
+          offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
+        });
+      });
+    });
+
+  workforceVersionsCmd
+    .command("latest")
+    .description("Get the most recent version of a workforce.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.versions.latest(opts.workforceId, { workspaceId: opts.workspaceId }),
+      );
+    });
+
+  workforceVersionsCmd
+    .command("publish")
+    .description("Publish a draft version. Publishes become the active shipped version.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .requiredOption("--version-id <id>", "Version ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.versions.publish(opts.workforceId, opts.versionId, {
+          workspaceId: opts.workspaceId,
+        }),
+      );
+    });
+
+  workforceVersionsCmd
+    .command("restore")
+    .description("Restore the current workforce graph from a saved version.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .requiredOption("--version-id <id>", "Version ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.versions.restore(opts.workforceId, opts.versionId, {
+          workspaceId: opts.workspaceId,
+        }),
+      );
+    });
+
+  // Public key management -----------------------------------------------
+  workforceCmd
+    .command("publish")
+    .description("Generate a public key + URL so the workforce can be embedded / run without auth.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.generatePublicKey(opts.workforceId, {
+          workspaceId: opts.workspaceId,
+        }),
+      );
+    });
+
+  workforceCmd
+    .command("rotate-key")
+    .description("Rotate the public key for a workforce — invalidates the old URL.")
+    .requiredOption("--workforce-id <id>", "Workforce ID")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() =>
+        client.workforces.rotatePublicKey(opts.workforceId, {
+          workspaceId: opts.workspaceId,
+        }),
+      );
+    });
+
+  // Blueprint-based native init -----------------------------------------
+  workforceCmd
+    .command("init")
+    .description(
+      "Deploy a blueprint as an AgenticFlow-native workforce (no Paperclip). " +
+      "Translates the blueprint's agent slots into MAS nodes + edges, then PUTs the graph.",
+    )
+    .requiredOption("--blueprint <slug>", "Blueprint id (run `af paperclip blueprints` to list)")
+    .option("--name <name>", "Workforce name (defaults to blueprint name)")
+    .option("--workspace-id <id>", "Workspace ID (overrides env)")
+    .option("--dry-run", "Show the graph that would be deployed without writing")
+    .action(async (opts) => {
+      const { blueprintToWorkforce } = await import("./blueprint-to-workforce.js");
+      const blueprint = getBlueprint(opts.blueprint as string);
+      if (!blueprint) {
+        fail(
+          "invalid_option_value",
+          `Unknown blueprint id: ${opts.blueprint}`,
+          "Run `af paperclip blueprints` to see available ids.",
+        );
+      }
+      const translated = blueprintToWorkforce(blueprint, { name: opts.name });
+      if (opts.dryRun) {
+        printResult({
+          schema: "agenticflow.dry_run.v1",
+          valid: true,
+          target: "workforce.init",
+          blueprint: blueprint.id,
+          workforce: translated.workforce,
+          node_count: translated.nodes.length,
+          edge_count: translated.edges.length,
+          nodes: translated.nodes,
+          edges: translated.edges,
+        });
+        return;
+      }
+      const client = buildClient(program.opts());
+      await run(async () => {
+        const created = (await client.workforces.create(
+          translated.workforce as unknown as Record<string, unknown>,
+          { workspaceId: opts.workspaceId },
+        )) as Record<string, unknown>;
+        const workforceId = created["id"] as string;
+        if (!workforceId) {
+          throw new Error("Workforce create did not return an id.");
+        }
+        await client.workforces.putSchema(
+          workforceId,
+          { nodes: translated.nodes, edges: translated.edges },
+          { workspaceId: opts.workspaceId },
+        );
+        return {
+          schema: "agenticflow.workforce.init.v1",
+          workforce_id: workforceId,
+          blueprint: blueprint.id,
+          node_count: translated.nodes.length,
+          edge_count: translated.edges.length,
+          skeleton: true,
+          next_steps: translated.suggested_next_steps.concat([
+            `af workforce schema --workforce-id ${workforceId} --json  # inspect current graph`,
+            `af workforce run --workforce-id ${workforceId} --trigger-data '{}'  # smoke-test the skeleton`,
+          ]),
+        };
+      });
     });
 
   // triggers  (SDK-based)
@@ -4576,7 +5161,30 @@ export function createProgram(): Command {
 
   const paperclipCmd = program
     .command("paperclip")
-    .description("Publish and control AgenticFlow agents on a Paperclip instance.");
+    .description(
+      "Publish and control AgenticFlow agents on a Paperclip instance. " +
+      "DEPRECATED — prefer `af workforce *` for AgenticFlow-native deploy. See: af playbook migrate-from-paperclip.",
+    );
+
+  // Emit a single deprecation warning per subcommand invocation (session-scoped
+  // dedup in emitDeprecation). This fires BEFORE the action runs, so even --help
+  // users see the pointer to `af workforce`.
+  paperclipCmd.hook("preAction", (thisCommand, actionCommand) => {
+    // Reconstruct a usable command path like "af paperclip init"
+    const segments: string[] = [];
+    let cur: Command | null = actionCommand;
+    while (cur && cur !== program) {
+      segments.unshift(cur.name());
+      cur = cur.parent ?? null;
+    }
+    const commandPath = `af ${segments.join(" ")}`;
+    emitDeprecation({
+      command: commandPath,
+      replacement: commandPath.replace("af paperclip", "af workforce"),
+      playbook: "migrate-from-paperclip",
+      sunset: "2026-10-14",
+    });
+  });
 
   // ─── init (bootstrap a company from blueprint) ──────────────────
   pcOpts.both(paperclipCmd

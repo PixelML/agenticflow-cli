@@ -35,8 +35,12 @@ export {
   McpClientsResource,
   TriggersResource,
   PaperclipResource,
+  WorkforcesResource,
+  WorkforceVersionsSubresource,
+  PublicWorkforceSubresource,
 } from "./resources/index.js";
 export type { PaperclipConfig, PaperclipCompany, PaperclipAgent } from "./resources/index.js";
+export type { WorkforceListOptions, WorkforceSchema } from "./resources/index.js";
 
 // ── createClient ────────────────────────────────────────────────────
 import { AgenticFlowSDK, type AgenticFlowSDKOptions } from "./core.js";
@@ -50,6 +54,7 @@ import { KnowledgeResource } from "./resources/knowledge.js";
 import { DatabaseResource } from "./resources/database.js";
 import { McpClientsResource } from "./resources/mcp-clients.js";
 import { TriggersResource } from "./resources/triggers.js";
+import { WorkforcesResource } from "./resources/workforces.js";
 
 export interface AgenticFlowClient {
   /** Agent CRUD, streaming, publishing, uploads */
@@ -72,6 +77,8 @@ export interface AgenticFlowClient {
   mcpClients: McpClientsResource;
   /** Workflow triggers CRUD */
   triggers: TriggersResource;
+  /** MAS workforce CRUD, schema, runs, versions, public — AgenticFlow-native multi-agent deploy */
+  workforces: WorkforcesResource;
   /** Low-level SDK instance for advanced / raw requests */
   sdk: AgenticFlowSDK;
 }
@@ -108,6 +115,7 @@ export function createClient(options: AgenticFlowSDKOptions = {}): AgenticFlowCl
     database: new DatabaseResource(sdk),
     mcpClients: new McpClientsResource(sdk),
     triggers: new TriggersResource(sdk),
+    workforces: new WorkforcesResource(sdk),
     sdk,
   };
 }

@@ -14,6 +14,48 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.5.0",
+    date: "2026-04-14",
+    highlights: [
+      "`af workforce *` — new AgenticFlow-native multi-agent deploy target. Full CRUD + schema bulk-PUT + SSE run + versions (publish/restore) + public key generation",
+      "`af workforce init --blueprint <slug>` — deploys any existing company blueprint natively as a workforce DAG (no Paperclip needed)",
+      "`af bootstrap --json` now includes a `workforces` array and highlights native deploy commands (`run_workforce`, `publish_workforce`, `update_agent_patch`)",
+      "`af paperclip *` deprecated with a one-line stderr warning per subcommand per session. Silence with `AF_SILENCE_DEPRECATIONS=1`. Sunset: 2026-10-14",
+      "New playbook `migrate-from-paperclip` maps every `af paperclip X` command to its `af workforce Y` equivalent",
+      "SDK `WorkforcesResource` exposes all ~30 `mas_workforce` endpoints with versions + public sub-resources",
+    ],
+    for_ai: [
+      "NEW DEPLOY FLOW: for a multi-agent team, prefer `af workforce init --blueprint <slug> --json` over `af paperclip init`. It returns `{workforce_id, next_steps}` with the exact follow-up commands",
+      "Use `af workforce schema --workforce-id <id> --json` to read the full graph, then `af workforce deploy --workforce-id <id> --body @file --json` to atomically replace it (PUT /schema)",
+      "Use `af workforce run --workforce-id <id> --trigger-data '{...}'` — streams SSE events as NDJSON lines",
+      "Use `af workforce publish --workforce-id <id>` to generate a public key + URL for iframe embed",
+      "When scripting against legacy Paperclip commands, set `AF_SILENCE_DEPRECATIONS=1` while you migrate — but migrate by 2026-10-14",
+      "Blueprints in bootstrap output now carry `native_target: 'workforce'` — use that as the source of truth for intended deploy target",
+    ],
+  },
+  {
+    version: "1.4.0",
+    date: "2026-04-14",
+    highlights: [
+      "`af agent update --patch` — partial update (fetch → merge → PUT); pass only the fields you want to change",
+      "`af agent update` now auto-strips nulls on fields the backend rejects when null (knowledge, recursion_limit, task_management_config, etc.), so `af agent get | af agent update --body @-` round-trips cleanly",
+      "HTTP errors now surface `status_code`, `request_id`, and the full server response `payload` under `details` in `af ... --json` output — no more opaque `500 An unexpected error occurred`",
+      "`af mcp-clients inspect --id <id>` — diagnose an MCP client's tool-schema pattern (Pipedream vs Composio) and flag known quirks before attaching",
+      "`af mcp-clients list --verify-auth` — reconcile `is_authenticated` discrepancies by calling get() per row",
+      "`af mcp-clients get --id <id>` alias (matches the `id` field from list output; `--client-id` still works)",
+      "New playbook `mcp-client-quirks` documents the Pipedream 2-phase configure→execute failure mode and Composio as the preferred alternative for parametric writes",
+      "`af company diff <file>` (from Phase 7) for field-level comparison between a local export and the live workspace",
+      "`af company import --merge <file>` (from Phase 8) with `--conflict-strategy local|remote|skip` for safe merge imports",
+    ],
+    for_ai: [
+      "Prefer `af agent update --agent-id <id> --patch --body '{\"system_prompt\":\"...\"}'` over full-body PUT — lets you omit fields you don't want to change and avoids the null-rejection 422s",
+      "If an API call fails with 422/500, re-read the structured `details.payload` in the CLI error output — it carries the server's original response and usually names the offending field",
+      "Before attaching an MCP client to an agent, run `af mcp-clients inspect --id <id> --json`. If `pattern == \"pipedream\"` and `write_capable_tools` is non-empty, writes will likely get stuck in a configure-only loop; switch to a Composio-backed client",
+      "Available MCP tool patterns: `pipedream` (single `instruction: string` arg, 2-phase), `composio` (structured schemas, reliable writes), `mixed`, or `unknown`",
+      "`af company diff <file> --json` exits 0 in sync / 1 on differences; use for drift detection before import",
+    ],
+  },
+  {
     version: "1.3.0",
     date: "2026-04-04",
     highlights: [

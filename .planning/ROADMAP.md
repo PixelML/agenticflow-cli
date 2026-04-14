@@ -7,6 +7,7 @@
 - ✅ **v1.0 Platform Depth** — Phases 1-3 (shipped 2026-04-06)
 - ✅ **v1.5 Reliability & Ecosystem** — Phases 4-6 (shipped 2026-04-07)
 - 🚧 **v1.6 Video Intelligence & Reliability** — Phases 7-10 (in progress)
+- 🔜 **v1.7 AgenticFlow-Native Deploy** — Phases 11-12 (planned 2026-04-14)
 
 ## Phases
 
@@ -90,6 +91,34 @@ Full details: `.planning/milestones/v1.5-ROADMAP.md`
   4. `af bootstrap --json` returns `models[].description`, `models[].use_case`, and `models[].cost_per_token` for every available model
 **Plans**: TBD
 
+### 🔜 v1.7 AgenticFlow-Native Deploy (Planned)
+
+**Milestone Goal:** Remove Paperclip as the only deploy target. Agents, workflows, and workforces all become first-class AgenticFlow-native resources via the CLI.
+
+### Phase 11: Workforce (MAS) Native Deploy
+**Goal**: Every MAS workforce CRUD/publish/run/version endpoint has a CLI counterpart; `af workforce init --blueprint <id>` deploys teams natively to AgenticFlow instead of Paperclip
+**Depends on**: Phase 8 (company merge import — shared primitives)
+**Requirements**: WF-01, WF-02, WF-03
+**Success Criteria**:
+  1. `af workforce list/get/create/update/delete` cover all backend `mas_workforce/views.py` secured routes
+  2. `af workforce schema <id>` + `af workforce deploy <id> --body @file` round-trip the complete graph via bulk `PUT /schema`
+  3. `af workforce run <id>` streams SSE events and emits one structured event per line
+  4. `af workforce init --blueprint <slug>` creates a native AF workforce from the existing `company-blueprints.ts` entries (retargeted from Paperclip)
+**Plans**: 1 plan
+- [ ] 11-PLAN.md — SDK resource + CLI command group + blueprint translator
+
+### Phase 12: Paperclip Deprecation + Company→Workforce Merge
+**Goal**: `af paperclip *` remains functional but emits deprecation warnings; `af company *` becomes a thin alias of `af workforce *` with deprecation notice
+**Depends on**: Phase 11 (workforce surface available as replacement)
+**Requirements**: DEP-01, DEP-02, DEP-03
+**Success Criteria**:
+  1. Every `af paperclip X` invocation prints one `[deprecated]` stderr line (dedup per session, silenced by `AF_SILENCE_DEPRECATIONS=1`)
+  2. `af company export/import/diff/merge` still work as pass-throughs to `af workforce *` with deprecation warnings
+  3. New playbook `migrate-from-paperclip` maps every paperclip subcommand to its workforce equivalent
+  4. `af bootstrap --json` promotes workforce over company/paperclip framing (blueprints tagged `target: "workforce"`)
+**Plans**: 1 plan
+- [ ] 12-PLAN.md — deprecation helper + playbook + company-as-alias
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -104,6 +133,8 @@ Full details: `.planning/milestones/v1.5-ROADMAP.md`
 | 8. Company Merge Import                | v1.6 | 0/2 | Planned    |  |
 | 9. Video Action Workflow               | v1.6 | 0/? | Not started | - |
 | 10. Observability Hardening            | v1.6 | 0/? | Not started | - |
+| 11. Workforce Native Deploy            | v1.7 | 0/1 | Planned     | - |
+| 12. Paperclip Deprecation              | v1.7 | 0/1 | Planned     | - |
 
 ---
 *v1.0 archived: 2026-04-06*
