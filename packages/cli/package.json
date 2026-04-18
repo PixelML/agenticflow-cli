@@ -1,6 +1,6 @@
 {
   "name": "@pixelml/agenticflow-cli",
-  "version": "1.10.4",
+  "version": "1.10.5",
   "description": "AgenticFlow CLI for agent-native API operations.",
   "license": "Apache-2.0",
   "repository": {
@@ -14,8 +14,8 @@
   },
   "type": "module",
   "bin": {
-    "agenticflow": "dist/bin/agenticflow.js",
-    "af": "dist/bin/agenticflow.js"
+    "agenticflow": "dist/bin/agenticflow.cjs",
+    "af": "dist/bin/agenticflow.cjs"
   },
   "files": [
     "dist/",

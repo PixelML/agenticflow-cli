@@ -14,6 +14,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.5",
+    date: "2026-04-18",
+    highlights: [
+      "HOTFIX — npm-installed CLI now fails cleanly on unsupported Node versions instead of crashing with a raw ESM SyntaxError. The published bin now points to a CommonJS launcher that checks for Node.js 18+ before dispatching to the ESM CLI",
+      "Packaging fix — release tarballs now include `dist/bin/agenticflow.cjs` with executable mode, so both `agenticflow` and `af` work through the guarded launcher after install",
+    ],
+    for_ai: [
+      "If the CLI exits with `AgenticFlow CLI requires Node.js 18+`, treat it as an environment problem, not a command-syntax problem. Upgrade Node before retrying",
+      "On supported runtimes, invoke the CLI normally. The launcher now handles the ESM handoff, so you should no longer see `Unexpected token {` from the published npm package",
+    ],
+  },
+  {
     version: "1.10.4",
     date: "2026-04-14",
     highlights: [
