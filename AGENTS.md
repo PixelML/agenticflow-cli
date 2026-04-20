@@ -77,6 +77,10 @@ agenticflow-cli/
 │               ├── uploads.ts              # UploadsResource
 │               ├── workflows.ts            # WorkflowsResource — CRUD, run, run-status
 │               └── workforces.ts           # WorkforcesResource + versions + publish sub-resources
+├── skills/                                # SKILL.md files for AI tools (agent, workforce, mcp)
+│   ├── agenticflow-agent/SKILL.md         # Single agent create/run/iterate
+│   ├── agenticflow-workforce/SKILL.md     # Multi-agent team deploy + blueprints
+│   └── agenticflow-mcp/SKILL.md           # MCP tool attach/inspect
 ├── .github/workflows/
 │   ├── ci.yaml                             # CI: Python tests + Node smoke test
 │   └── release-node.yaml                   # Tag-triggered npm publish (cli-v* / sdk-v*)
@@ -174,19 +178,24 @@ Steps: tag push → build → test → version set → npm publish (with provena
 | `packages/sdk/src/resources/` | SDK resource classes (one per API domain) |
 | `CONTEXT.md` | Guide for AI agents **using** the CLI (not developing it) |
 
-## Sister Repository: AgenticFlow Skills
+## Skills
 
-The [`agenticflow-skill`](https://github.com/PixelML/agenticflow-skill) repo defines SKILL.md files that teach other AI tools (Claude Code, Cursor, Codex, Gemini CLI) how to *use* the `af` CLI. It lives in a separate repo and is maintained independently.
+SKILL.md files teach other AI tools (Claude Code, Cursor, Codex, Gemini CLI) how to *use* the `af` CLI. They live in this repo under `skills/` — next to the commands they document — so a single PR can update both the command implementation and the skill.
 
-Three skills auto-route based on user intent:
+| Skill | Path | Purpose |
+|---|---|---|
+| `agenticflow-agent` | `skills/agenticflow-agent/SKILL.md` | Single agent create/run/iterate (`af agent *`) |
+| `agenticflow-workforce` | `skills/agenticflow-workforce/SKILL.md` | Multi-agent team deploy (`af workforce *`, blueprints) |
+| `agenticflow-mcp` | `skills/agenticflow-mcp/SKILL.md` | MCP tool attach/inspect (`af mcp-clients *`) |
 
-| Skill | Purpose |
-|---|---|
-| `agenticflow-agent` | Single agent create/run/iterate (`af agent *`) |
-| `agenticflow-workforce` | Multi-agent team deploy (`af workforce *`, blueprints) |
-| `agenticflow-mcp` | MCP tool attach/inspect (`af mcp-clients *`) |
+### Sister repo deprecation: agenticflow-skill
 
-**When making CLI changes** that add, rename, or change command behavior, check whether the skill repo's SKILL.md files reference the affected commands — they may need updating to stay in sync.
+The [`agenticflow-skill`](https://github.com/PixelML/agenticflow-skill) repo previously held these same skills in a separate repository. It should be deprecated in favor of the `skills/` directory here because:
+
+- **Skills describe CLI commands** — they must change when commands change. Keeping them in the same repo means one PR updates both, eliminating sync drift.
+- **AI agents discover skills automatically** when they're local files. A separate repo requires agents to proactively clone it (they won't).
+- **The separate repo adds maintenance overhead** with no upside — same content, two locations, constant risk of divergence.
+- **Zero sync burden**: Commands and skills live together. A CLI PR that renames or changes a command updates the skill in the same commit.
 
 ## Gotchas
 
