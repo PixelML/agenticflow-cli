@@ -174,6 +174,20 @@ Steps: tag push → build → test → version set → npm publish (with provena
 | `packages/sdk/src/resources/` | SDK resource classes (one per API domain) |
 | `CONTEXT.md` | Guide for AI agents **using** the CLI (not developing it) |
 
+## Sister Repository: AgenticFlow Skills
+
+The [`agenticflow-skill`](https://github.com/PixelML/agenticflow-skill) repo defines SKILL.md files that teach other AI tools (Claude Code, Cursor, Codex, Gemini CLI) how to *use* the `af` CLI. It lives in a separate repo and is maintained independently.
+
+Three skills auto-route based on user intent:
+
+| Skill | Purpose |
+|---|---|
+| `agenticflow-agent` | Single agent create/run/iterate (`af agent *`) |
+| `agenticflow-workforce` | Multi-agent team deploy (`af workforce *`, blueprints) |
+| `agenticflow-mcp` | MCP tool attach/inspect (`af mcp-clients *`) |
+
+**When making CLI changes** that add, rename, or change command behavior, check whether the skill repo's SKILL.md files reference the affected commands — they may need updating to stay in sync.
+
 ## Gotchas
 
 - **Build order**: SDK must be built before CLI. Root `npm run build` handles this.
