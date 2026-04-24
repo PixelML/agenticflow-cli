@@ -28,18 +28,36 @@ TEST_OUTPUT=$(npm test 2>&1 || true)
 echo "$TEST_OUTPUT" | tail -30
 
 # Parse test results from vitest output
-SDK_FILES=$(echo "$TEST_OUTPUT" | grep -A1 "sdk" | grep "Test Files" | grep -oP '\d+(?= passed)' || echo "0")
-SDK_TESTS=$(echo "$TEST_OUTPUT" | grep -A2 "sdk" | grep "Tests" | grep -oP '\d+(?= passed)' || echo "0")
-CLI_FILES=$(echo "$TEST_OUTPUT" | grep -A1 "cli" | grep "Test Files" | grep -oP '\d+(?= passed)' | tail -1 || echo "0")
-CLI_TESTS=$(echo "$TEST_OUTPUT" | grep -A2 "cli" | grep "Tests" | grep -oP '\d+(?= passed)' | tail -1 || echo "0")
+# Format: " Test Files   19 passed (19)" or " Tests   237 passed | 4 todo (241)"
+# Use awk to extract numbers since grep -P (Perl regex) is not available on macOS
+parse_vitest_files() {
+  echo "$TEST_OUTPUT" | awk '/Test Files/{gsub(/[^0-9]/, " "); for(i=1;i<=NF;i++) if($i+0>0){print $i; exit}}' | head -1
+}
+parse_vitest_tests() {
+  echo "$TEST_OUTPUT" | awk '/^ *Tests .* passed/{gsub(/[^0-9]/, " "); for(i=1;i<=NF;i++) if($i+0>0){print $i; exit}}' | head -1
+}
+parse_vitest_failed() {
+  echo "$TEST_OUTPUT" | awk '/failed/{gsub(/[^0-9]/, " "); for(i=1;i<=NF;i++) if($i+0>0){print $i; exit}}' | head -1
+}
 
-# Also capture failing tests
-SDK_FAILED=$(echo "$TEST_OUTPUT" | grep -A2 "sdk" | grep "Tests" | grep -oP '\d+(?= failed)' || echo "0")
-CLI_FAILED=$(echo "$TEST_OUTPUT" | grep -A2 "cli" | grep "Tests" | grep -oP '\d+(?= failed)' || echo "0")
+# Strip ANSI escape codes for reliable parsing
+CLEAN_OUTPUT=$(echo "$TEST_OUTPUT" | sed 's/\x1b\[[0-9;]*m//g')
 
-# Handle "0 failed" vs no match
-SDK_FAILED=${SDK_FAILED:-0}
-CLI_FAILED=${CLI_FAILED:-0}
+# Extract CLI section (between first workspace test and SDK test)
+CLI_SECTION=$(echo "$CLEAN_OUTPUT" | awk '/agenticflow-cli.*test/{flag=1} flag && /agenticflow-sdk.*test/{flag=0} flag{print}')
+SDK_SECTION=$(echo "$CLEAN_OUTPUT" | awk '/agenticflow-sdk.*test/{flag=1} flag{print}')
+
+CLI_FILES=$(echo "$CLI_SECTION" | grep 'Test Files' | grep -o '[0-9]* passed' | head -1 | grep -o '[0-9]*')
+CLI_TESTS=$(echo "$CLI_SECTION" | grep '      Tests' | grep -o '[0-9]* passed' | head -1 | grep -o '[0-9]*')
+CLI_FAILED=$(echo "$CLI_SECTION" | grep '      Tests' | grep -o '[0-9]* failed' | head -1 | grep -o '[0-9]*' || true)
+
+SDK_FILES=$(echo "$SDK_SECTION" | grep 'Test Files' | grep -o '[0-9]* passed' | head -1 | grep -o '[0-9]*')
+SDK_TESTS=$(echo "$SDK_SECTION" | grep '      Tests' | grep -o '[0-9]* passed' | head -1 | grep -o '[0-9]*')
+SDK_FAILED=$(echo "$SDK_SECTION" | grep '      Tests' | grep -o '[0-9]* failed' | head -1 | grep -o '[0-9]*' || true)
+
+# Defaults
+CLI_FILES=${CLI_FILES:-0}; CLI_TESTS=${CLI_TESTS:-0}; CLI_FAILED=${CLI_FAILED:-0}
+SDK_FILES=${SDK_FILES:-0}; SDK_TESTS=${SDK_TESTS:-0}; SDK_FAILED=${SDK_FAILED:-0}
 
 echo "SDK: $SDK_FILES files, $SDK_TESTS tests (+${SDK_FAILED:-0} failed)"
 echo "CLI: $CLI_FILES files, $CLI_TESTS tests (+${CLI_FAILED:-0} failed)"
