@@ -27,4 +27,15 @@ Systematically test all CLI commands (offline + unit tests), find issues, fix th
 - No new runtime dependencies without justification
 
 ## What's Been Tried
-- Initial baseline run to establish test count
+- Initial baseline run: 407 passing tests (237 CLI + 153 SDK + 17 smoke)
+- Added changelog tests (16 tests): CHANGELOG array structure, getLatestChangelog, getChangelogSince
+- Added blueprint-to-agent tests (20 tests): pluginSpecToConfig, tier1BlueprintToAgentPayload
+- Added blueprint-to-workflow tests (15 tests): findWorkspaceLLMConnection, workflowBlueprintToPayload
+- Added company-blueprints tests (15 tests): BLUEPRINTS registry, listBlueprints, getBlueprint, blueprintKind, blueprintComplexity
+- Added gateway tests (9 tests): health endpoint, webhook routing, error handling
+- Rewrote template-cache tests (13 tests): write/read manifest, file generation, query cleanup
+- Added gateway-connectors tests (10 tests): WebhookConnector, PaperclipConnector, LinearConnector
+- Added SDK http transport tests (9 tests): DeterministicHTTPClient
+- Expanded smoke tests from 17 to 22
+- **Result**: 507 passing tests (+24.6% from baseline)
+- **Learnings**: Use `../src/cli/` for CLI test imports; PaperclipConnector requires config; blueprints get uses --id flag

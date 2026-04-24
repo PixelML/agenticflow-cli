@@ -96,6 +96,8 @@ run_smoke "schema" schema
 run_smoke "schema workflow" schema workflow
 run_smoke "schema agent" schema agent
 run_smoke "schema agent --field mcp_clients" schema agent --field mcp_clients
+run_smoke "schema agent --field suggested_messages" schema agent --field suggested_messages
+run_smoke "schema workforce" schema workforce
 run_smoke "playbook" playbook
 run_smoke "playbook first-touch" playbook first-touch
 run_smoke "playbook amazon-seller" playbook amazon-seller
@@ -104,8 +106,13 @@ run_smoke "catalog export" catalog export
 run_smoke "blueprints list" blueprints list
 run_smoke "blueprints list --json" blueprints list --json
 run_smoke "blueprints get --id research-assistant" blueprints get --id research-assistant
+run_smoke "blueprints get --id amazon-seller" blueprints get --id amazon-seller
 run_smoke "policy show" policy show
 run_smoke "whoami" whoami
+run_smoke "skill list" skill list
+run_smoke "skill list --json" skill list --json
+run_smoke "pack list" pack list
+run_smoke "pack list --json" pack list --json
 
 # Commands that require API key (should fail gracefully, not crash)
 run_smoke "doctor (no key)" doctor 2>/dev/null || true
