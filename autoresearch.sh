@@ -89,16 +89,21 @@ run_smoke "help" --help
 run_smoke "changelog" changelog
 run_smoke "changelog --all" changelog --all
 run_smoke "context" context
+run_smoke "context --json" context --json
 run_smoke "discover" discover
 run_smoke "discover --json" discover --json
 run_smoke "schema" schema
 run_smoke "schema workflow" schema workflow
 run_smoke "schema agent" schema agent
+run_smoke "schema agent --field mcp_clients" schema agent --field mcp_clients
 run_smoke "playbook" playbook
 run_smoke "playbook first-touch" playbook first-touch
+run_smoke "playbook amazon-seller" playbook amazon-seller
 run_smoke "ops list" ops list
 run_smoke "catalog export" catalog export
 run_smoke "blueprints list" blueprints list
+run_smoke "blueprints list --json" blueprints list --json
+run_smoke "blueprints get --id research-assistant" blueprints get --id research-assistant
 run_smoke "policy show" policy show
 run_smoke "whoami" whoami
 
