@@ -1,1 +1,2 @@
 {"type":"config","name":"CLI test sweep — improve test coverage and fix issues","metricName":"passing_tests","metricUnit":"","bestDirection":"higher"}
+{"run":1,"commit":"0ac4fdb","metric":407,"metrics":{"failing_tests":0,"test_files":25,"build_ok":1},"status":"keep","description":"Baseline: 407 passing tests (237 CLI + 153 SDK + 17 smoke), 25 test files, 0 failures","timestamp":1777052326558,"segment":0,"confidence":null,"iterationTokens":4816,"asi":{"hypothesis":{},"baseline":{},"next_steps":{"focus":0}}}
