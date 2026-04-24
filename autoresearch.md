@@ -27,15 +27,32 @@ Systematically test all CLI commands (offline + unit tests), find issues, fix th
 - No new runtime dependencies without justification
 
 ## What's Been Tried
-- Initial baseline run: 407 passing tests (237 CLI + 153 SDK + 17 smoke)
-- Added changelog tests (16 tests): CHANGELOG array structure, getLatestChangelog, getChangelogSince
-- Added blueprint-to-agent tests (20 tests): pluginSpecToConfig, tier1BlueprintToAgentPayload
-- Added blueprint-to-workflow tests (15 tests): findWorkspaceLLMConnection, workflowBlueprintToPayload
-- Added company-blueprints tests (15 tests): BLUEPRINTS registry, listBlueprints, getBlueprint, blueprintKind, blueprintComplexity
-- Added gateway tests (9 tests): health endpoint, webhook routing, error handling
-- Rewrote template-cache tests (13 tests): write/read manifest, file generation, query cleanup
-- Added gateway-connectors tests (10 tests): WebhookConnector, PaperclipConnector, LinearConnector
-- Added SDK http transport tests (9 tests): DeterministicHTTPClient
-- Expanded smoke tests from 17 to 22
-- **Result**: 507 passing tests (+24.6% from baseline)
-- **Learnings**: Use `../src/cli/` for CLI test imports; PaperclipConnector requires config; blueprints get uses --id flag
+- **Baseline**: 407 passing tests (237 CLI + 153 SDK + 17 smoke), 25 test files
+- **Final**: 542 passing tests (339 CLI + 174 SDK + 29 smoke), 33 test files
+- **Net gain**: +135 tests (+33.2%), +8 test files
+
+### New Test Files (7)
+- `changelog.test.ts` (16 tests): CHANGELOG array, getLatestChangelog, getChangelogSince
+- `blueprint-to-agent.test.ts` (20 tests): pluginSpecToConfig, tier1BlueprintToAgentPayload
+- `blueprint-to-workflow.test.ts` (15 tests): findWorkspaceLLMConnection, workflowBlueprintToPayload
+- `company-blueprints.test.ts` (15 tests): BLUEPRINTS registry, listBlueprints, getBlueprint
+- `gateway.test.ts` (9 tests): health endpoint, webhook routing, error handling
+- `gateway-connectors.test.ts` (10 tests): WebhookConnector, PaperclipConnector, LinearConnector
+- `packages/sdk/tests/http.test.ts` (9 tests): DeterministicHTTPClient
+- `packages/sdk/tests/client.test.ts` (13 tests): createClient, DEFAULT_BASE_URL, resources
+
+### Expanded Test Files (2)
+- `local-validation.test.ts`: 6 → 20 tests (workflow/agent create/update/run/stream + edge cases)
+- `template-cache.test.ts`: 9 → 13 tests (manifest write/read, file generation, query cleanup)
+
+### Smoke Tests
+- Expanded from 17 to 29 offline CLI command smoke tests
+- Covers: help, changelog, context, discover, schema, playbook, ops, catalog, blueprints, policy, whoami, skill, pack
+
+### Learnings
+- Use `../src/cli/` for CLI test imports (not `../cli/`)
+- PaperclipConnector requires `{ paperclipUrl }` config in constructor
+- `blueprints get` uses `--id` flag, not positional argument
+- `node-types list` requires API key (not offline-testable)
+- Workflow blueprints have empty `agents` arrays (check `workflowNodes` instead)
+- `cleanQuery` checks `value.length > 0`, not `value.trim().length`
