@@ -30,6 +30,14 @@ describe("CLI Spec", () => {
     it("returns false for admin paths", () => {
       expect(isPublic(makeOperation({ path: "/v1/admin/users" }))).toBe(false);
     });
+
+    it("returns false for /v1/admin/ paths", () => {
+      expect(isPublic(makeOperation({ path: "/v1/admin/settings" }))).toBe(false);
+    });
+
+    it("returns true for non-admin paths with no security", () => {
+      expect(isPublic(makeOperation({ path: "/v1/workflows" }))).toBe(true);
+    });
   });
 
   describe("OperationRegistry", () => {
@@ -62,6 +70,11 @@ describe("CLI Spec", () => {
       expect(registry.getOperationByMethodPath("get", "/v1/hello")).toEqual(op);
     });
 
+    it("getOperationByMethodPath returns null for unknown", () => {
+      const registry = new OperationRegistry([makeOperation()]);
+      expect(registry.getOperationByMethodPath("GET", "/nonexistent")).toBeNull();
+    });
+
     it("listOperations filters by publicOnly", () => {
       const pub = makeOperation({ operationId: "pub", security: [] });
       const priv = makeOperation({ operationId: "priv", security: [{ bearer: [] }] });
@@ -75,6 +88,31 @@ describe("CLI Spec", () => {
       const untagged = makeOperation({ operationId: "untagged", tags: [] });
       const registry = new OperationRegistry([tagged, untagged]);
       expect(registry.listOperations({ tag: "agents" })).toHaveLength(1);
+    });
+
+    it("listOperations with both filters", () => {
+      const pubTagged = makeOperation({ operationId: "pubTagged", tags: ["agents"], security: [] });
+      const privTagged = makeOperation({ operationId: "privTagged", tags: ["agents"], security: [{ bearer: [] }] });
+      const pubUntagged = makeOperation({ operationId: "pubUntagged", tags: [], security: [] });
+      const registry = new OperationRegistry([pubTagged, privTagged, pubUntagged]);
+      const results = registry.listOperations({ publicOnly: true, tag: "agents" });
+      expect(results).toHaveLength(1);
+      expect(results[0].operationId).toBe("pubTagged");
+    });
+
+    it("listOperations returns all with no filters", () => {
+      const registry = new OperationRegistry([
+        makeOperation({ operationId: "op1", security: [] }),
+        makeOperation({ operationId: "op2", security: [{ bearer: [] }] }),
+      ]);
+      expect(registry.listOperations()).toHaveLength(2);
+    });
+
+    it("empty registry returns empty list", () => {
+      const registry = new OperationRegistry([]);
+      expect(registry.listOperations()).toHaveLength(0);
+      expect(registry.listOperations({ publicOnly: true })).toHaveLength(0);
+      expect(registry.listOperations({ tag: "agents" })).toHaveLength(0);
     });
   });
 
@@ -106,6 +144,63 @@ describe("CLI Spec", () => {
     it("throws when paths key is missing", () => {
       expect(() => OperationRegistry.fromSpec({})).toThrow("paths");
     });
+
+    it("parses multiple HTTP methods on same path", () => {
+      const spec = {
+        paths: {
+          "/v1/items": {
+            get: { operationId: "list_items" },
+            post: { operationId: "create_item" },
+            delete: { operationId: "delete_items" },
+          },
+        },
+      };
+      const registry = OperationRegistry.fromSpec(spec);
+      expect(registry.listOperations()).toHaveLength(3);
+      expect(registry.getOperationById("list_items")?.method).toBe("GET");
+      expect(registry.getOperationById("create_item")?.method).toBe("POST");
+      expect(registry.getOperationById("delete_items")?.method).toBe("DELETE");
+    });
+
+    it("parses empty paths", () => {
+      const spec = { paths: {} };
+      const registry = OperationRegistry.fromSpec(spec);
+      expect(registry.listOperations()).toHaveLength(0);
+    });
+
+    it("preserves security from spec", () => {
+      const spec = {
+        paths: {
+          "/v1/protected": {
+            get: {
+              operationId: "protected_op",
+              security: [{ bearer: [] }],
+            },
+          },
+        },
+      };
+      const registry = OperationRegistry.fromSpec(spec);
+      const op = registry.getOperationById("protected_op");
+      expect(op).not.toBeNull();
+      expect(isPublic(op!)).toBe(false);
+    });
+
+    it("preserves tags from spec", () => {
+      const spec = {
+        paths: {
+          "/v1/agents": {
+            get: {
+              operationId: "list_agents",
+              tags: ["agents"],
+            },
+          },
+        },
+      };
+      const registry = OperationRegistry.fromSpec(spec);
+      const op = registry.getOperationById("list_agents");
+      expect(op).not.toBeNull();
+      expect(op!.tags).toContain("agents");
+    });
   });
 
   describe("loadOpenapiSpec", () => {
@@ -114,6 +209,12 @@ describe("CLI Spec", () => {
       const spec = loadOpenapiSpec(specPath);
       expect(spec).toHaveProperty("paths");
       expect(typeof spec["paths"]).toBe("object");
+    });
+
+    it("defaultSpecPath returns a valid path", () => {
+      const specPath = defaultSpecPath();
+      expect(specPath).toContain("openapi");
+      expect(specPath).toContain("json");
     });
   });
 });
