@@ -50,6 +50,16 @@ describe("createGatewayHandler", () => {
       const body = await resp.json();
       expect(body.connectors).toEqual(["paperclip", "linear"]);
     });
+
+    it("returns empty connectors list when none provided", async () => {
+      const handler = createGatewayHandler(MOCK_CONFIG, []);
+
+      const req = new Request("http://localhost/health", { method: "GET" });
+      const resp = await handler(req);
+
+      const body = await resp.json();
+      expect(body.connectors).toEqual([]);
+    });
   });
 
   describe("webhook endpoint", () => {
@@ -131,8 +141,6 @@ describe("createGatewayHandler", () => {
         body,
       });
 
-      // This will fail at the runtime fetch (expected), so we just verify
-      // the connector was called
       try {
         await handler(req);
       } catch {
@@ -140,6 +148,41 @@ describe("createGatewayHandler", () => {
       }
 
       expect(connector.parseWebhook).toHaveBeenCalled();
+    });
+
+    it("handles multiple connectors with different channels", async () => {
+      const paperclip = createMockConnector("paperclip", null);
+      const linear = createMockConnector("linear", null);
+      const webhook = createMockConnector("webhook", null);
+      const handler = createGatewayHandler(MOCK_CONFIG, [paperclip, linear, webhook]);
+
+      const req = new Request("http://localhost/webhook/linear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const resp = await handler(req);
+
+      expect(resp.status).toBe(200);
+      expect(linear.parseWebhook).toHaveBeenCalled();
+      expect(paperclip.parseWebhook).not.toHaveBeenCalled();
+    });
+
+    it("returns 404 for unknown channel with multiple connectors", async () => {
+      const connectors = [createMockConnector("paperclip"), createMockConnector("linear")];
+      const handler = createGatewayHandler(MOCK_CONFIG, connectors);
+
+      const req = new Request("http://localhost/webhook/webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const resp = await handler(req);
+
+      expect(resp.status).toBe(404);
+      const body = await resp.json();
+      expect(body.available).toContain("paperclip");
+      expect(body.available).toContain("linear");
     });
   });
 
@@ -159,6 +202,43 @@ describe("createGatewayHandler", () => {
       const handler = createGatewayHandler(MOCK_CONFIG, connectors);
 
       const req = new Request("http://localhost/webhook/paperclip", { method: "GET" });
+      const resp = await handler(req);
+
+      expect(resp.status).toBe(404);
+    });
+
+    it("returns 404 for PUT requests", async () => {
+      const connectors = [createMockConnector("paperclip")];
+      const handler = createGatewayHandler(MOCK_CONFIG, connectors);
+
+      const req = new Request("http://localhost/webhook/paperclip", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const resp = await handler(req);
+
+      expect(resp.status).toBe(404);
+    });
+
+    it("returns 404 for DELETE requests", async () => {
+      const connectors = [createMockConnector("paperclip")];
+      const handler = createGatewayHandler(MOCK_CONFIG, connectors);
+
+      const req = new Request("http://localhost/webhook/paperclip", { method: "DELETE" });
+      const resp = await handler(req);
+
+      expect(resp.status).toBe(404);
+    });
+
+    it("works with no connectors (all webhook routes return 404)", async () => {
+      const handler = createGatewayHandler(MOCK_CONFIG, []);
+
+      const req = new Request("http://localhost/webhook/anything", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
       const resp = await handler(req);
 
       expect(resp.status).toBe(404);
