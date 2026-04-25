@@ -49,6 +49,44 @@ describe("stripNullFields", () => {
     expect(AGENT_UPDATE_STRIP_NULL_FIELDS).toContain("knowledge");
     expect(AGENT_UPDATE_STRIP_NULL_FIELDS).toContain("recursion_limit");
   });
+
+  it("accepts custom stripList", () => {
+    const input = { a: null, b: null, c: "keep" };
+    expect(stripNullFields(input, ["a", "b"])).toEqual({ c: "keep" });
+  });
+
+  it("custom stripList strips only specified keys", () => {
+    const input = { a: null, b: null, c: "keep" };
+    expect(stripNullFields(input, ["a"])).toEqual({ b: null, c: "keep" });
+  });
+
+  it("empty stripList preserves everything", () => {
+    const input = { a: null, b: null };
+    expect(stripNullFields(input, [])).toEqual({ a: null, b: null });
+  });
+
+  it("empty payload returns empty object", () => {
+    expect(stripNullFields({})).toEqual({});
+  });
+
+  it("returns new object (not same reference)", () => {
+    const input = { name: "agent" };
+    const result = stripNullFields(input);
+    expect(result).not.toBe(input);
+  });
+
+  it("preserves undefined values on strip-list fields", () => {
+    const input: Record<string, unknown> = { knowledge: undefined, name: "agent" };
+    const result = stripNullFields(input);
+    // stripNullFields only strips null, not undefined
+    expect(result).toEqual({ knowledge: undefined, name: "agent" });
+  });
+
+  it("preserves false and 0 on strip-list fields", () => {
+    const input = { recursion_limit: 0, name: "agent", skills_config: false };
+    const result = stripNullFields(input);
+    expect(result).toEqual(input);
+  });
 });
 
 describe("mergePatch", () => {
@@ -86,5 +124,64 @@ describe("mergePatch", () => {
     mergePatch(base, patch);
     expect(base).toEqual({ nested: { a: 1 } });
     expect(patch).toEqual({ nested: { b: 2 } });
+  });
+
+  it("adds new keys from patch", () => {
+    const base = { name: "agent" };
+    const patch = { description: "new desc" };
+    expect(mergePatch(base, patch)).toEqual({ name: "agent", description: "new desc" });
+  });
+
+  it("empty patch returns copy of base", () => {
+    const base = { name: "agent" };
+    expect(mergePatch(base, {})).toEqual(base);
+  });
+
+  it("empty base returns copy of patch", () => {
+    const patch = { name: "agent" };
+    expect(mergePatch({}, patch)).toEqual(patch);
+  });
+
+  it("deep-merges multiple levels", () => {
+    const base = { a: { b: { c: 1, d: 2 } } };
+    const patch = { a: { b: { c: 10 } } };
+    expect(mergePatch(base, patch)).toEqual({ a: { b: { c: 10, d: 2 } } });
+  });
+
+  it("replaces object with null when patch value is null", () => {
+    const base = { config: { key: "value" } };
+    const patch = { config: null };
+    expect(mergePatch(base, patch)).toEqual({ config: null });
+  });
+
+  it("replaces object with primitive when patch value is primitive", () => {
+    const base = { config: { key: "value" } };
+    const patch = { config: "string instead" };
+    expect(mergePatch(base, patch)).toEqual({ config: "string instead" });
+  });
+
+  it("replaces object with array when patch value is array", () => {
+    const base = { tools: { name: "tool" } };
+    const patch = { tools: ["new-tool"] };
+    expect(mergePatch(base, patch)).toEqual({ tools: ["new-tool"] });
+  });
+
+  it("does not deep-merge arrays", () => {
+    const base = { items: [{ id: 1 }, { id: 2 }] };
+    const patch = { items: [{ id: 3 }] };
+    expect(mergePatch(base, patch)).toEqual({ items: [{ id: 3 }] });
+  });
+
+  it("does not deep-merge non-plain objects", () => {
+    const date = new Date("2026-01-01");
+    const base = { created: date };
+    const patch = { created: new Date("2026-02-01") };
+    expect(mergePatch(base, patch)).toEqual({ created: new Date("2026-02-01") });
+  });
+
+  it("returns new object (not same reference as base)", () => {
+    const base = { name: "agent" };
+    const result = mergePatch(base, {});
+    expect(result).not.toBe(base);
   });
 });
