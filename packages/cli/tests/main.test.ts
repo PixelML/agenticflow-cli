@@ -29,6 +29,10 @@ describe("CLI Main (Commander integration)", () => {
       expect(commandNames).toContain("node-types");
       expect(commandNames).toContain("connections");
       expect(commandNames).toContain("uploads");
+      expect(commandNames).toContain("agent-threads");
+      expect(commandNames).toContain("knowledge");
+      expect(commandNames).toContain("database");
+      expect(commandNames).toContain("mcp-clients");
     });
 
     it("has global options", () => {
@@ -80,9 +84,12 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("get");
       expect(subNames).toContain("create");
       expect(subNames).toContain("update");
+      expect(subNames).toContain("delete");
       expect(subNames).toContain("run");
       expect(subNames).toContain("run-status");
+      expect(subNames).toContain("list-runs");
       expect(subNames).toContain("validate");
+      expect(subNames).toContain("run-history");
     });
   });
 
@@ -128,7 +135,10 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("get");
       expect(subNames).toContain("create");
       expect(subNames).toContain("update");
+      expect(subNames).toContain("delete");
       expect(subNames).toContain("stream");
+      expect(subNames).toContain("upload-file");
+      expect(subNames).toContain("upload-session");
     });
   });
 
@@ -153,6 +163,8 @@ describe("CLI Main (Commander integration)", () => {
       expect(subNames).toContain("create");
       expect(subNames).toContain("update");
       expect(subNames).toContain("delete");
+      expect(subNames).toContain("get-default");
+      expect(subNames).toContain("categories");
     });
   });
 
@@ -212,6 +224,112 @@ describe("CLI Main (Commander integration)", () => {
       const subNames = uploadsCmd.commands.map((c) => c.name());
       expect(subNames).toContain("create");
       expect(subNames).toContain("status");
+    });
+  });
+
+  describe("agent-threads subcommands", () => {
+    it("has expected subcommands", () => {
+      const program = createProgram();
+      const threadsCmd = program.commands.find((c) => c.name() === "agent-threads")!;
+      const subNames = threadsCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("list");
+      expect(subNames).toContain("list-by-project");
+      expect(subNames).toContain("get");
+      expect(subNames).toContain("delete");
+      expect(subNames).toContain("messages");
+    });
+
+    it("list requires --agent-id", () => {
+      const program = createProgram();
+      const threadsCmd = program.commands.find((c) => c.name() === "agent-threads")!;
+      const listCmd = threadsCmd.commands.find((c) => c.name() === "list")!;
+      const required = listCmd.options.filter((o) => o.required);
+      expect(required.some((o) => o.long === "--agent-id")).toBe(true);
+    });
+
+    it("list-by-project supports filtering options", () => {
+      const program = createProgram();
+      const threadsCmd = program.commands.find((c) => c.name() === "agent-threads")!;
+      const listByProjectCmd = threadsCmd.commands.find((c) => c.name() === "list-by-project")!;
+      const optNames = listByProjectCmd.options.map((o) => o.long);
+      expect(optNames).toContain("--project-id");
+      expect(optNames).toContain("--agent-id");
+      expect(optNames).toContain("--status");
+      expect(optNames).toContain("--sort-by");
+      expect(optNames).toContain("--sort-order");
+      expect(optNames).toContain("--search");
+    });
+
+    it("get and delete require --thread-id", () => {
+      const program = createProgram();
+      const threadsCmd = program.commands.find((c) => c.name() === "agent-threads")!;
+      const getCmd = threadsCmd.commands.find((c) => c.name() === "get")!;
+      const deleteCmd = threadsCmd.commands.find((c) => c.name() === "delete")!;
+      expect(getCmd.options.filter((o) => o.required).some((o) => o.long === "--thread-id")).toBe(true);
+      expect(deleteCmd.options.filter((o) => o.required).some((o) => o.long === "--thread-id")).toBe(true);
+    });
+  });
+
+  describe("knowledge subcommands", () => {
+    it("has expected subcommands", () => {
+      const program = createProgram();
+      const knowledgeCmd = program.commands.find((c) => c.name() === "knowledge")!;
+      const subNames = knowledgeCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("list");
+      expect(subNames).toContain("get");
+      expect(subNames).toContain("delete");
+      expect(subNames).toContain("list-rows");
+      expect(subNames).toContain("search-rows");
+    });
+
+    it("search-rows requires dataset-id and search-term", () => {
+      const program = createProgram();
+      const knowledgeCmd = program.commands.find((c) => c.name() === "knowledge")!;
+      const searchCmd = knowledgeCmd.commands.find((c) => c.name() === "search-rows")!;
+      const required = searchCmd.options.filter((o) => o.required).map((o) => o.long);
+      expect(required).toContain("--dataset-id");
+      expect(required).toContain("--search-term");
+    });
+  });
+
+  describe("database subcommands", () => {
+    it("has expected subcommands", () => {
+      const program = createProgram();
+      const dbCmd = program.commands.find((c) => c.name() === "database")!;
+      const subNames = dbCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("list");
+      expect(subNames).toContain("create");
+      expect(subNames).toContain("get");
+      expect(subNames).toContain("update");
+      expect(subNames).toContain("delete");
+    });
+
+    it("get/update/delete require --dataset-id", () => {
+      const program = createProgram();
+      const dbCmd = program.commands.find((c) => c.name() === "database")!;
+      for (const name of ["get", "update", "delete"]) {
+        const cmd = dbCmd.commands.find((c) => c.name() === name)!;
+        const required = cmd.options.filter((o) => o.required).map((o) => o.long);
+        expect(required).toContain("--dataset-id");
+      }
+    });
+  });
+
+  describe("mcp-clients subcommands", () => {
+    it("has expected subcommands", () => {
+      const program = createProgram();
+      const mcpCmd = program.commands.find((c) => c.name() === "mcp-clients")!;
+      const subNames = mcpCmd.commands.map((c) => c.name());
+      expect(subNames).toContain("list");
+      expect(subNames).toContain("get");
+    });
+
+    it("get requires --client-id", () => {
+      const program = createProgram();
+      const mcpCmd = program.commands.find((c) => c.name() === "mcp-clients")!;
+      const getCmd = mcpCmd.commands.find((c) => c.name() === "get")!;
+      const required = getCmd.options.filter((o) => o.required).map((o) => o.long);
+      expect(required).toContain("--client-id");
     });
   });
 });
