@@ -93,4 +93,64 @@ describe("SDK Exceptions", () => {
     expect(err.payload).toBeNull();
     expect(err.requestId).toBeNull();
   });
+
+  it("APIError inheritance chain", () => {
+    const err = new ValidationError({ statusCode: 422, message: "bad input" });
+    expect(err).toBeInstanceOf(ValidationError);
+    expect(err).toBeInstanceOf(APIError);
+    expect(err).toBeInstanceOf(AgenticFlowError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("AuthenticationError inherits from APIError", () => {
+    const err = new AuthenticationError({ statusCode: 401, message: "unauth" });
+    expect(err).toBeInstanceOf(AuthenticationError);
+    expect(err).toBeInstanceOf(APIError);
+    expect(err).toBeInstanceOf(AgenticFlowError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("NotFoundError carries statusCode", () => {
+    const err = new NotFoundError({ statusCode: 404, message: "not found" });
+    expect(err.statusCode).toBe(404);
+  });
+
+  it("ValidationError carries payload", () => {
+    const err = new ValidationError({
+      statusCode: 422,
+      message: "bad input",
+      payload: { errors: [{ field: "name", message: "required" }] },
+    });
+    expect(err.payload).toEqual({ errors: [{ field: "name", message: "required" }] });
+  });
+
+  it("ServerError carries statusCode 5xx", () => {
+    const err = new ServerError({ statusCode: 503, message: "service unavailable" });
+    expect(err.statusCode).toBe(503);
+  });
+
+  it("RateLimitError carries statusCode 429", () => {
+    const err = new RateLimitError({ statusCode: 429, message: "rate limited" });
+    expect(err.statusCode).toBe(429);
+  });
+
+  it("NetworkError can be thrown without cause", () => {
+    const err = new NetworkError("network failed");
+    expect(err.message).toBe("network failed");
+    expect(err.name).toBe("NetworkError");
+  });
+
+  it("AgenticFlowError has stack trace", () => {
+    const err = new AgenticFlowError("test");
+    expect(err.stack).toContain("test");
+  });
+
+  it("APIError can carry requestId for debugging", () => {
+    const err = new APIError({
+      statusCode: 500,
+      message: "Internal Server Error",
+      requestId: "req-abc-123",
+    });
+    expect(err.requestId).toBe("req-abc-123");
+  });
 });

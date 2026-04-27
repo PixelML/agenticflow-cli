@@ -1,6 +1,28 @@
 import type { AgenticFlowSDK } from "../core.js";
 import { AgentStream, type StreamRequest } from "../streaming.js";
 
+/** Result of a non-streaming agent run. */
+export interface AgentRunResult {
+  /** Agent response text. */
+  response: string;
+  /** Thread ID for conversation continuity. */
+  threadId: string;
+  /** "completed" | "timeout" | "failed" */
+  status: string;
+}
+
+/** Options for `agents.run()`. */
+export interface AgentRunOptions {
+  /** Message to send. */
+  message: string;
+  /** Thread ID to continue a conversation. Auto-generated if omitted. */
+  threadId?: string;
+  /** Max milliseconds to wait. Default 120000 (2 min). */
+  timeoutMs?: number;
+  /** Milliseconds between poll attempts. Default 2000. */
+  pollIntervalMs?: number;
+}
+
 export class AgentsResource {
   constructor(private client: AgenticFlowSDK) { }
 
@@ -35,6 +57,37 @@ export class AgentsResource {
     return (await this.client.put(`/v1/agents/${agentId}`, { json: payload })).data;
   }
 
+  /**
+   * Partial update: fetch current agent, merge `partial` over it, PUT the result.
+   * Emulates PATCH semantics on a PUT-only endpoint. Caller is responsible for
+   * stripping server-rejected-null fields (see utils/patch.ts#stripNullFields
+   * in the CLI package) if their partial could contain them.
+   */
+  async patch(
+    agentId: string,
+    partial: Record<string, unknown>,
+    options: {
+      /** Optional hook to transform the merged payload before PUT (e.g. strip nulls). */
+      prepare?: (merged: Record<string, unknown>) => Record<string, unknown>;
+    } = {},
+  ): Promise<unknown> {
+    const current = (await this.get(agentId)) as Record<string, unknown>;
+    const merged = { ...current, ...partial };
+    // Deep-merge for nested objects
+    for (const key of Object.keys(partial)) {
+      const baseVal = current[key];
+      const patchVal = partial[key];
+      if (
+        baseVal !== null && typeof baseVal === "object" && !Array.isArray(baseVal) &&
+        patchVal !== null && typeof patchVal === "object" && !Array.isArray(patchVal)
+      ) {
+        merged[key] = { ...(baseVal as Record<string, unknown>), ...(patchVal as Record<string, unknown>) };
+      }
+    }
+    const body = options.prepare ? options.prepare(merged) : merged;
+    return this.update(agentId, body);
+  }
+
   // ── Delete ─────────────────────────────────────────────────────────
   async delete(agentId: string): Promise<unknown> {
     return (await this.client.delete(`/v1/agents/${agentId}`)).data;
@@ -61,6 +114,70 @@ export class AgentsResource {
       json: body,
     });
     return new AgentStream(response);
+  }
+
+  // ── Run (non-streaming, fire → collect → return) ───────────────────
+
+  /**
+   * Send a message to an agent and return the full response.
+   * Non-streaming — blocks until the agent finishes, then returns text.
+   *
+   * Ideal for AI agents calling the SDK programmatically:
+   * ```ts
+   * const result = await client.agents.run("agent-id", { message: "Analyze this" });
+   * console.log(result.response);   // agent's answer
+   * console.log(result.threadId);   // for follow-up
+   * ```
+   *
+   * Internally: streams to get thread_id + text. If stream returns empty,
+   * falls back to polling GET /agent-threads/{id}/messages.
+   */
+  async run(agentId: string, options: AgentRunOptions): Promise<AgentRunResult> {
+    const threadId = options.threadId ?? crypto.randomUUID();
+    const timeoutMs = options.timeoutMs ?? 120_000;
+    const pollIntervalMs = options.pollIntervalMs ?? 2_000;
+
+    const streamReq: StreamRequest = {
+      id: threadId,
+      messages: [{ role: "user", content: options.message }],
+    };
+
+    // 1. Stream to get response text + thread_id
+    const stream = await this.stream(agentId, streamReq);
+    const text = await stream.text();
+    const resolvedThreadId = stream.threadId ?? threadId;
+
+    // 2. If we got text, return immediately
+    if (text && text.trim()) {
+      return { response: text, threadId: resolvedThreadId, status: "completed" };
+    }
+
+    // 3. Fallback: poll thread until processed, then fetch messages
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const thread = (await this.client.get(`/v1/agent-threads/${resolvedThreadId}`)).data as Record<string, unknown> | null;
+        const status = thread?.status as string | undefined;
+
+        if (status === "processed" || status === "idle") {
+          const history = (await this.client.get(`/v1/agent-threads/${resolvedThreadId}/messages`)).data as {
+            messages?: Array<{ role: string; content: string }>;
+          };
+          const assistantMsgs = history.messages?.filter((m) => m.role === "assistant") ?? [];
+          const lastMsg = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].content : "";
+          return { response: lastMsg, threadId: resolvedThreadId, status: "completed" };
+        }
+
+        if (status === "failed") {
+          return { response: "", threadId: resolvedThreadId, status: "failed" };
+        }
+      } catch {
+        // Thread not ready yet
+      }
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
+
+    return { response: "", threadId: resolvedThreadId, status: "timeout" };
   }
 
   // ── Upload File (authenticated) ────────────────────────────────────

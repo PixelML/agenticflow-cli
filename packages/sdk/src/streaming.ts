@@ -122,6 +122,12 @@ export class AgentStream implements AsyncIterable<StreamPart> {
   private _textChunks: string[] = [];
   private _processingPromise: Promise<void> | null = null;
 
+  /** Thread ID extracted from the first `data` event (type: thread_info). */
+  threadId: string | null = null;
+
+  /** User message ID extracted from the first `data` event. */
+  userMessageId: string | null = null;
+
   constructor(response: Response) {
     this.response = response;
   }
@@ -157,6 +163,27 @@ export class AgentStream implements AsyncIterable<StreamPart> {
     const list = this.listeners.get(event);
     if (list) {
       for (const cb of list) cb(value);
+    }
+  }
+
+  /** Extract thread_id and user_message_id from data events. */
+  private _extractMeta(part: StreamPart): void {
+    if (part.type === "data" && Array.isArray(part.value)) {
+      for (const item of part.value) {
+        if (
+          item &&
+          typeof item === "object" &&
+          (item as Record<string, unknown>).type === "thread_info"
+        ) {
+          const data = (item as Record<string, unknown>).data as Record<string, unknown> | undefined;
+          if (data?.thread_id && !this.threadId) {
+            this.threadId = data.thread_id as string;
+          }
+          if (data?.user_message_id && !this.userMessageId) {
+            this.userMessageId = data.user_message_id as string;
+          }
+        }
+      }
     }
   }
 
@@ -201,6 +228,7 @@ export class AgentStream implements AsyncIterable<StreamPart> {
           if (!part) continue;
 
           this._parts.push(part);
+          this._extractMeta(part);
 
           if (part.type === "textDelta") {
             this._textChunks.push(part.value as string);
@@ -215,6 +243,7 @@ export class AgentStream implements AsyncIterable<StreamPart> {
         const part = parseStreamLine(buffer);
         if (part) {
           this._parts.push(part);
+          this._extractMeta(part);
           if (part.type === "textDelta") {
             this._textChunks.push(part.value as string);
           }
@@ -272,6 +301,7 @@ export class AgentStream implements AsyncIterable<StreamPart> {
           if (!part) continue;
 
           this._parts.push(part);
+          this._extractMeta(part);
           if (part.type === "textDelta") {
             this._textChunks.push(part.value as string);
           }
@@ -285,6 +315,7 @@ export class AgentStream implements AsyncIterable<StreamPart> {
         const part = parseStreamLine(buffer);
         if (part) {
           this._parts.push(part);
+          this._extractMeta(part);
           if (part.type === "textDelta") {
             this._textChunks.push(part.value as string);
           }

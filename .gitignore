@@ -8,3 +8,9 @@ dist/
 *.log
 .minion-runs/
 /openapi.json
+
+# Autoresearch tracking
+autoresearch.jsonl
+autoresearch.md
+autoresearch.sh
+autoresearch.ideas.md

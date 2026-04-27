@@ -1,0 +1,573 @@
+import { parse, stringify } from "yaml";
+import type { AgenticFlowClient } from "@pixelml/agenticflow-sdk";
+import {
+  validateAgentCreatePayload,
+  validateAgentUpdatePayload,
+} from "./local-validation.js";
+
+/**
+ * The 11 portable agent fields per D-01.
+ * MUST stay in sync with the test file PORTABLE_FIELDS array.
+ */
+export const COMPANY_EXPORT_FIELDS = [
+  "name",
+  "description",
+  "model",
+  "system_prompt",
+  "tools",
+  "mcp_clients",
+  "plugins",
+  "sub_agents",
+  "agent_type",
+  "recursion_limit",
+  "visibility",
+] as const;
+
+export type CompanyExportField = (typeof COMPANY_EXPORT_FIELDS)[number];
+
+/**
+ * One agent entry in the exported schema. NOT the same as CompanyBlueprint
+ * (which is Paperclip-specific and lives in company-blueprints.ts).
+ */
+export interface CompanyExportAgentEntry {
+  name: string;
+  description?: string | null;
+  model?: string | null;
+  system_prompt?: string | null;
+  tools?: unknown[];
+  mcp_clients?: unknown[];
+  plugins?: unknown[];
+  sub_agents?: unknown[];
+  agent_type?: string | null;
+  recursion_limit?: number | null;
+  visibility?: string | null;
+}
+
+/**
+ * The portable workspace export schema (ECO-03 public contract).
+ * Schema version is "agenticflow.company.export.v1" — bump on breaking changes.
+ */
+export interface CompanyExportSchema {
+  schema: "agenticflow.company.export.v1";
+  _source: {
+    workspace_id: string | null;
+    timestamp: string;   // ISO-8601, generated at export time
+    cli_version: string; // CLI semver, passed in by caller
+  };
+  agents: CompanyExportAgentEntry[];
+}
+
+export class CompanyIOError extends Error {
+  constructor(message: string, public readonly code: string) {
+    super(message);
+    this.name = "CompanyIOError";
+  }
+}
+
+/** Pick exactly the 11 portable fields from a raw agent record. Strips undefined keys. */
+function pickExportFields(agent: Record<string, unknown>): CompanyExportAgentEntry {
+  const result: Record<string, unknown> = {};
+  for (const field of COMPANY_EXPORT_FIELDS) {
+    if (agent[field] !== undefined) {
+      result[field] = agent[field];
+    }
+  }
+  return result as unknown as CompanyExportAgentEntry;
+}
+
+/** Normalize agents.list() response which may be a flat array OR { agents: [...] } envelope. */
+export function extractAgentsFromListResponse(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw as Record<string, unknown>[];
+  }
+  if (raw && typeof raw === "object" && Array.isArray((raw as { agents?: unknown }).agents)) {
+    return (raw as { agents: unknown[] }).agents as Record<string, unknown>[];
+  }
+  return [];
+}
+
+/**
+ * Export the workspace agents to a CompanyExportSchema object.
+ * Caller is responsible for serializing (yaml.stringify) and writing to disk.
+ *
+ * @param client - authenticated AgenticFlowClient
+ * @param cliVersion - CLI semver string for the _source block
+ */
+export async function exportCompany(
+  client: AgenticFlowClient,
+  cliVersion: string,
+): Promise<CompanyExportSchema> {
+  const projectId = client.sdk.projectId ?? undefined;
+  // High limit to avoid pagination on first pass; pitfall A2/Pitfall 1 noted in research.
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const agents = extractAgentsFromListResponse(raw);
+
+  return {
+    schema: "agenticflow.company.export.v1",
+    _source: {
+      workspace_id: client.sdk.workspaceId ?? null,
+      timestamp: new Date().toISOString(),
+      cli_version: cliVersion,
+    },
+    agents: agents.map(pickExportFields),
+  };
+}
+
+/** Re-export yaml helpers so callers (main.ts) use the same package consistently. */
+export { parse as parseYaml, stringify as stringifyYaml };
+
+// ---------------------------------------------------------------------------
+// importCompany — Plan 02 (ECO-06)
+// ---------------------------------------------------------------------------
+
+export interface CompanyImportResult {
+  schema: "agenticflow.company.import.v1";
+  created: string[];   // agent names
+  updated: string[];   // agent names
+}
+
+export interface CompanyImportDryRunResult {
+  schema: "agenticflow.company.import.dry-run.v1";
+  would_create: string[];
+  would_update: Array<{ name: string; changed_fields: string[] }>;
+}
+
+export interface CompanyImportOptions {
+  dryRun?: boolean;
+}
+
+/**
+ * Compare exported entry vs existing agent record.
+ * Returns names of fields that differ.
+ * Uses JSON.stringify for stable comparison of nested arrays/objects (Pitfall 6).
+ */
+export function changedFields(
+  exported: CompanyExportAgentEntry,
+  existing: Record<string, unknown>,
+): string[] {
+  const changed: string[] = [];
+  for (const field of COMPANY_EXPORT_FIELDS) {
+    const a = (exported as unknown as Record<string, unknown>)[field];
+    const b = existing[field];
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      changed.push(field);
+    }
+  }
+  return changed;
+}
+
+/**
+ * Import a CompanyExportSchema into the current workspace.
+ * - Match key: agent name (D-10)
+ * - Existing → update (PUT all 11 fields, full replace per D-11)
+ * - Missing → create (11 fields + project_id from auth)
+ * - dryRun: true → zero writes; returns CompanyImportDryRunResult with diff
+ */
+export async function importCompany(
+  client: AgenticFlowClient,
+  schema: CompanyExportSchema,
+  opts: CompanyImportOptions = {},
+): Promise<CompanyImportResult | CompanyImportDryRunResult> {
+  // Schema version guard (T-06-04)
+  if (schema.schema !== "agenticflow.company.export.v1") {
+    throw new CompanyIOError(
+      `Unsupported schema version: ${String(schema.schema)} (expected agenticflow.company.export.v1)`,
+      "schema_version_mismatch",
+    );
+  }
+
+  const projectId = client.sdk.projectId ?? undefined;
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const existingAgents = extractAgentsFromListResponse(raw);
+
+  // Build name → existing agent map for O(1) lookup (D-10)
+  const existingByName = new Map<string, Record<string, unknown>>();
+  for (const agent of existingAgents) {
+    const name = agent["name"];
+    if (typeof name === "string") existingByName.set(name, agent);
+  }
+
+  // Classify each exported agent as create or update
+  const toCreate: CompanyExportAgentEntry[] = [];
+  const toUpdate: Array<{
+    entry: CompanyExportAgentEntry;
+    existing: Record<string, unknown>;
+    changed: string[];
+  }> = [];
+
+  for (const entry of schema.agents) {
+    const existing = existingByName.get(entry.name);
+    if (existing) {
+      toUpdate.push({ entry, existing, changed: changedFields(entry, existing) });
+    } else {
+      toCreate.push(entry);
+    }
+  }
+
+  // Dry-run: return diff, zero writes (D-08/D-09)
+  if (opts.dryRun) {
+    return {
+      schema: "agenticflow.company.import.dry-run.v1",
+      would_create: toCreate.map((e) => e.name),
+      would_update: toUpdate.map((u) => ({ name: u.entry.name, changed_fields: u.changed })),
+    };
+  }
+
+  // Execute creates
+  const createdNames: string[] = [];
+  for (const entry of toCreate) {
+    if (!projectId) {
+      throw new CompanyIOError(
+        `Cannot create agent "${entry.name}": no project_id in auth context`,
+        "missing_project_id",
+      );
+    }
+    const payload = { ...entry, project_id: projectId } as Record<string, unknown>;
+    const issues = validateAgentCreatePayload(payload);
+    if (issues.length > 0) {
+      throw new CompanyIOError(
+        `Validation failed for agent "${entry.name}": ${JSON.stringify(issues)}`,
+        "validation_failed",
+      );
+    }
+    await client.agents.create(payload);
+    createdNames.push(entry.name);
+  }
+
+  // Execute updates (full PUT replace per D-11)
+  const updatedNames: string[] = [];
+  for (const { entry, existing } of toUpdate) {
+    const id = existing["id"];
+    if (typeof id !== "string") {
+      throw new CompanyIOError(
+        `Cannot update agent "${entry.name}": existing record has no id`,
+        "missing_existing_id",
+      );
+    }
+    const payload = { ...(entry as unknown as Record<string, unknown>) };
+    const issues = validateAgentUpdatePayload(payload);
+    if (issues.length > 0) {
+      throw new CompanyIOError(
+        `Validation failed for agent "${entry.name}": ${JSON.stringify(issues)}`,
+        "validation_failed",
+      );
+    }
+    await client.agents.update(id, payload);
+    updatedNames.push(entry.name);
+  }
+
+  return {
+    schema: "agenticflow.company.import.v1",
+    created: createdNames,
+    updated: updatedNames,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// diffCompany — Plan 01 (ECO-07)
+// ---------------------------------------------------------------------------
+
+export type DiffAgentStatus = "new" | "modified" | "remote_only" | "in_sync";
+
+export interface DiffAgentEntry {
+  name: string;
+  status: DiffAgentStatus;
+  changed_fields: string[]; // empty for new/remote_only/in_sync
+}
+
+export interface CompanyDiffResult {
+  schema: "agenticflow.company.diff.v1";
+  in_sync: boolean;
+  summary: { new: number; modified: number; remote_only: number; in_sync: number };
+  agents: DiffAgentEntry[];
+}
+
+/**
+ * Compare a local CompanyExportSchema against the live workspace agents.
+ * Returns a structured diff with per-agent status and changed field names.
+ * Read-only — makes zero writes to the platform.
+ *
+ * @param client - authenticated AgenticFlowClient
+ * @param localSchema - parsed local company export
+ */
+export async function diffCompany(
+  client: AgenticFlowClient,
+  localSchema: CompanyExportSchema,
+): Promise<CompanyDiffResult> {
+  // Schema version guard (mirror importCompany exactly)
+  if (localSchema.schema !== "agenticflow.company.export.v1") {
+    throw new CompanyIOError(
+      `Unsupported schema version: ${String(localSchema.schema)} (expected agenticflow.company.export.v1)`,
+      "schema_version_mismatch",
+    );
+  }
+
+  const projectId = client.sdk.projectId ?? undefined;
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const existingAgents = extractAgentsFromListResponse(raw);
+
+  // Build name → existing agent map for O(1) lookup
+  const existingByName = new Map<string, Record<string, unknown>>();
+  for (const agent of existingAgents) {
+    const name = agent["name"];
+    if (typeof name === "string") existingByName.set(name, agent);
+  }
+
+  // Build name → local entry map
+  const localByName = new Map<string, CompanyExportAgentEntry>();
+  for (const entry of localSchema.agents) {
+    localByName.set(entry.name, entry);
+  }
+
+  const agents: DiffAgentEntry[] = [];
+
+  // Classify each local agent
+  for (const entry of localSchema.agents) {
+    const existing = existingByName.get(entry.name);
+    if (existing) {
+      const fields = changedFields(entry, existing);
+      if (fields.length > 0) {
+        agents.push({ name: entry.name, status: "modified", changed_fields: fields });
+      } else {
+        agents.push({ name: entry.name, status: "in_sync", changed_fields: [] });
+      }
+    } else {
+      agents.push({ name: entry.name, status: "new", changed_fields: [] });
+    }
+  }
+
+  // Classify remote-only agents (exist in workspace but not in local file)
+  for (const [name] of existingByName) {
+    if (!localByName.has(name)) {
+      agents.push({ name, status: "remote_only", changed_fields: [] });
+    }
+  }
+
+  // Sort alphabetically for deterministic output (D-06)
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+
+  // Compute summary counts
+  const summary = {
+    new: agents.filter((a) => a.status === "new").length,
+    modified: agents.filter((a) => a.status === "modified").length,
+    remote_only: agents.filter((a) => a.status === "remote_only").length,
+    in_sync: agents.filter((a) => a.status === "in_sync").length,
+  };
+
+  const in_sync =
+    summary.new === 0 && summary.modified === 0 && summary.remote_only === 0;
+
+  return {
+    schema: "agenticflow.company.diff.v1",
+    in_sync,
+    summary,
+    agents,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// mergeImportCompany — Plan 08-01 (ECO-08)
+// ---------------------------------------------------------------------------
+
+export type ConflictStrategy = "local" | "remote" | "skip";
+
+export interface MergeAgentEntry {
+  name: string;
+  status: DiffAgentStatus;
+  changed_fields: string[];
+  resolution: "created" | "updated" | "skipped" | "no_change" | "remote_only";
+}
+
+export interface CompanyMergeResult {
+  schema: "agenticflow.company.merge.v1";
+  conflict_strategy: ConflictStrategy;
+  summary: {
+    created: number;
+    updated: number;
+    skipped: number;
+    no_change: number;
+    remote_only: number;
+  };
+  agents: MergeAgentEntry[];
+}
+
+export interface CompanyMergeDryRunResult {
+  schema: "agenticflow.company.merge.dry-run.v1";
+  conflict_strategy: ConflictStrategy;
+  conflicts: MergeAgentEntry[];
+  would_create: string[];
+  would_update: string[];
+  would_skip: string[];
+}
+
+/**
+ * Conflict-aware import of a CompanyExportSchema into the current workspace.
+ *
+ * Classification (single agents.list call — Pitfall 1):
+ *   - new      → create (always)
+ *   - in_sync  → no-op (no write)
+ *   - modified → apply strategy: local=update, remote|skip=skip
+ *   - remote_only → reported only, NEVER deleted (T-08-02)
+ *
+ * dryRun=true returns CompanyMergeDryRunResult with zero writes (T-08-04).
+ *
+ * @param client    - authenticated AgenticFlowClient
+ * @param schema    - parsed local company export
+ * @param opts      - strategy and dryRun flag
+ */
+export async function mergeImportCompany(
+  client: AgenticFlowClient,
+  schema: CompanyExportSchema,
+  opts: { strategy: ConflictStrategy; dryRun?: boolean },
+): Promise<CompanyMergeResult | CompanyMergeDryRunResult> {
+  // 1. Schema version guard (T-08-01 — mirrors importCompany/diffCompany)
+  if (schema.schema !== "agenticflow.company.export.v1") {
+    throw new CompanyIOError(
+      `Unsupported schema version: ${String(schema.schema)} (expected agenticflow.company.export.v1)`,
+      "schema_version_mismatch",
+    );
+  }
+
+  const { strategy, dryRun = false } = opts;
+  const projectId = client.sdk.projectId ?? undefined;
+
+  // 2. Fetch live agents ONCE — build existingByName map (Pitfall 1: no second fetch)
+  const raw = await client.agents.list({ projectId, limit: 1000 });
+  const existingAgents = extractAgentsFromListResponse(raw);
+  const existingByName = new Map<string, Record<string, unknown>>();
+  for (const agent of existingAgents) {
+    const name = agent["name"];
+    if (typeof name === "string") existingByName.set(name, agent);
+  }
+
+  // 3. Build local name set for remote_only detection
+  const localByName = new Map<string, CompanyExportAgentEntry>();
+  for (const entry of schema.agents) {
+    localByName.set(entry.name, entry);
+  }
+
+  // 4. Classify each local agent (inline — no separate diffCompany call to avoid double fetch)
+  type Classified = {
+    entry: CompanyExportAgentEntry;
+    status: DiffAgentStatus;
+    changed: string[];
+    existing?: Record<string, unknown>;
+  };
+  const classified: Classified[] = [];
+
+  for (const entry of schema.agents) {
+    const existing = existingByName.get(entry.name);
+    if (existing) {
+      const fields = changedFields(entry, existing);
+      if (fields.length > 0) {
+        classified.push({ entry, status: "modified", changed: fields, existing });
+      } else {
+        classified.push({ entry, status: "in_sync", changed: [], existing });
+      }
+    } else {
+      classified.push({ entry, status: "new", changed: [] });
+    }
+  }
+
+  // 5. Collect remote_only agents (T-08-02: never delete)
+  const remoteOnly: string[] = [];
+  for (const [name] of existingByName) {
+    if (!localByName.has(name)) {
+      remoteOnly.push(name);
+    }
+  }
+
+  // 6. dryRun: return resolved plan with zero writes (T-08-04)
+  if (dryRun) {
+    const conflicts: MergeAgentEntry[] = classified
+      .filter((c) => c.status === "modified")
+      .map((c) => ({
+        name: c.entry.name,
+        status: c.status,
+        changed_fields: c.changed,
+        resolution: strategy === "local" ? "updated" : "skipped",
+      }));
+
+    const wouldCreate = classified
+      .filter((c) => c.status === "new")
+      .map((c) => c.entry.name);
+
+    const wouldUpdate = strategy === "local"
+      ? classified.filter((c) => c.status === "modified").map((c) => c.entry.name)
+      : [];
+
+    const wouldSkip = strategy !== "local"
+      ? classified.filter((c) => c.status === "modified").map((c) => c.entry.name)
+      : [];
+
+    return {
+      schema: "agenticflow.company.merge.dry-run.v1",
+      conflict_strategy: strategy,
+      conflicts,
+      would_create: wouldCreate,
+      would_update: wouldUpdate,
+      would_skip: wouldSkip,
+    };
+  }
+
+  // 7. Apply writes — build result entries
+  const agents: MergeAgentEntry[] = [];
+
+  for (const { entry, status, changed, existing } of classified) {
+    if (status === "new") {
+      if (!projectId) {
+        throw new CompanyIOError(
+          `Cannot create agent "${entry.name}": no project_id in auth context`,
+          "missing_project_id",
+        );
+      }
+      const payload = { ...entry, project_id: projectId } as Record<string, unknown>;
+      await client.agents.create(payload);
+      agents.push({ name: entry.name, status: "new", changed_fields: [], resolution: "created" });
+    } else if (status === "in_sync") {
+      // Pitfall 4: skip no-op writes for in_sync agents
+      agents.push({ name: entry.name, status: "in_sync", changed_fields: [], resolution: "no_change" });
+    } else {
+      // modified — apply strategy
+      if (strategy === "local") {
+        const id = existing?.["id"];
+        if (typeof id !== "string") {
+          throw new CompanyIOError(
+            `Cannot update agent "${entry.name}": existing record has no id`,
+            "missing_existing_id",
+          );
+        }
+        const payload = { ...(entry as unknown as Record<string, unknown>) };
+        await client.agents.update(id, payload);
+        agents.push({ name: entry.name, status: "modified", changed_fields: changed, resolution: "updated" });
+      } else {
+        // strategy = "remote" | "skip" — keep live state
+        agents.push({ name: entry.name, status: "modified", changed_fields: changed, resolution: "skipped" });
+      }
+    }
+  }
+
+  // remote_only: report only (T-08-02: no delete)
+  for (const name of remoteOnly) {
+    agents.push({ name, status: "remote_only", changed_fields: [], resolution: "remote_only" });
+  }
+
+  // Sort alphabetically for deterministic output (mirrors diffCompany)
+  agents.sort((a, b) => a.name.localeCompare(b.name));
+
+  // Compute summary counts from resolutions
+  const summary = {
+    created: agents.filter((a) => a.resolution === "created").length,
+    updated: agents.filter((a) => a.resolution === "updated").length,
+    skipped: agents.filter((a) => a.resolution === "skipped").length,
+    no_change: agents.filter((a) => a.resolution === "no_change").length,
+    remote_only: agents.filter((a) => a.resolution === "remote_only").length,
+  };
+
+  return {
+    schema: "agenticflow.company.merge.v1",
+    conflict_strategy: strategy,
+    summary,
+    agents,
+  };
+}

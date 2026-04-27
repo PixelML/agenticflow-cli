@@ -1,233 +1,184 @@
 # @pixelml/agenticflow-cli
 
-Command-line interface for the [AgenticFlow](https://agenticflow.ai) platform.
-Manage agents, workflows, connections and more — directly from your terminal.
+Command-line interface for the [AgenticFlow](https://agenticflow.ai) platform. Build workflows, agents, and multi-agent workforces. Designed as the **API contract for AI agents** — Ishi (AgenticFlow's first-party desktop agent), Claude Code, OpenAI Codex, Cursor, Gemini CLI, and other compatible hosts all drive AgenticFlow through this CLI.
 
-Built on [`@pixelml/agenticflow-sdk`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
+Current version: **1.10.0**. Built on [`@pixelml/agenticflow-sdk@1.6.0`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
 
-## Installation
+## Install
 
 ```bash
 npm install -g @pixelml/agenticflow-cli
 ```
 
-Or run directly via `npx`:
+Available as both `agenticflow` and `af`. Requires Node.js 18+.
+
+## The composition ladder
+
+Three deploy verbs map 1:1 to rungs on a 7-level complexity ladder. **Start at the lowest rung that solves the user's problem.**
+
+| Rung | Kind | Deploy |
+| --- | --- | --- |
+| 0 | workflow | `af workflow init --blueprint llm-hello` (single LLM call) |
+| 1 | workflow | `af workflow init --blueprint llm-chain` (chained reasoning) |
+| 2 | workflow | `af workflow init --blueprint summarize-url` / `api-summary` |
+| 3 | agent | `af agent init --blueprint research-assistant` / `content-creator` / `api-helper` |
+| 6 | workforce | `af workforce init --blueprint parallel-research` (multi-agent DAG) |
+
+Run `af playbook composition-ladder` for the decision rule.
+
+## Quick Start
 
 ```bash
-npx @pixelml/agenticflow-cli --help
+af login                                          # Authenticate
+af doctor --json --strict                         # Verify setup
+af bootstrap --json                               # One-shot workspace snapshot + cheat-sheet
+
+# Deploy the simplest thing that fits your need
+af workflow init --blueprint summarize-url --json          # rung 2 (workflow)
+af agent init --blueprint research-assistant --json        # rung 3 (agent + plugins)
+af workforce init --blueprint parallel-research --json     # rung 6 (workforce DAG)
 ```
+
+> **AI agents**: Run `af bootstrap --json` first. It returns auth, agents, workforces, all 20 blueprints with `kind`/`complexity`/`deploy_command`, playbooks, changelog, and a commands cheat-sheet in one call.
 
 ## Authentication
 
-### Interactive login
+```bash
+af login                                 # Interactive (saves to ~/.agenticflow/auth.json)
+export AGENTICFLOW_API_KEY=<key>         # Environment variable
+af --api-key <key> agent list            # CLI flag
+af auth import-env --file .env           # Import from .env
+af whoami --json                         # Verify
+```
+
+## Core Commands
+
+### Workflows (rungs 0-2)
 
 ```bash
-agenticflow login
+af workflow init --blueprint <slug> --json           # Deploy a workflow blueprint
+af workflow list --fields id,name,status --json
+af workflow run --workflow-id <id> --input '{"url":"..."}' --json
+af workflow run-status --run-id <run_id> --json      # --run-id or --workflow-run-id
+af workflow validate --body @wf.json --local-only
+af workflow delete --workflow-id <id>
 ```
 
-Prompts for API key, workspace ID and project ID, then saves them to
-`~/.agenticflow/auth.json`.
-
-### Environment variables
+### Agents (rung 3)
 
 ```bash
-export AGENTICFLOW_API_KEY="sk-..."
-export AGENTICFLOW_WORKSPACE_ID="ws-..."
-export AGENTICFLOW_PROJECT_ID="proj-..."
+af agent init --blueprint <slug> --json              # Deploy with plugins pre-attached
+af agent list --fields id,name,model --json
+af agent get --id <id> --fields plugins --json        # --id alias for --agent-id
+af agent run --agent-id <id> --message "..." --json
+af agent update --agent-id <id> --patch --body '{"system_prompt":"..."}'
+af agent delete --agent-id <id>
 ```
 
-### Import from `.env` file
+`af agent run` returns structured JSON:
+```json
+{"schema":"agenticflow.agent.run.v1","status":"completed","thread_id":"...","response":"..."}
+```
+
+### Workforces (rung 6)
 
 ```bash
-agenticflow auth import-env --file .env
+af workforce init --blueprint <slug> --name "<name>" --json
+af workforce list --fields id,name --json
+af workforce schema --workforce-id <id> --json         # Full graph
+af workforce publish --workforce-id <id> --json        # Mint public URL
+af workforce delete --workforce-id <id>
 ```
 
-### CLI flags
+### Blueprints & Marketplace
 
 ```bash
-agenticflow --api-key sk-... --workspace-id ws-... agent list
+af blueprints list --kind workflow|agent|workforce --json   # CLI-shipped catalog
+af blueprints get --id <slug> --json                         # Full details
+af marketplace list --type agent_template --json             # Live backend catalog
+af marketplace try --id <item_id> --json                     # Clone into workspace
 ```
 
-**Resolution order:** CLI flag → environment variable → `~/.agenticflow/auth.json`
-
-### Verify
+### MCP Clients
 
 ```bash
-agenticflow whoami
+af mcp-clients list --verify-auth --json
+af mcp-clients inspect --id <id> --json              # Classify pattern + flag risks
+af agent update --agent-id <id> --patch --body '{"mcp_clients":[...]}'
 ```
 
-```
-Profile:      default
-API Key:      present
-Workspace ID: ws-abc123
-Project ID:   proj-xyz789
-Config:       ~/.agenticflow/auth.json
-```
-
-### Logout
+### Webhook Gateway
 
 ```bash
-agenticflow logout                   # remove all credentials
-agenticflow logout --profile staging # remove a single profile
+af gateway serve --channels webhook,linear --verbose
+curl -X POST http://localhost:4100/webhook/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"<id>","message":"Summarize Q4 report"}'
 ```
 
-## Commands
-
-### Cold start
+## AI-Agent Discovery
 
 ```bash
-# Machine-discoverable first-touch path
-agenticflow discover --json
-agenticflow playbook first-touch
-
-# Prime local template cache for workflow/agent/workforce examples
-agenticflow templates sync --json
-agenticflow templates index --json
+af bootstrap --json                # The one-shot start — auth, blueprints, commands
+af context --json                  # AI-agent invariants + journey
+af schema agent --field mcp_clients # Drill into nested payload shapes
+af blueprints list --kind agent --json
+af marketplace list --json
+af playbook composition-ladder     # Pick the right rung
+af playbook ready-prompts          # Copy-paste prompts for AI operators
+af changelog --json                # What shipped
 ```
 
-### agent
+## Playbooks
 
 ```bash
-agenticflow agent list [--project-id <id>] [--search <q>] [--limit <n>] [--offset <n>]
-agenticflow agent get --agent-id <id>
-agenticflow agent create --body <json|@file>
-agenticflow agent update --agent-id <id> --body <json|@file>
-agenticflow agent delete --agent-id <id>
-agenticflow agent stream --agent-id <id> --body <json|@file>
-agenticflow agent reference-impact --agent-id <id>
+af playbook composition-ladder         # The rung-picking rule
+af playbook ready-prompts              # Copy-paste prompts per rung
+af playbook marketplace-vs-blueprint   # When to use each starter catalog
+af playbook first-touch                # AI-agent onboarding
+af playbook workflow-build             # Workflow design checklist
+af playbook agent-build                # Agent configuration
+af playbook workforce-build            # Workforce from scratch
+af playbook mcp-client-quirks          # Pipedream vs Composio attach safety
+af playbook migrate-from-paperclip     # Legacy paperclip → workforce map
+af playbook template-bootstrap         # Start from pre-built templates
 ```
 
-### workflow
+## Hidden (deprecated) commands
 
-```bash
-agenticflow workflow list [--workspace-id <id>] [--project-id <id>] [--search <q>] [--limit <n>]
-agenticflow workflow get --workflow-id <id>
-agenticflow workflow create --body <json|@file> [--workspace-id <id>]
-agenticflow workflow update --workflow-id <id> --body <json|@file> [--workspace-id <id>]
-agenticflow workflow delete --workflow-id <id> [--workspace-id <id>]
-agenticflow workflow run --workflow-id <id> [--input <json|@file>]
-agenticflow workflow run-status --workflow-run-id <id>
-agenticflow workflow list-runs --workflow-id <id> [--sort-order asc|desc]
-agenticflow workflow run-history --workflow-id <id>
-agenticflow workflow validate --body <json|@file> [--local-only]
-agenticflow workflow reference-impact --workflow-id <id>
-agenticflow workflow like-status --workflow-id <id>
-```
+`af pack`, `af paperclip`, `af company` are hidden from default `af --help` in v1.10.0. They still work; set `AF_SHOW_DEPRECATED=1` to unhide. Migration paths:
 
-### connections
-
-```bash
-agenticflow connections list [--workspace-id <id>] [--project-id <id>]
-agenticflow connections create --body <json|@file> [--workspace-id <id>]
-agenticflow connections update --connection-id <id> --body <json|@file> [--workspace-id <id>]
-agenticflow connections delete --connection-id <id> [--workspace-id <id>]
-```
-
-### node-types
-
-```bash
-agenticflow node-types list
-agenticflow node-types get --name <name>
-agenticflow node-types search --query <q>
-agenticflow node-types dynamic-options --name <name> --field-name <field> [--connection <name>]
-```
-
-### uploads
-
-```bash
-agenticflow uploads create --body <json|@file>
-agenticflow uploads status --session-id <id>
-```
-
-### Generic API call
-
-For any endpoint not covered by resource commands:
-
-```bash
-# By operation ID
-agenticflow call --operation-id get_by_id_v1_agents__agent_id__get -P agent_id=abc123
-
-# By method + path
-agenticflow call --method GET --path /v1/agents/
-
-# With parameters and body
-agenticflow call --operation-id update_v1_agents__agent_id__put \
-  -P agent_id=abc123 \
-  --body '{"name": "Updated"}'
-
-# Query parameters
-agenticflow call --method GET --path /v1/agents/ -Q limit=10
-
-# Dry run (shows request without executing)
-agenticflow call --operation-id get_all_v1_agents__get --dry-run
-```
-
-### Utilities
-
-```bash
-# Preflight diagnostics
-agenticflow doctor
-
-# Machine-readable capability discovery
-agenticflow discover --json
-
-# OpenAPI operation discovery
-agenticflow ops list [--public-only] [--tag <tag>] [--json]
-agenticflow ops show <operation-id>
-
-# Operation catalog
-agenticflow catalog export [--public-only]
-agenticflow catalog rank --task "send a message" [--top <n>]
-
-# Policy guardrails
-agenticflow policy show
-agenticflow policy init [--spend-ceiling <amount>]
-
-# Built-in playbooks
-agenticflow playbook [topic] [--list]
-# First-touch onboarding for cold agents
-agenticflow playbook first-touch
-agenticflow playbook --list --json
-
-# Template bootstrap cache for cold agents
-agenticflow templates sync [--dir .agenticflow/templates] [--limit 100] [--strict] [--json]
-agenticflow templates index [--dir .agenticflow/templates] [--json]
-
-# Duplicate resources from templates (web-like flow)
-agenticflow templates duplicate workflow --template-id <workflow_template_id> --json
-agenticflow templates duplicate agent --template-id <agent_template_id> --json
-# Build payloads only (no create)
-agenticflow templates duplicate workflow --template-id <id> --dry-run --json
-# Resolve template IDs from local cache first (cold/sandbox-friendly)
-agenticflow templates duplicate workflow --template-id <id> --cache-dir .agenticflow/templates --json
-agenticflow templates duplicate agent --template-file .agenticflow/templates/agent/<file>.json --cache-dir .agenticflow/templates --dry-run --json
-```
+- `af pack install` → `af workforce init --blueprint <id>` (sunset 2026-10-14)
+- `af paperclip init` → `af workforce init --blueprint <id>` (sunset 2026-10-14) — see `af playbook migrate-from-paperclip`
+- `af company *` → `af workforce export/import`
 
 ## Global Options
 
-| Flag | Description |
-|---|---|
-| `--api-key <key>` | API key for authentication |
-| `--workspace-id <id>` | Default workspace ID |
-| `--project-id <id>` | Default project ID |
-| `--spec-file <path>` | Path to OpenAPI spec JSON |
-| `--no-color` | Disable ANSI color output |
-| `--json` | Force JSON output |
-| `--version` | Show version |
-| `--help` | Show help |
+| Flag | Purpose |
+|------|---------|
+| `--json` | Machine-readable JSON output |
+| `--fields <list>` | Filter output fields (saves context window) |
+| `--dry-run` | Validate without executing |
+| `--patch` | Partial update on `af agent update` (preserves MCP clients, tools, code-exec) |
+| `--api-key <key>` | Override API key |
+| `--workspace-id <id>` | Override workspace |
+| `--project-id <id>` | Override project |
 
-## Output
+## Environment Variables
 
-Use `--json` for machine-readable output. In JSON mode, errors use a structured envelope and exit non-zero.
+| Variable | Purpose |
+|----------|---------|
+| `AGENTICFLOW_API_KEY` | API key |
+| `AGENTICFLOW_WORKSPACE_ID` | Default workspace ID |
+| `AGENTICFLOW_PROJECT_ID` | Default project ID |
+| `AF_SILENCE_DEPRECATIONS` | Set `=1` to suppress deprecation warnings |
+| `AF_SHOW_DEPRECATED` | Set `=1` to un-hide pack/paperclip/company in `--help` |
+| `AF_INSECURE_TLS` | Set `=1` to opt-in to insecure TLS (off by default) |
 
-Create/update/run/stream commands perform local payload validation first. This returns `local_schema_validation_failed` immediately for malformed inputs, before any API request is sent.
+## Links
 
-`templates duplicate` can resolve workflow templates from a local `templates sync` cache via `--cache-dir` before attempting API fetches. This improves cold-start behavior in restricted environments.
-
-```bash
-agenticflow agent list | jq '.[] | .name'
-```
-
-## License
-
-Apache-2.0
+- [AgenticFlow Platform](https://agenticflow.ai)
+- [Documentation](https://docs.agenticflow.ai)
+- [Ecosystem overview](https://docs.agenticflow.ai/developers/ecosystem) — how CLI / docs / desktop agents fit together
+- [SDK on npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk)
+- [GitHub](https://github.com/PixelML/agenticflow-cli)
