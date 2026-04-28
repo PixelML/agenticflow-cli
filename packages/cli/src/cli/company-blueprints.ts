@@ -317,6 +317,184 @@ export const BLUEPRINTS: Record<string, CompanyBlueprint> = {
       },
     ],
   },
+  "n8n-converter": {
+    id: "n8n-converter",
+    kind: "workflow",
+    complexity: 2,
+    name: "n8n → AgenticFlow Converter",
+    description: "Converts an n8n workflow JSON into a valid AgenticFlow workflow JSON. Three-node chain: analyse the n8n graph → produce the AgenticFlow JSON → generate a connections setup guide so the user can create any required App Connections before deploying.",
+    goal: "Turn a pasted n8n workflow JSON into a deployable AgenticFlow workflow JSON, with a step-by-step guide for any connections the workflow needs",
+    useCases: [
+      "migrating n8n automations to AgenticFlow",
+      "bulk-converting n8n workflow exports",
+      "learning the AgenticFlow workflow schema by example",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "n8n Workflow",
+      fields: [
+        {
+          name: "n8n_workflow_json",
+          title: "n8n Workflow JSON",
+          description: "Paste the full n8n workflow JSON here (export from n8n → Download → JSON).",
+          required: true,
+        },
+        {
+          name: "project_id",
+          title: "AgenticFlow Project ID",
+          description: "The AgenticFlow project_id to embed in the output workflow.",
+          required: true,
+        },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "analyze",
+        nodeType: "llm",
+        title: "Analyse n8n Workflow",
+        description: "Parse the n8n workflow, identify every non-sticky node, and produce a conversion plan mapping each n8n node to its AgenticFlow equivalent using the priority rules.",
+        inputConfig: {
+          model: "agenticflow/glm-4.5-air",
+          temperature: 0.2,
+          system_message: `You are an expert at converting n8n workflows to AgenticFlow format.
+
+NODE SELECTION PRIORITY (always pick the highest available tier):
+- Tier 1 (no connection): llm, agenticflow_generate_image, api_call, send_email, json_to_google_sheet, run_javascript, web_scraping, web_search, web_retrieval, url_to_markdown, echo, variable_set, variable_get, get_current_datetime, drive_get_item_by_path
+- Tier 2 (pixelml connection): pml_llm, generate_image, run_python, text_to_speech, google_search, text_extract, render_video, describe_image
+- Tier 3 (vendor connection, last resort): openai_ask_chat_gpt, google_gen_ai_ask_gemini, telegram_send_message, tavily_search, firecrawl_scrape, groq_chat, replicate_run_model, fal_run_model
+
+KEY MAPPING RULES:
+- ALL LLM/AI/chain/agent nodes → llm (Tier 1), model: "agenticflow/glm-4.5-air"
+- Image generation → agenticflow_generate_image (Tier 1), fallback: generate_image (Tier 2), last resort: openai_generate_image (Tier 3)
+- httpRequest / REST integrations → api_call (Tier 1)
+- emailSend / gmail / sendGrid → send_email (Tier 1)
+- googleSheets → json_to_google_sheet (Tier 1)
+- googleDrive → drive_get_item_by_path (Tier 1)
+- googleSearch → google_search (Tier 2, pixelml)
+- code / function → run_javascript (Tier 1)
+- executeCommand → run_python (Tier 2, pixelml)
+- extractFromFile → text_extract (Tier 2, pixelml)
+- telegram → telegram_send_message (Tier 3, last resort)
+- ALL trigger nodes → removed; their fields become input_schema properties
+- if/switch → use llm with routing instruction, or split into separate workflows
+- merge/aggregate/splitOut → use run_javascript
+
+Output a structured plan with: (1) list of every n8n node and its mapped AgenticFlow node_type + tier, (2) list of input_schema fields from trigger nodes, (3) data-flow: how each node's output connects to the next node's input_config, (4) warnings for any unmappable nodes or patterns.`,
+          human_message: "Analyse this n8n workflow and produce a conversion plan:\n\n{{n8n_workflow_json}}",
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "convert",
+        nodeType: "llm",
+        title: "Generate AgenticFlow JSON",
+        description: "Using the conversion plan, produce the final AgenticFlow workflow JSON.",
+        inputConfig: {
+          model: "agenticflow/glm-4.5-air",
+          temperature: 0.1,
+          system_message: `You are an expert at producing valid AgenticFlow workflow JSON.
+
+STRICT OUTPUT RULES — output ONLY the JSON object, no markdown fences, no explanation:
+
+1. Top-level fields: name, description, project_id, public_runnable (false), public_clone (false), input_schema, nodes, output_mapping
+2. input_schema: every property MUST have "ui_metadata": {"type": "short_text"}
+3. nodes[].input_config: include ALL fields (required + optional); set unused optional fields to null, NEVER to "" or omit them
+4. Node names: snake_case, unique, no spaces
+5. Data references: {{field_name}} for input_schema fields, {{node_name.output_field}} for node outputs
+6. Execution order: nodes array is top-to-bottom sequential
+7. CONNECTION FIELD: nodes that require a connection (Tier 2 pixelml, Tier 3 vendor) MUST include "connection": "<ConnectionName>" at the top level of the node object (sibling of name/node_type_name/input_config). Use a descriptive placeholder like "My PixelML", "My Telegram", "My OpenAI". The connection field is REQUIRED for those nodes — without it the workflow will fail at runtime.
+
+Connection categories by node type:
+- pml_llm, generate_image, run_python, text_to_speech, google_search, text_extract, render_video, describe_image → category: "pixelml"
+- telegram_send_message → category: "telegram"
+- openai_ask_chat_gpt, openai_generate_image → category: "openai"
+- google_gen_ai_ask_gemini → category: "google_gen_ai"
+- tavily_search → category: "tavily"
+- firecrawl_scrape → category: "firecrawl"
+- groq_chat → category: "groq"
+
+llm node input_config template (ALL fields required, NO connection field):
+{"model": "agenticflow/glm-4.5-air", "human_message": "...", "system_message": "..." or null, "chat_history_id": null, "temperature": null}
+
+api_call node input_config template (NO connection field):
+{"url": "...", "method": "GET", "headers": {}, "body_type": "none", "body": null, "raw_body": null, "files": null, "timeout": null, "response_type": null, "upload_response": null}
+
+send_email node input_config template (NO connection field):
+{"recipient_emails": ["..."], "cc_emails": null, "bcc_emails": null, "subject": "...", "body": "...", "body_html": null}
+
+agenticflow_generate_image node input_config template (NO connection field):
+{"prompt": "...", "width": null, "height": null, "num_images": null}
+
+json_to_google_sheet node input_config template (NO connection field):
+{"title": "...", "data": "...", "share_with": null, "role": null, "prem_type": null}
+
+telegram_send_message node example (connection field REQUIRED):
+{"name": "send_reply", "node_type_name": "telegram_send_message", "connection": "My Telegram", "input_config": {"chat_id": "...", "text": "...", "business_connection_id": null, "message_thread_id": null, "parse_mode": null, "entities": null, "link_preview_options": null, "disable_notification": null, "protect_content": null, "allow_paid_broadcast": null, "message_effect_id": null, "reply_parameters": null, "reply_markup": null}}
+
+Output ONLY the raw JSON.`,
+          human_message: "Conversion plan:\n{{analyze.content}}\n\nOriginal n8n workflow:\n{{n8n_workflow_json}}\n\nproject_id: {{project_id}}\n\nProduce the AgenticFlow workflow JSON now.",
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "connections_guide",
+        nodeType: "llm",
+        title: "Connections Setup Guide",
+        description: "Scan the converted workflow JSON for nodes that require App Connections and produce a step-by-step setup guide the user must complete before deploying.",
+        inputConfig: {
+          model: "agenticflow/glm-4.5-air",
+          temperature: 0.1,
+          system_message: `You are a deployment assistant for AgenticFlow.
+
+Your job: read the converted AgenticFlow workflow JSON and check every node for a "connection" field.
+
+If NO nodes have a "connection" field → output exactly:
+"✅ No connections required. Deploy with: agenticflow workflow create --body @workflow.json --json"
+
+If ANY nodes have a "connection" field → output a setup guide in this format:
+
+## Connections required before deploying
+
+| Node | Connection name | Category | Credentials needed |
+|---|---|---|---|
+(one row per unique connection: node name, connection placeholder name, category, what credential is needed)
+
+Credential keys per category:
+- pixelml → api_key
+- telegram → bot_token
+- openai → api_key
+- google_gen_ai → api_key
+- tavily → api_key
+- firecrawl → api_key
+- groq → api_key
+- replicate → api_key
+- fal → api_key
+
+## How to create connections
+
+**Option A — Web UI (recommended, keeps credentials out of terminal history):**
+1. Go to AgenticFlow → Settings → App Connections
+2. Click "New Connection"
+3. Select the category, enter the name exactly as shown in the table above, paste the credential value
+4. Repeat for each row in the table
+
+**Option B — Let the assistant create them for you:**
+Provide the required credential values and the assistant will run the CLI commands on your behalf.
+Share only what is needed — credentials will not be stored beyond the current session.
+
+## After all connections are created
+
+agenticflow workflow create --body @workflow.json --json
+
+Use the exact connection names from the table — they must match the "connection" field values in the workflow JSON.`,
+          human_message: "Converted workflow JSON:\n{{convert.content}}\n\nScan for required connections and produce the setup guide.",
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
   "api-summary": {
     id: "api-summary",
     kind: "workflow",
