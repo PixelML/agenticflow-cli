@@ -495,6 +495,1446 @@ Use the exact connection names from the table — they must match the "connectio
     ],
   },
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // RUNG 2 — Workflow blueprints converted from n8n (internal / email-out)
+  // All connection-free: llm, web_retrieval, api_call, send_email,
+  // url_to_markdown, run_javascript, get_current_datetime, web_search.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  "email-to-structured": {
+    id: "email-to-structured",
+    kind: "workflow",
+    complexity: 1,
+    name: "Email → Structured Data",
+    description: "Paste raw unstructured email text and get back clean JSON fields: sender intent, urgency, category, key entities, and a one-line summary. Converted from n8n #10086. Rung 1 — single LLM extraction pass.",
+    goal: "Extract structured fields from unstructured email text",
+    useCases: [
+      "triaging support email queues",
+      "extracting order details from customer emails",
+      "categorising inbound messages without reading each one",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Email to parse",
+      fields: [
+        { name: "email_text", title: "Email text", description: "Paste the raw email body here.", required: true },
+        { name: "context", title: "Business context (optional)", description: "E.g. 'SaaS support inbox', 'e-commerce orders'.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "extract",
+        nodeType: "llm",
+        title: "Extract structured data",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.1,
+          system_message: "You are a data-extraction assistant. Always respond with valid JSON only — no prose, no markdown fences.",
+          human_message: `Extract structured data from the email below. Return ONLY a JSON object with these fields:
+{
+  "sender_intent": "string — what the sender wants (request / complaint / inquiry / feedback / other)",
+  "urgency": "low | medium | high",
+  "category": "string — short topic label",
+  "entities": ["list of named entities: people, companies, products, dates, order IDs"],
+  "summary": "string — one sentence, ≤20 words",
+  "suggested_action": "string — what a human agent should do next"
+}
+
+Business context: {{context}}
+
+EMAIL:
+{{email_text}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "rss-digest-email": {
+    id: "rss-digest-email",
+    kind: "workflow",
+    complexity: 2,
+    name: "RSS Digest → Email",
+    description: "Fetches an RSS feed URL, summarises the top items with an LLM, and sends a digest email. Converted from n8n #10007. Rung 2 — web_retrieval enriches the LLM pass; send_email delivers the output.",
+    goal: "Turn an RSS feed into a curated digest email",
+    useCases: [
+      "daily tech news digest",
+      "team newsletter from a curated RSS source",
+      "monitoring a topic feed and emailing highlights",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "RSS digest",
+      fields: [
+        { name: "rss_url", title: "RSS feed URL", description: "e.g. https://feeds.feedburner.com/TechCrunch", required: true },
+        { name: "recipient_email", title: "Recipient email", description: "Who gets the digest.", required: true },
+        { name: "topic", title: "Topic label", description: "Used in the email subject, e.g. 'AI News'.", required: false, defaultValue: "News" },
+        { name: "max_items", title: "Max items to summarise", description: "Number of feed items to include (default 5).", required: false, defaultValue: "5" },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch_feed",
+        nodeType: "web_retrieval",
+        title: "Fetch RSS feed",
+        inputConfig: {
+          prompt: "Fetch and return the full content of this RSS feed URL. Return all visible text and titles: {{rss_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "summarise",
+        nodeType: "llm",
+        title: "Summarise top items",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.3,
+          system_message: "You are a newsletter editor. Write in clear, concise English.",
+          human_message: `You received this RSS feed content. Pick the top {{max_items}} most interesting items and write a digest.
+
+For each item output:
+**[Title]** — one sentence summary (≤20 words). Source: [URL if available]
+
+End with a one-line "Editor's pick" — the single most important story and why.
+
+Topic focus: {{topic}}
+
+FEED CONTENT:
+{{fetch_feed.result}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "send",
+        nodeType: "send_email",
+        title: "Send digest email",
+        inputConfig: {
+          recipient_emails: ["{{recipient_email}}"],
+          cc_emails: [],
+          bcc_emails: [],
+          subject: "{{topic}} Digest — {{rss_url}}",
+          body: "{{summarise.content}}",
+          body_html: null,
+        },
+      },
+    ],
+  },
+
+  "competitor-url-snapshot": {
+    id: "competitor-url-snapshot",
+    kind: "workflow",
+    complexity: 2,
+    name: "Competitor URL Snapshot",
+    description: "Fetches a competitor's homepage or landing page and runs an LLM analysis: positioning, key claims, pricing signals, weaknesses, and 3 actionable counter-moves. Converted from n8n #10002. Rung 2 — web_retrieval + LLM analysis.",
+    goal: "Understand a competitor's public positioning from their URL in one run",
+    useCases: [
+      "quick competitor intelligence before a sales call",
+      "tracking how a competitor's messaging changes over time",
+      "briefing a sales or marketing team on a new entrant",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Competitor analysis",
+      fields: [
+        { name: "competitor_url", title: "Competitor URL", description: "Homepage or landing page to analyse.", required: true },
+        { name: "your_product", title: "Your product / service (optional)", description: "Brief description — used to tailor counter-move suggestions.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch",
+        nodeType: "web_retrieval",
+        title: "Fetch competitor page",
+        inputConfig: {
+          prompt: "Fetch the complete text content of this webpage including all headings, copy, pricing, and CTAs: {{competitor_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "analyse",
+        nodeType: "llm",
+        title: "Analyse positioning",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.3,
+          system_message: "You are a competitive intelligence analyst. Be specific — cite exact phrases from the page.",
+          human_message: `Analyse this competitor's page and produce a structured report:
+
+## Positioning
+One paragraph — how do they position themselves? Who's the target customer?
+
+## Key claims (top 5)
+Bullet list of their strongest marketing claims, with exact quotes.
+
+## Pricing signals
+What pricing info is visible? Tiers, price anchors, free trial offers?
+
+## Weaknesses
+3 gaps or weaknesses visible from the page (missing features, vague claims, poor UX copy).
+
+## Counter-moves (3)
+Specific actions our product ({{your_product}}) should take to differentiate, ordered by impact.
+
+COMPETITOR URL: {{competitor_url}}
+
+PAGE CONTENT:
+{{fetch.result}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "job-app-package": {
+    id: "job-app-package",
+    kind: "workflow",
+    complexity: 2,
+    name: "Job Application Package",
+    description: "Paste a job description + your CV; the workflow scores your fit, drafts a tailored cover letter, then emails the full package to you. 3-node pipeline: llm fit-score → llm cover-letter → send_email. Rung 1-2 — multi-step LLM chaining with email delivery.",
+    goal: "Turn a job description + your CV into a fit score + tailored cover letter delivered by email",
+    useCases: [
+      "quickly assessing fit before applying for a role",
+      "generating a first-draft cover letter from a job posting",
+      "batch-screening multiple job listings against your CV",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Job application",
+      fields: [
+        { name: "job_description_text", title: "Job description text", description: "Paste the full job description text here (copy from the job posting page).", required: true },
+        { name: "job_url", title: "Job posting URL (optional)", description: "For reference in the email subject.", required: false },
+        { name: "cv_text", title: "Your CV / resume text", description: "Paste the plain-text version of your CV.", required: true },
+        { name: "your_name", title: "Your name", required: true },
+        { name: "recipient_email", title: "Your email", description: "Where to send the package.", required: true },
+        { name: "tone", title: "Cover letter tone", description: "e.g. formal, confident, conversational", required: false, defaultValue: "confident" },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "score_fit",
+        nodeType: "llm",
+        title: "Score fit",
+        description: "Compare the CV against the job description and produce a structured fit report.",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.1,
+          system_message: "You are a senior recruiter and career coach. Be honest and specific — cite exact phrases from both the JD and CV.",
+          human_message: `Compare this candidate's CV against the job posting.
+
+## Fit Score: X/10
+
+## Role Summary
+Job title, company, and one-sentence description of what the role does.
+
+## Strengths (what matches)
+Bullet list — specific skills, experience, or achievements from the CV that directly match the JD requirements. Quote both the JD requirement and the CV evidence.
+
+## Gaps (what's missing or weak)
+Bullet list — required or preferred qualifications from the JD that are absent or undersold in the CV. Be specific.
+
+## Keywords to add to CV
+5 exact keywords or phrases from the JD that should appear in the CV but don't.
+
+## Recommendation
+One sentence: Apply / Apply with adjustments / Skip — and why.
+
+JOB DESCRIPTION:
+{{job_description_text}}
+
+CV:
+{{cv_text}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "write_cover_letter",
+        nodeType: "llm",
+        title: "Write cover letter",
+        description: "Draft a tailored cover letter using the fit analysis and the job posting.",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.5,
+          system_message: "You are an expert cover letter writer. Write in first person. Never use hollow phrases like 'I am excited to apply' or 'I am a team player'. Lead with impact.",
+          human_message: `Write a tailored cover letter for {{your_name}} applying to the role described below.
+
+Tone: {{tone}}
+Max length: 300 words (3 paragraphs)
+
+Rules:
+- Paragraph 1: Lead with the strongest match between the candidate's background and the role's core need. Name the company and role.
+- Paragraph 2: One specific achievement from the CV that directly proves value for the top requirement. Use numbers if present in the CV.
+- Paragraph 3: Why this company/role specifically (use something concrete from the JD — mission, product, challenge). Close with a clear call to action.
+- Never list skills — show evidence instead.
+- Do NOT include date, address block, or "Dear Hiring Manager" — output body only.
+
+FIT ANALYSIS:
+{{score_fit.content}}
+
+JOB DESCRIPTION:
+{{job_description_text}}
+
+CV:
+{{cv_text}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "send",
+        nodeType: "send_email",
+        title: "Email application package",
+        description: "Send the fit score + cover letter to the applicant.",
+        inputConfig: {
+          recipient_emails: ["{{recipient_email}}"],
+          cc_emails: [],
+          bcc_emails: [],
+          subject: "Job Application Package — {{your_name}}",
+          body: `## Fit Analysis\n\n{{score_fit.content}}\n\n---\n\n## Cover Letter Draft\n\n{{write_cover_letter.content}}`,
+          body_html: null,
+        },
+      },
+    ],
+  },
+
+  "meeting-notes-email": {
+    id: "meeting-notes-email",
+    kind: "workflow",
+    complexity: 1,
+    name: "Meeting Notes → Email Summary",
+    description: "Paste raw meeting notes and send a formatted recap email: decisions, action items, owners, and next steps. Rung 1 — single LLM pass + send_email. Zero external connections needed.",
+    goal: "Convert raw meeting notes into a clean recap email with action items",
+    useCases: [
+      "post-meeting follow-up emails",
+      "async team standups",
+      "project kick-off recap for stakeholders",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Meeting recap",
+      fields: [
+        { name: "notes", title: "Raw meeting notes", description: "Paste your unformatted notes here.", required: true },
+        { name: "meeting_title", title: "Meeting title", description: "e.g. Q2 Planning", required: true },
+        { name: "recipient_email", title: "Recipient email", description: "Who gets the recap email.", required: true },
+        { name: "attendees", title: "Attendees (optional)", description: "Comma-separated names.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "structure",
+        nodeType: "llm",
+        title: "Structure notes",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.2,
+          system_message: "You are an executive assistant. Produce clean, professional meeting recaps.",
+          human_message: `Structure these raw meeting notes into a professional recap for: {{meeting_title}}
+Attendees: {{attendees}}
+
+Format:
+
+## Meeting Recap — {{meeting_title}}
+
+**Date:** [extract from notes or omit if absent]
+**Attendees:** {{attendees}}
+
+### Key Decisions
+- [bullet per decision]
+
+### Action Items
+| # | Action | Owner | Due |
+|---|--------|-------|-----|
+[one row per action item]
+
+### Next Steps
+[2-3 sentences on what happens next]
+
+RAW NOTES:
+{{notes}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "send",
+        nodeType: "send_email",
+        title: "Send recap email",
+        inputConfig: {
+          recipient_emails: ["{{recipient_email}}"],
+          cc_emails: [],
+          bcc_emails: [],
+          subject: "Meeting Recap: {{meeting_title}}",
+          body: "{{structure.content}}",
+          body_html: null,
+        },
+      },
+    ],
+  },
+
+  "lead-qualifier": {
+    id: "lead-qualifier",
+    kind: "workflow",
+    complexity: 2,
+    name: "Lead Qualifier",
+    description: "Given a company name and URL, fetches their public web presence and runs an LLM qualification pass: fit score, budget signals, pain-point alignment, and a recommended next action. Rung 2 — web_retrieval + LLM scoring.",
+    goal: "Score and qualify a B2B lead from their public web presence",
+    useCases: [
+      "pre-call lead qualification",
+      "prioritising inbound demo requests",
+      "sales team lead scoring at scale",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Lead qualification",
+      fields: [
+        { name: "company_url", title: "Company URL", description: "Homepage or about page.", required: true },
+        { name: "company_name", title: "Company name", required: true },
+        { name: "your_product", title: "Your product/service", description: "Brief description of what you sell.", required: true },
+        { name: "icp", title: "Ideal Customer Profile (optional)", description: "e.g. 'Series A+ SaaS, 50-500 employees, US/EU'.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch",
+        nodeType: "web_retrieval",
+        title: "Fetch company page",
+        inputConfig: {
+          prompt: "Fetch and return all visible text from this company's website including about, pricing, team, and product pages: {{company_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "qualify",
+        nodeType: "llm",
+        title: "Qualify lead",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.2,
+          system_message: "You are a B2B sales qualification expert. Be specific and evidence-based — cite signals from the page.",
+          human_message: `Qualify {{company_name}} as a lead for: {{your_product}}
+ICP: {{icp}}
+
+Produce:
+
+## Fit Score: X/10
+One sentence rationale.
+
+## Company Snapshot
+- Industry:
+- Est. size:
+- Stage:
+- Geo:
+
+## Pain-Point Alignment
+Top 3 problems they likely have that {{your_product}} solves, with evidence from the page.
+
+## Budget Signals
+Any pricing page, enterprise mentions, funding, or hiring patterns that suggest budget.
+
+## Red Flags
+Any signals they're a poor fit (competitor product, wrong size, bad timing).
+
+## Recommended Next Action
+Specific outreach angle in 1-2 sentences.
+
+COMPANY URL: {{company_url}}
+
+PAGE CONTENT:
+{{fetch.result}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "job-description-writer": {
+    id: "job-description-writer",
+    kind: "workflow",
+    complexity: 1,
+    name: "Job Description Writer",
+    description: "Provide a role title, seniority, and key responsibilities; receive a polished JD with requirements, nice-to-haves, and a company blurb slot. Rung 1 — single LLM generation pass.",
+    goal: "Generate a publish-ready job description from a role brief",
+    useCases: [
+      "HR posting a new role quickly",
+      "startup founders hiring their first engineers",
+      "agencies writing JDs for client roles",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Job description",
+      fields: [
+        { name: "role_title", title: "Role title", description: "e.g. Senior Backend Engineer", required: true },
+        { name: "seniority", title: "Seniority level", description: "e.g. Junior / Mid / Senior / Staff / Director", required: true },
+        { name: "responsibilities", title: "Key responsibilities", description: "Bullet points or free text.", required: true },
+        { name: "stack_or_skills", title: "Required skills / stack", description: "e.g. Python, Postgres, AWS", required: false },
+        { name: "company_blurb", title: "Company blurb (optional)", description: "1-2 sentences about your company.", required: false },
+        { name: "location", title: "Location / remote policy", description: "e.g. Remote-first, Singapore", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "write_jd",
+        nodeType: "llm",
+        title: "Write job description",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.4,
+          system_message: "You are a senior HR writer who creates clear, attractive, bias-free job descriptions that top candidates want to apply to.",
+          human_message: `Write a publish-ready job description for:
+
+Role: {{role_title}} ({{seniority}})
+Location/Remote: {{location}}
+Skills/Stack: {{stack_or_skills}}
+
+Key responsibilities provided:
+{{responsibilities}}
+
+Company: {{company_blurb}}
+
+Output format:
+# {{role_title}}
+**Location:** {{location}}
+
+## About the Role
+[2-3 sentences selling the opportunity]
+
+## What you'll do
+[6-8 bullet responsibilities — concrete, action-led]
+
+## What we're looking for
+**Must have:**
+[4-6 bullets — hard requirements]
+
+**Nice to have:**
+[3-4 bullets — differentiators, not gates]
+
+## What we offer
+[4 bullets — compensation philosophy, growth, culture; leave blanks for the hiring team to fill]
+
+## About Us
+{{company_blurb}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "security-audit-email": {
+    id: "security-audit-email",
+    kind: "workflow",
+    complexity: 2,
+    name: "Security Audit → Email Report",
+    description: "Paste a list of URLs or describe a system scope; an LLM runs a surface-level security checklist and emails the findings report. Converted from n8n #10112. Rung 2 — web_retrieval probes public surfaces + LLM analysis + send_email.",
+    goal: "Generate a lightweight security audit report for a given domain/scope and email it",
+    useCases: [
+      "weekly security posture emails to a CTO",
+      "pre-launch security checklist for a new product",
+      "vendor security assessment from public signals",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Security audit",
+      fields: [
+        { name: "target_url", title: "Target URL or domain", description: "e.g. https://yourproduct.com", required: true },
+        { name: "scope", title: "Scope description", description: "What to check — e.g. 'public API endpoints, login page, headers'.", required: false },
+        { name: "recipient_email", title: "Recipient email", description: "Who gets the report.", required: true },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "probe",
+        nodeType: "web_retrieval",
+        title: "Probe public surface",
+        inputConfig: {
+          prompt: `Fetch the target URL and return: all HTTP response headers visible in the page source, any error messages, all form endpoints, any exposed API URLs, meta tags, and any security-relevant copy (privacy policy link, cookie notices, auth methods mentioned). Target: {{target_url}}`,
+          include_google_search: false,
+        },
+      },
+      {
+        name: "audit",
+        nodeType: "llm",
+        title: "Run security checklist",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.1,
+          system_message: "You are a security engineer writing a professional audit report. Base findings ONLY on the page content provided. Never fabricate CVEs or issues that aren't evidenced.",
+          human_message: `Run a surface-level security audit of {{target_url}}.
+Scope: {{scope}}
+
+Check and report on (based on the fetched content only):
+
+## Security Audit Report — {{target_url}}
+
+### ✅ Passed checks
+List what looks good (e.g. HTTPS enforced, HSTS visible, no stack traces, CSP header present).
+
+### ⚠️ Warnings (investigate further)
+Issues that are not confirmed vulnerabilities but warrant investigation.
+
+### 🔴 Findings
+Any definite issues visible from the public surface (exposed headers, error messages leaking info, missing security headers, mixed content, etc.). For each: severity (Low/Medium/High), description, recommendation.
+
+### Recommendations
+Top 3 actions to take this week, ordered by risk reduction.
+
+### Disclaimer
+This is a surface-level automated scan of public content only. It does not replace a professional penetration test.
+
+FETCHED CONTENT:
+{{probe.result}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "send",
+        nodeType: "send_email",
+        title: "Email report",
+        inputConfig: {
+          recipient_emails: ["{{recipient_email}}"],
+          cc_emails: [],
+          bcc_emails: [],
+          subject: "Security Audit Report — {{target_url}}",
+          body: "{{audit.content}}",
+          body_html: null,
+        },
+      },
+    ],
+  },
+
+  "email-classify-reply": {
+    id: "email-classify-reply",
+    kind: "workflow",
+    complexity: 1,
+    name: "Email Classify & Draft Reply",
+    description: "Paste an inbound email; the workflow classifies it (support / sales / spam / billing / other) and drafts a professional reply tailored to that category. Converted from n8n #10118. Rung 1 — two chained LLM passes.",
+    goal: "Classify an inbound email and draft a category-appropriate reply",
+    useCases: [
+      "support inbox triage and reply drafting",
+      "sales team handling inbound inquiries",
+      "reducing response time for high-volume email",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Email to classify",
+      fields: [
+        { name: "email_text", title: "Inbound email text", description: "Paste the email body.", required: true },
+        { name: "sender_name", title: "Sender name (optional)", required: false },
+        { name: "your_name", title: "Your name / sign-off name", required: true },
+        { name: "company_name", title: "Company name", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "classify",
+        nodeType: "llm",
+        title: "Classify email",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.1,
+          system_message: "You are an email classification engine. Output ONLY a JSON object, no prose.",
+          human_message: `Classify this inbound email and output ONLY valid JSON:
+{
+  "category": "support | sales_inquiry | billing | partnership | spam | other",
+  "urgency": "low | medium | high",
+  "sentiment": "positive | neutral | negative",
+  "primary_ask": "one sentence — what does the sender want?",
+  "tone_for_reply": "formal | friendly | apologetic | informative"
+}
+
+EMAIL:
+{{email_text}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "draft_reply",
+        nodeType: "llm",
+        title: "Draft reply",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.4,
+          system_message: "You are a professional email writer. Write in the tone specified. Keep replies concise and action-oriented.",
+          human_message: `Draft a professional reply to this email.
+
+Classification: {{classify.content}}
+Sender: {{sender_name}}
+Reply from: {{your_name}} at {{company_name}}
+
+Rules:
+- Match the tone_for_reply from the classification
+- Address the primary_ask directly in the first paragraph
+- If category is "support": acknowledge the issue, outline the next step
+- If category is "sales_inquiry": express interest, suggest a call, don't over-promise
+- If category is "billing": be precise, offer specific resolution path
+- If category is "spam": output only "SPAM — no reply recommended"
+- Close with a clear next action or question
+- Max 150 words
+
+ORIGINAL EMAIL:
+{{email_text}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "contract-reviewer": {
+    id: "contract-reviewer",
+    kind: "workflow",
+    complexity: 1,
+    name: "Contract Reviewer",
+    description: "Paste a contract or agreement text; receive a structured review: key clauses, red flags, missing protections, and a negotiation checklist. Rung 1 — single LLM review pass.",
+    goal: "Review a contract for risky clauses and missing protections",
+    useCases: [
+      "freelancer reviewing a client contract",
+      "startup reviewing vendor agreements",
+      "pre-legal-review screening of new contracts",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Contract review",
+      fields: [
+        { name: "contract_text", title: "Contract text", description: "Paste the full contract.", required: true },
+        { name: "party_role", title: "Your role in the contract", description: "e.g. 'Service Provider', 'Licensee', 'Employee'.", required: true },
+        { name: "jurisdiction", title: "Jurisdiction (optional)", description: "e.g. Singapore, California, UK.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "review",
+        nodeType: "llm",
+        title: "Review contract",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.1,
+          system_message: "You are a paralegal assistant. Identify risks clearly. Always note: 'This is not legal advice — consult a qualified lawyer before signing.'",
+          human_message: `Review this contract from the perspective of: {{party_role}}
+Jurisdiction: {{jurisdiction}}
+
+## Contract Review
+
+### Key Clauses Summary
+Bullet list of the 5-8 most important clauses (payment, termination, IP, liability, confidentiality, etc.) with a one-line plain-English explanation of each.
+
+### 🔴 Red Flags
+Clauses that are unusual, unfair, or risky for {{party_role}}. For each: clause name/location, what it says, and why it's a concern.
+
+### ⚠️ Missing Protections
+Standard clauses that are absent but should be present to protect {{party_role}}.
+
+### Negotiation Checklist
+5 specific asks to negotiate, ordered by importance.
+
+### Plain-English Summary
+2 paragraphs: what this contract commits {{party_role}} to, and what the other party commits to.
+
+---
+*Disclaimer: This is not legal advice. Consult a qualified lawyer before signing.*
+
+CONTRACT:
+{{contract_text}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "reddit-monitor": {
+    id: "reddit-monitor",
+    kind: "workflow",
+    complexity: 2,
+    name: "Reddit Topic Monitor",
+    description: "Fetches a subreddit or Reddit search URL and summarises the top discussions: sentiment, trending topics, common pain points, and opportunities. Rung 2 — web_retrieval + LLM analysis.",
+    goal: "Monitor Reddit discussions on a topic and extract actionable insights",
+    useCases: [
+      "tracking brand mentions or competitor mentions on Reddit",
+      "finding product pain points from user complaints",
+      "market research from organic discussion",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Reddit monitor",
+      fields: [
+        { name: "reddit_url", title: "Reddit URL", description: "Subreddit or search URL, e.g. https://reddit.com/r/startups/search?q=hiring&sort=new", required: true },
+        { name: "topic", title: "Topic / keyword focus", description: "What you're monitoring for, e.g. 'hiring tools'.", required: true },
+        { name: "your_product", title: "Your product (optional)", description: "Used to flag relevant opportunities.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch",
+        nodeType: "web_retrieval",
+        title: "Fetch Reddit page",
+        inputConfig: {
+          prompt: "Fetch and return all post titles, scores, and text content visible on this Reddit page: {{reddit_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "analyse",
+        nodeType: "llm",
+        title: "Analyse discussions",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.3,
+          system_message: "You are a market research analyst specialising in social listening. Be specific and cite examples from the posts.",
+          human_message: `Analyse these Reddit discussions on the topic: {{topic}}
+Your product (optional): {{your_product}}
+
+## Reddit Insights Report — {{topic}}
+
+### Overall Sentiment
+Positive / Neutral / Negative — with percentage breakdown and 1-2 example quotes.
+
+### Top 5 Trending Themes
+Bullet list — what are people talking about most?
+
+### Common Pain Points
+The top 3 frustrations or problems people are expressing (with example quotes).
+
+### Positive Signals
+What are people praising or recommending?
+
+### Opportunities for {{your_product}}
+3 specific ways to engage or position based on the discussions (or "N/A" if no product specified).
+
+### Notable Posts
+2-3 specific posts worth reading in full (title + why it's notable).
+
+FETCHED CONTENT:
+{{fetch.result}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "perf-review-drafter": {
+    id: "perf-review-drafter",
+    kind: "workflow",
+    complexity: 1,
+    name: "Performance Review Drafter",
+    description: "Provide employee achievements, areas to improve, and goals; receive a polished performance review ready to send. Converted from n8n #10105. Rung 1 — single structured LLM generation pass.",
+    goal: "Draft a professional performance review from bullet-point inputs",
+    useCases: [
+      "managers writing reviews faster",
+      "HR standardising review language across the org",
+      "self-review drafting for employees",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Performance review",
+      fields: [
+        { name: "employee_name", title: "Employee name", required: true },
+        { name: "role", title: "Role / position", required: true },
+        { name: "review_period", title: "Review period", description: "e.g. Q1 2025 or Jan–Jun 2025", required: true },
+        { name: "achievements", title: "Key achievements", description: "Bullet points of what they accomplished.", required: true },
+        { name: "areas_to_improve", title: "Areas to improve", description: "Bullet points of development areas.", required: true },
+        { name: "goals_next_period", title: "Goals for next period", description: "Bullet points.", required: false },
+        { name: "overall_rating", title: "Overall rating (optional)", description: "e.g. Exceeds / Meets / Below expectations, or a number.", required: false },
+        { name: "reviewer_name", title: "Reviewer name", required: true },
+        { name: "recipient_email", title: "HR/employee email (optional)", description: "If provided, the review will be emailed.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "draft",
+        nodeType: "llm",
+        title: "Draft review",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.3,
+          system_message: "You are an experienced HR professional. Write reviews that are specific, fair, constructive, and legally appropriate — avoid vague praise or harsh language.",
+          human_message: `Draft a performance review for:
+
+**Employee:** {{employee_name}} — {{role}}
+**Review Period:** {{review_period}}
+**Reviewer:** {{reviewer_name}}
+**Rating:** {{overall_rating}}
+
+**Achievements provided:**
+{{achievements}}
+
+**Areas to improve:**
+{{areas_to_improve}}
+
+**Next period goals:**
+{{goals_next_period}}
+
+Format:
+
+# Performance Review — {{employee_name}}
+**Role:** {{role}} | **Period:** {{review_period}} | **Reviewer:** {{reviewer_name}}
+{{overall_rating ? "**Overall Rating:** " + overall_rating : ""}}
+
+## Overall Assessment
+[2-3 sentences — balanced, honest summary]
+
+## Strengths & Achievements
+[4-6 bullet points — specific, cite deliverables or impact where possible]
+
+## Areas for Development
+[3-4 bullet points — constructive, paired with a suggested action for each]
+
+## Goals for {{review_period}} + 1
+[3-5 bullet SMART goals]
+
+## Manager's Note
+[1 short paragraph — personal, encouraging, forward-looking]`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "send",
+        nodeType: "send_email",
+        title: "Email review (if recipient provided)",
+        inputConfig: {
+          recipient_emails: ["{{recipient_email}}"],
+          cc_emails: [],
+          bcc_emails: [],
+          subject: "Performance Review — {{employee_name}} ({{review_period}})",
+          body: "{{draft.content}}",
+          body_html: null,
+        },
+      },
+    ],
+  },
+
+  "content-brief": {
+    id: "content-brief",
+    kind: "workflow",
+    complexity: 2,
+    name: "Content Brief from URL",
+    description: "Fetch a competitor article or source URL, then generate a full content brief: target audience, angle, outline, SEO keywords, and word count recommendation. Rung 2 — web_retrieval + LLM brief generation.",
+    goal: "Create a content brief for a new article based on an existing source or competitor piece",
+    useCases: [
+      "briefing writers to cover a topic better than a competitor",
+      "repurposing an existing article into a new format",
+      "SEO content planning from a source URL",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Content brief",
+      fields: [
+        { name: "source_url", title: "Source / competitor URL", description: "Article or page to base the brief on.", required: true },
+        { name: "target_audience", title: "Target audience", description: "e.g. 'CTOs at Series B startups'.", required: false },
+        { name: "content_goal", title: "Content goal", description: "e.g. 'rank for keyword X', 'generate leads', 'build authority'.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch",
+        nodeType: "web_retrieval",
+        title: "Fetch source article",
+        inputConfig: {
+          prompt: "Fetch the full article text, headings, and any visible metadata from this URL: {{source_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "brief",
+        nodeType: "llm",
+        title: "Generate content brief",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.4,
+          system_message: "You are a senior content strategist. Produce actionable briefs that a writer can follow without further clarification.",
+          human_message: `Create a content brief based on this source.
+
+Target audience: {{target_audience}}
+Content goal: {{content_goal}}
+Source URL: {{source_url}}
+
+## Content Brief
+
+### Working Title
+[Proposed title — SEO-friendly, compelling]
+
+### Target Audience
+[Specific description with pain points and knowledge level]
+
+### Content Angle
+[What makes OUR version better/different from the source? Unique angle in 1-2 sentences.]
+
+### Recommended Format & Length
+[Format: blog post / listicle / guide / comparison. Word count: X-Y words. Why.]
+
+### SEO Keywords
+- Primary: [keyword]
+- Secondary: [3-5 keywords]
+- LSI terms: [5 related terms]
+
+### Outline
+[H2s and H3s — full skeleton the writer follows]
+
+### Key Points to Cover
+[5-8 bullet points of must-have content — insights that outperform the source]
+
+### Do NOT include
+[What to avoid — clichés, outdated info, things the source got wrong]
+
+### Internal Links to Add
+[Placeholder — fill with your actual content URLs]
+
+SOURCE CONTENT:
+{{fetch.result}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "invoice-parser": {
+    id: "invoice-parser",
+    kind: "workflow",
+    complexity: 1,
+    name: "Invoice Text Parser",
+    description: "Paste invoice text and extract structured fields: vendor, date, line items, totals, due date, and payment terms. Converted from n8n #10029. Rung 1 — single LLM extraction pass, outputs JSON.",
+    goal: "Extract structured data from invoice text for accounting or ERP import",
+    useCases: [
+      "automating accounts-payable data entry",
+      "parsing PDF invoice text for ERP import",
+      "auditing invoice data before payment approval",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Invoice parser",
+      fields: [
+        { name: "invoice_text", title: "Invoice text", description: "Paste the extracted text from the invoice (from PDF copy-paste or OCR).", required: true },
+        { name: "currency", title: "Expected currency (optional)", description: "e.g. USD, SGD. Used to validate totals.", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "parse",
+        nodeType: "llm",
+        title: "Parse invoice",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.05,
+          system_message: "You are an accounts-payable assistant. Output ONLY valid JSON — no prose, no markdown fences. If a field is not found, set it to null.",
+          human_message: `Extract all invoice data and return ONLY valid JSON:
+{
+  "invoice_number": "string or null",
+  "invoice_date": "YYYY-MM-DD or null",
+  "due_date": "YYYY-MM-DD or null",
+  "vendor_name": "string or null",
+  "vendor_address": "string or null",
+  "vendor_email": "string or null",
+  "bill_to_name": "string or null",
+  "bill_to_address": "string or null",
+  "currency": "string",
+  "line_items": [
+    {"description": "string", "quantity": number_or_null, "unit_price": number_or_null, "amount": number}
+  ],
+  "subtotal": number_or_null,
+  "tax_rate": number_or_null,
+  "tax_amount": number_or_null,
+  "discount": number_or_null,
+  "total": number,
+  "payment_terms": "string or null",
+  "bank_details": "string or null",
+  "notes": "string or null"
+}
+
+Expected currency: {{currency}}
+
+INVOICE TEXT:
+{{invoice_text}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "changelog-writer": {
+    id: "changelog-writer",
+    kind: "workflow",
+    complexity: 1,
+    name: "Changelog Writer",
+    description: "Paste raw git commit messages or release notes; receive a user-facing changelog in Keep-a-Changelog format, grouped by type (Added / Changed / Fixed / Removed). Rung 1 — single LLM reformatting pass.",
+    goal: "Turn raw commits or dev notes into a polished user-facing changelog",
+    useCases: [
+      "writing release notes for product updates",
+      "turning git log into a changelog for a SaaS product",
+      "weekly dev-team updates for non-technical stakeholders",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Changelog",
+      fields: [
+        { name: "raw_commits", title: "Raw commits / dev notes", description: "Paste git log output or free-form dev notes.", required: true },
+        { name: "version", title: "Version number", description: "e.g. v2.4.1 or 2025-06-15", required: true },
+        { name: "product_name", title: "Product name", required: false },
+        { name: "audience", title: "Audience", description: "e.g. 'technical users', 'end users', 'both'", required: false, defaultValue: "end users" },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "write",
+        nodeType: "llm",
+        title: "Write changelog",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.3,
+          system_message: "You are a technical writer who translates developer jargon into clear, user-friendly release notes. Write for the specified audience. Never expose internal implementation details. Each entry is one concise action sentence.",
+          human_message: `Write a changelog for {{product_name}} {{version}}.
+Audience: {{audience}}
+
+Format (Keep-a-Changelog):
+
+# {{version}} — [date if found in commits, otherwise today]
+
+## Added
+- [New features — user-facing benefit, not implementation detail]
+
+## Changed
+- [Behaviour changes, UI updates, performance improvements]
+
+## Fixed
+- [Bug fixes — describe the symptom that was fixed, not the code change]
+
+## Removed
+- [Deprecated features removed]
+
+Rules:
+- Group only sections that have entries — omit empty sections
+- Each line starts with a verb in past tense (Added, Fixed, Improved, Removed)
+- Translate tech jargon to user language (e.g. "Fixed N+1 query" → "Fixed slow load times on the dashboard")
+- For a technical audience: keep technical precision but remove internal code references
+
+RAW COMMITS / NOTES:
+{{raw_commits}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "customer-feedback-digest": {
+    id: "customer-feedback-digest",
+    kind: "workflow",
+    complexity: 1,
+    name: "Customer Feedback Digest",
+    description: "Paste a batch of raw customer feedback (reviews, support tickets, survey responses); receive a categorised digest with themes, sentiment breakdown, top complaints, and product recommendations. Rung 1 — single LLM synthesis pass.",
+    goal: "Synthesise raw customer feedback into actionable insights",
+    useCases: [
+      "weekly voice-of-customer digest for the product team",
+      "analysing App Store / G2 / Trustpilot reviews in batch",
+      "summarising a support ticket backlog for a sprint planning",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Feedback digest",
+      fields: [
+        { name: "feedback_text", title: "Raw feedback", description: "Paste reviews, tickets, or survey responses — one per line or separated by ---.", required: true },
+        { name: "product_name", title: "Product name", required: false },
+        { name: "recipient_email", title: "Email to send digest (optional)", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "digest",
+        nodeType: "llm",
+        title: "Synthesise feedback",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.2,
+          system_message: "You are a product analyst. Produce structured, evidence-based insights. Quote specific feedback where helpful.",
+          human_message: `Analyse this customer feedback for {{product_name}} and produce a digest.
+
+## Customer Feedback Digest — {{product_name}}
+
+### Sentiment Breakdown
+Positive: X% | Neutral: Y% | Negative: Z%
+[2-3 sentence overall summary]
+
+### Top 5 Themes
+Ordered by frequency. For each: theme name, count/frequency signal, 1-2 representative quotes.
+
+### Top Complaints (Priority Order)
+1. [Complaint] — [frequency signal] — [example quote]
+(up to 5)
+
+### Top Praises
+What customers love most (up to 3 themes with quotes).
+
+### Product Recommendations
+3 specific product/UX changes suggested by the data, with supporting evidence from the feedback.
+
+### Anomalies / One-offs Worth Noting
+Any unusual feedback that doesn't fit the main themes but is worth flagging.
+
+RAW FEEDBACK:
+{{feedback_text}}`,
+          chat_history_id: null,
+        },
+      },
+      {
+        name: "send",
+        nodeType: "send_email",
+        title: "Email digest (if recipient provided)",
+        inputConfig: {
+          recipient_emails: ["{{recipient_email}}"],
+          cc_emails: [],
+          bcc_emails: [],
+          subject: "Customer Feedback Digest — {{product_name}}",
+          body: "{{digest.content}}",
+          body_html: null,
+        },
+      },
+    ],
+  },
+
+  "pricing-page-analyser": {
+    id: "pricing-page-analyser",
+    kind: "workflow",
+    complexity: 2,
+    name: "Pricing Page Analyser",
+    description: "Fetches a SaaS pricing page and returns a structured breakdown: tiers, price points, positioning, anchoring strategy, missing elements, and a conversion optimisation checklist. Rung 2 — web_retrieval + LLM analysis.",
+    goal: "Decode a SaaS pricing page and extract conversion insights",
+    useCases: [
+      "competitive pricing research",
+      "auditing your own pricing page before a redesign",
+      "understanding how a competitor structures value",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Pricing analysis",
+      fields: [
+        { name: "pricing_url", title: "Pricing page URL", description: "e.g. https://stripe.com/pricing", required: true },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch",
+        nodeType: "web_retrieval",
+        title: "Fetch pricing page",
+        inputConfig: {
+          prompt: "Fetch all pricing information from this page: plan names, prices, billing periods, features per tier, CTAs, and any enterprise / custom pricing mentions. URL: {{pricing_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "analyse",
+        nodeType: "llm",
+        title: "Analyse pricing",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.3,
+          system_message: "You are a SaaS pricing strategist. Be specific — cite actual prices, plan names, and feature lists from the page.",
+          human_message: `Analyse this SaaS pricing page: {{pricing_url}}
+
+## Pricing Analysis
+
+### Tiers Overview
+| Tier | Price | Billing | Target Customer |
+|------|-------|---------|-----------------|
+[one row per plan]
+
+### Pricing Psychology
+- Anchoring: [which plan is the anchor? How is it used?]
+- Decoy effect: [is there a decoy tier? Which one and why?]
+- Loss aversion: [what features are withheld to push upgrades?]
+- Free tier / trial: [structure and conversion goal]
+
+### Key Value Metrics
+What is the primary value metric they charge on? (seats / usage / features / revenue share / other)
+
+### What's Missing
+3 things that could improve conversion that are absent from the current page.
+
+### Positioning
+What market segment and buyer persona is this pricing designed for?
+
+### Conversion Optimisation Checklist
+5 specific improvements (copy, structure, social proof, CTA placement, etc.) ordered by expected impact.
+
+FETCHED CONTENT:
+{{fetch.result}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "onboarding-email-sequence": {
+    id: "onboarding-email-sequence",
+    kind: "workflow",
+    complexity: 1,
+    name: "Onboarding Email Sequence",
+    description: "Provide product details and user persona; generate a 5-email onboarding sequence (Day 0 to Day 14) with subject lines, body copy, and CTAs. Rung 1 — single structured LLM generation pass.",
+    goal: "Generate a complete 5-email onboarding sequence for a new user persona",
+    useCases: [
+      "SaaS onboarding for new sign-ups",
+      "e-commerce welcome sequences",
+      "B2B trial nurture campaigns",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "Onboarding sequence",
+      fields: [
+        { name: "product_name", title: "Product name", required: true },
+        { name: "product_description", title: "What the product does", description: "1-3 sentences.", required: true },
+        { name: "user_persona", title: "User persona", description: "e.g. 'freelance designer who just signed up for a free trial'.", required: true },
+        { name: "main_aha_moment", title: "Aha moment", description: "The single action that makes a user stick — e.g. 'first project created'.", required: false },
+        { name: "sender_name", title: "Sender name", required: false, defaultValue: "The Team" },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "write",
+        nodeType: "llm",
+        title: "Write sequence",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.5,
+          system_message: "You are an email copywriter specialising in SaaS onboarding. Write in a warm, direct, benefit-led tone. Each email has one job — never cram multiple CTAs.",
+          human_message: `Write a 5-email onboarding sequence for:
+
+Product: {{product_name}} — {{product_description}}
+User persona: {{user_persona}}
+Aha moment to drive toward: {{main_aha_moment}}
+Sender: {{sender_name}}
+
+Write exactly 5 emails:
+
+---
+## Email 1 — Day 0: Welcome
+**Subject:**
+**Preview text:**
+**Body:**
+[150-200 words. Goal: confirm sign-up, set expectations, soft CTA to the aha moment]
+**CTA:**
+
+---
+## Email 2 — Day 1: First Win
+**Subject:**
+**Preview text:**
+**Body:**
+[100-150 words. Goal: guide them to the aha moment with a specific how-to]
+**CTA:**
+
+---
+## Email 3 — Day 3: Value Proof
+**Subject:**
+**Preview text:**
+**Body:**
+[100-150 words. Goal: social proof + feature highlight that advances them past aha]
+**CTA:**
+
+---
+## Email 4 — Day 7: Overcome Friction
+**Subject:**
+**Preview text:**
+**Body:**
+[100-150 words. Goal: address the most common reason people don't stick at day 7]
+**CTA:**
+
+---
+## Email 5 — Day 14: Commitment
+**Subject:**
+**Preview text:**
+**Body:**
+[150 words. Goal: either upgrade CTA for trial users, or deepen engagement for free users]
+**CTA:**`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
+  "seo-meta-writer": {
+    id: "seo-meta-writer",
+    kind: "workflow",
+    complexity: 2,
+    name: "SEO Meta Writer",
+    description: "Fetch a page URL and generate optimised SEO title tags, meta descriptions, Open Graph copy, and Twitter card copy — all within character limits. Rung 2 — web_retrieval + LLM generation.",
+    goal: "Generate SEO meta tags and social sharing copy from a live page URL",
+    useCases: [
+      "updating meta tags for an existing page",
+      "generating social sharing copy for a blog post",
+      "SEO audit output for a content library",
+    ],
+    agents: [],
+    starterTasks: [],
+    workflowInputSchema: {
+      title: "SEO meta",
+      fields: [
+        { name: "page_url", title: "Page URL", required: true },
+        { name: "primary_keyword", title: "Primary keyword (optional)", description: "The main keyword to target.", required: false },
+        { name: "brand_name", title: "Brand name", required: false },
+      ],
+    },
+    workflowNodes: [
+      {
+        name: "fetch",
+        nodeType: "web_retrieval",
+        title: "Fetch page content",
+        inputConfig: {
+          prompt: "Fetch all visible text, headings, and existing meta tags from this URL: {{page_url}}",
+          include_google_search: false,
+        },
+      },
+      {
+        name: "generate",
+        nodeType: "llm",
+        title: "Generate SEO meta",
+        inputConfig: {
+          model: "agenticflow/gemma-4-31b-it",
+          temperature: 0.4,
+          system_message: "You are an SEO copywriter. Write within exact character limits. Include the primary keyword naturally. Never keyword-stuff.",
+          human_message: `Generate SEO meta tags for: {{page_url}}
+Primary keyword: {{primary_keyword}}
+Brand: {{brand_name}}
+
+## SEO Meta Output
+
+### Title Tags (pick the best one)
+Option A [50-60 chars]: [title]
+Option B [50-60 chars]: [title]
+Option C [50-60 chars]: [title]
+
+### Meta Descriptions (pick the best one)
+Option A [150-160 chars]: [description]
+Option B [150-160 chars]: [description]
+
+### Open Graph
+og:title [50-60 chars]: [title]
+og:description [200 chars max]: [description]
+og:type: website
+
+### Twitter Card
+twitter:title [50-60 chars]: [title]
+twitter:description [200 chars max]: [description]
+
+### H1 Recommendation
+Current H1 (if found): [paste from content]
+Suggested H1: [improved version with keyword]
+
+PAGE CONTENT:
+{{fetch.result}}`,
+          chat_history_id: null,
+        },
+      },
+    ],
+  },
+
   "api-summary": {
     id: "api-summary",
     kind: "workflow",
