@@ -143,7 +143,7 @@ export function workflowBlueprintToPayload(
         title: f.title ?? f.name,
         description: f.description ?? "",
         ui_metadata: {
-          type: "long_text",
+          type: f.uiMetadata?.type ?? "long_text",
           order: idx,
           value: f.defaultValue ?? null,
         },
