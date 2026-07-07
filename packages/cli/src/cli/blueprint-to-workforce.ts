@@ -196,15 +196,19 @@ export function blueprintToAgentSpecs(
       name: `${options.workforceName} — ${slot.title}`,
       project_id: options.projectId,
       tools: [],
-      model,
+      // Slot-pinned model wins over --model: JSON-router slots (planner/critic
+      // in desk topology) need a structured-output-native model regardless of
+      // what the user picked for the prose slots.
+      model: slot.modelOverride ?? model,
       description: `${slot.role} for "${blueprint.name}" workforce`,
-      system_prompt: buildSystemPrompt(blueprint, slot),
+      system_prompt: slot.systemPromptOverride ?? buildSystemPrompt(blueprint, slot),
       // Match Tier 1 — 100 is the server-side cap and the safe ceiling for
       // research/content/multi-step agents. Prevents the `completed_empty`
       // outcome on deeper investigations without any per-run tuning.
       recursion_limit: 100,
     };
     if (plugins.length > 0) body["plugins"] = plugins;
+    if (slot.responseFormat) body["response_format"] = slot.responseFormat;
     return { slotKey: slot.role, slot, body };
   });
 }
@@ -472,6 +476,314 @@ export function buildAgentWiredGraph(
     edges.push({
       source_node_name: coordinatorNodeName,
       target_node_name: "output",
+      connection_type: "next_step",
+    });
+  }
+
+  return { nodes, edges };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Desk topology — plan → (optional workflow route) → execute → QA gate →
+// revise → editor. The verified high-autonomy pattern (2026-07-07).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface DeskGraphOptions {
+  /**
+   * Deployed workflow to attach as the desk's deterministic execution route.
+   * When set, the planner can route suitable missions through this workflow
+   * instead of open-ended research. REQUIREMENT: the workflow must have
+   * `public_runnable: true` — the desk invokes it via the
+   * `call_other_workflow` engine node, which executes through the anonymous
+   * workflow-run path and rejects non-public-runnable workflows with
+   * "Workflow is not public runnable".
+   */
+  toolWorkflowId?: string;
+  /** One-line purpose of the attached workflow, surfaced to the planner so it can route accurately. */
+  toolWorkflowPurpose?: string;
+  /**
+   * JSON *string* template for the attached workflow's input. May reference
+   * planner output, e.g.:
+   *   '{"ticker": "{{nodes.agent_planner.output.structured_output.workflow_input_primary}}"}'
+   * Defaults to '{"message": "<mission summary ref>"}'. Passed verbatim as
+   * `workflow_input` (call_other_workflow expects a JSON-encoded string, not
+   * an object).
+   */
+  toolWorkflowInputTemplate?: string;
+}
+
+/**
+ * Build the desk-topology graph. Slot roles MUST include: planner (with a
+ * structured `route` field), researcher (web-equipped; doubles as reviser),
+ * critic (with structured `approved`/`feedback`), editor.
+ *
+ * MAS graph rules this builder encodes (all field-verified — see
+ * `af playbook mas-graph-building` for the full list):
+ *   - Node output refs need the `.output` hop: `{{nodes.<name>.output.last_message}}`,
+ *     `{{nodes.<name>.output.structured_output.<field>}}`. Wrong refs render as
+ *     EMPTY STRINGS (no error), so templating mistakes fail silently.
+ *   - Cross-branch state goes through state_modifier nodes writing
+ *     `variables.<x>` and readers using `{{variables.<x>}}`.
+ *   - Condition-node outgoing edges use connection_type "condition" with
+ *     `{branch_index: N}`; `-1` is the default/else branch.
+ *   - Whole-workflow invocation uses a `plugin` node wrapping
+ *     `call_other_workflow` (workflow_input as JSON string; result lands at
+ *     `{{nodes.<name>.output.output.workflow_output.content}}`).
+ */
+export function buildDeskGraph(
+  blueprint: CompanyBlueprint,
+  specs: AgentSpec[],
+  agentIdBySlot: Record<string, string>,
+  options: DeskGraphOptions = {},
+): { nodes: WorkforceSchema["nodes"][number][]; edges: WorkforceSchema["edges"][number][] } {
+  const byRole = (role: string): AgentSpec => {
+    const spec = specs.find((s) => s.slotKey === role);
+    if (!spec) throw new Error(`Desk topology requires a "${role}" slot in blueprint "${blueprint.id}".`);
+    return spec;
+  };
+  const idFor = (role: string): string => {
+    const id = agentIdBySlot[role];
+    if (!id) throw new Error(`Missing agent_id for desk slot "${role}"`);
+    return id;
+  };
+  const planner = byRole("planner");
+  const researcher = byRole("researcher");
+  const critic = byRole("critic");
+  const editor = byRole("editor");
+  const plannerNode = slotToNodeName(planner.slot);
+  const researcherNode = slotToNodeName(researcher.slot);
+  const criticNode = slotToNodeName(critic.slot);
+  const editorNode = slotToNodeName(editor.slot);
+  const hasWorkflow = Boolean(options.toolWorkflowId);
+
+  const GRID_X = 300;
+  const GRID_Y = 170;
+
+  // Planner is told, at the graph level, whether a workflow route exists —
+  // keeps the agent's system prompt deployment-agnostic.
+  const deskContext = hasWorkflow
+    ? `Desk context: a deterministic brief workflow IS attached (purpose: ${
+        options.toolWorkflowPurpose ?? "produce a standard brief for a suitable mission"
+      }). Choose route='workflow' when the mission fits that purpose; put its main input value in workflow_input_primary (and secondary if needed). Otherwise route='research'.`
+    : `Desk context: NO workflow is attached to this desk — always choose route='research'.`;
+
+  const workflowInputTemplate =
+    options.toolWorkflowInputTemplate ??
+    `{"message": "{{nodes.${plannerNode}.output.structured_output.mission_summary}}"}`;
+
+  const nodes: WorkforceSchema["nodes"][number][] = [
+    {
+      name: "trigger",
+      type: "trigger",
+      position: { x: 0, y: GRID_Y * 2 },
+      input: {},
+      meta: {
+        source_blueprint: blueprint.id,
+        blueprint_name: blueprint.name,
+        blueprint_goal: blueprint.goal,
+        topology: "desk",
+        attached_workflow_id: options.toolWorkflowId ?? null,
+      },
+    },
+    {
+      name: plannerNode,
+      type: "agent",
+      position: { x: GRID_X, y: GRID_Y * 2 },
+      input: {
+        agent_id: idFor("planner"),
+        message: `Mission from the user:\n\n{{trigger.message}}\n\n${deskContext}`,
+        thread_option: "create_new",
+      },
+      meta: { role: "planner", title: planner.slot.title },
+    },
+    {
+      name: researcherNode,
+      type: "agent",
+      position: { x: GRID_X * 2, y: GRID_Y * 3 },
+      input: {
+        agent_id: idFor("researcher"),
+        message: `Research this mission. Plan from the desk planner (JSON):\n\n{{nodes.${plannerNode}.output.last_message}}\n\nAnswer every research question with sourced, current evidence.`,
+        thread_option: "create_new",
+      },
+      meta: { role: "researcher", title: researcher.slot.title },
+    },
+    {
+      name: "save_research_draft",
+      type: "state_modifier",
+      position: { x: GRID_X * 3, y: GRID_Y * 3 },
+      input: {
+        name: "variables.draft",
+        value: `{{nodes.${researcherNode}.output.last_message}}`,
+        reducer: "set",
+      },
+    },
+    {
+      name: criticNode,
+      type: "agent",
+      position: { x: GRID_X * 4, y: GRID_Y * 2 },
+      input: {
+        agent_id: idFor("critic"),
+        message: `Mission plan (JSON):\n{{nodes.${plannerNode}.output.last_message}}\n\nDraft to review:\n{{variables.draft}}`,
+        thread_option: "create_new",
+      },
+      meta: { role: "critic", title: critic.slot.title },
+    },
+    {
+      name: "qa_gate",
+      type: "condition",
+      position: { x: GRID_X * 5, y: GRID_Y * 2 },
+      input: {
+        branches: [
+          {
+            description: "Critic approved — ship to editor",
+            logic: "and",
+            conditions: [
+              {
+                operator: "BooleanEquals",
+                left: `{{nodes.${criticNode}.output.structured_output.approved}}`,
+                right: true,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      name: "agent_reviser",
+      type: "agent",
+      position: { x: GRID_X * 6, y: GRID_Y * 3 },
+      // Same agent as the researcher, different node: the desk's revision
+      // pass. Receives the failed draft + the critic's itemized feedback.
+      input: {
+        agent_id: idFor("researcher"),
+        message: `Your earlier draft did not pass review. Revise it.\n\nOriginal draft:\n{{variables.draft}}\n\nCritic verdict (JSON):\n{{nodes.${criticNode}.output.last_message}}\n\nFix every point of feedback and fill every missing item, using your web tools where new evidence is needed. Return the full revised draft.`,
+        thread_option: "create_new",
+      },
+      meta: { role: "researcher", title: `${researcher.slot.title} (revision pass)` },
+    },
+    {
+      name: "save_revised_draft",
+      type: "state_modifier",
+      position: { x: GRID_X * 7, y: GRID_Y * 3 },
+      input: {
+        name: "variables.draft",
+        value: `{{nodes.agent_reviser.output.last_message}}`,
+        reducer: "set",
+      },
+    },
+    {
+      name: editorNode,
+      type: "agent",
+      position: { x: GRID_X * 8, y: GRID_Y * 2 },
+      input: {
+        agent_id: idFor("editor"),
+        message: `Compose the final deliverable.\n\nMission plan (JSON):\n{{nodes.${plannerNode}.output.last_message}}\n\nLatest draft:\n{{variables.draft}}\n\nCritic verdict (JSON):\n{{nodes.${criticNode}.output.last_message}}`,
+        thread_option: "create_new",
+      },
+      meta: { role: "editor", title: editor.slot.title },
+    },
+    {
+      name: "output",
+      type: "output",
+      position: { x: GRID_X * 9, y: GRID_Y * 2 },
+      input: { message: `{{nodes.${editorNode}.output.last_message}}` },
+    },
+  ];
+
+  const edges: WorkforceSchema["edges"][number][] = [
+    { source_node_name: "trigger", target_node_name: plannerNode, connection_type: "next_step" },
+    { source_node_name: researcherNode, target_node_name: "save_research_draft", connection_type: "next_step" },
+    { source_node_name: "save_research_draft", target_node_name: criticNode, connection_type: "next_step" },
+    { source_node_name: criticNode, target_node_name: "qa_gate", connection_type: "next_step" },
+    {
+      source_node_name: "qa_gate",
+      target_node_name: editorNode,
+      connection_type: "condition",
+      connection_config: { branch_index: 0 },
+    },
+    {
+      source_node_name: "qa_gate",
+      target_node_name: "agent_reviser",
+      connection_type: "condition",
+      connection_config: { branch_index: -1 },
+    },
+    { source_node_name: "agent_reviser", target_node_name: "save_revised_draft", connection_type: "next_step" },
+    { source_node_name: "save_revised_draft", target_node_name: editorNode, connection_type: "next_step" },
+    { source_node_name: editorNode, target_node_name: "output", connection_type: "next_step" },
+  ];
+
+  if (hasWorkflow) {
+    // route_gate between planner and the two execution branches.
+    nodes.splice(2, 0, {
+      name: "route_gate",
+      type: "condition",
+      position: { x: GRID_X * 1.5, y: GRID_Y * 2 },
+      input: {
+        branches: [
+          {
+            description: "Planner chose the deterministic workflow route",
+            logic: "and",
+            conditions: [
+              {
+                operator: "StringEquals",
+                left: `{{nodes.${plannerNode}.output.structured_output.route}}`,
+                right: "workflow",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    nodes.push(
+      {
+        name: "run_workflow",
+        // `plugin` + call_other_workflow is the supported whole-workflow
+        // invocation path from a workforce. workflow_input MUST be a JSON
+        // string (the node parses it), and the target workflow MUST be
+        // public_runnable.
+        type: "plugin",
+        position: { x: GRID_X * 2, y: GRID_Y },
+        input: {
+          node_type_name: "call_other_workflow",
+          node_input: {
+            workflow_id: options.toolWorkflowId,
+            workflow_input: workflowInputTemplate,
+          },
+          connection: null,
+        },
+      },
+      {
+        name: "save_workflow_draft",
+        type: "state_modifier",
+        position: { x: GRID_X * 3, y: GRID_Y },
+        input: {
+          name: "variables.draft",
+          value: `{{nodes.run_workflow.output.output.workflow_output.content}}`,
+          reducer: "set",
+        },
+      },
+    );
+    edges.push(
+      { source_node_name: plannerNode, target_node_name: "route_gate", connection_type: "next_step" },
+      {
+        source_node_name: "route_gate",
+        target_node_name: "run_workflow",
+        connection_type: "condition",
+        connection_config: { branch_index: 0 },
+      },
+      {
+        source_node_name: "route_gate",
+        target_node_name: researcherNode,
+        connection_type: "condition",
+        connection_config: { branch_index: -1 },
+      },
+      { source_node_name: "run_workflow", target_node_name: "save_workflow_draft", connection_type: "next_step" },
+      { source_node_name: "save_workflow_draft", target_node_name: criticNode, connection_type: "next_step" },
+    );
+  } else {
+    edges.push({
+      source_node_name: plannerNode,
+      target_node_name: researcherNode,
       connection_type: "next_step",
     });
   }

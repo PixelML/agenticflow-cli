@@ -6342,9 +6342,12 @@ export function createProgram(): Command {
     .option("--model <model>", "Model to use for all agent slots (default: agenticflow/gemini-2.0-flash). Pass --include-optional-slots to fill every slot", "agenticflow/gemini-2.0-flash")
     .option("--include-optional-slots", "Also create agents for slots marked optional in the blueprint")
     .option("--skeleton-only", "Create a skeleton (trigger + output + blueprint metadata) WITHOUT materializing agents. The v1.5 behavior; use when you plan to wire agents yourself")
+    .option("--tool-workflow-id <id>", "Desk-topology blueprints only (e.g. autonomous-desk): attach a deployed workflow as the desk's deterministic execution route. The workflow MUST be public_runnable (af workflow update ... '{\"public_runnable\":true}'), or the run fails with 'Workflow is not public runnable'.")
+    .option("--tool-workflow-purpose <text>", "One-line purpose of the attached workflow — the planner uses it to decide when to route missions through the workflow.")
+    .option("--tool-workflow-input <json>", "JSON *string* template for the attached workflow's input, may reference planner output, e.g. '{\"ticker\": \"{{nodes.agent_planner.output.structured_output.workflow_input_primary}}\"}'. Defaults to '{\"message\": \"<mission summary ref>\"}'.")
     .option("--dry-run", "Show the graph + agent specs that would be created without writing")
     .action(async (opts) => {
-      const { blueprintToWorkforce, blueprintToAgentSpecs, buildAgentWiredGraph } = await import(
+      const { blueprintToWorkforce, blueprintToAgentSpecs, buildAgentWiredGraph, buildDeskGraph } = await import(
         "./blueprint-to-workforce.js"
       );
       const blueprint = getBlueprint(opts.blueprint as string);
@@ -6427,23 +6430,51 @@ export function createProgram(): Command {
         includeOptionalSlots: Boolean(opts.includeOptionalSlots),
       });
 
+      // Desk-topology plumbing. --tool-workflow-id is only meaningful for
+      // topology "desk"; star blueprints reject it early so the flag never
+      // silently no-ops.
+      const isDesk = blueprint.topology === "desk";
+      if (!isDesk && opts.toolWorkflowId) {
+        fail(
+          "invalid_option_value",
+          `--tool-workflow-id is only supported by desk-topology blueprints (blueprint "${blueprint.id}" is "${blueprint.topology ?? "star"}").`,
+          "Use --blueprint autonomous-desk, or drop the flag.",
+        );
+      }
+      const deskOptions = {
+        toolWorkflowId: opts.toolWorkflowId as string | undefined,
+        toolWorkflowPurpose: opts.toolWorkflowPurpose as string | undefined,
+        toolWorkflowInputTemplate: opts.toolWorkflowInput as string | undefined,
+      };
+      const buildGraph = (agentIdBySlot: Record<string, string>) =>
+        isDesk
+          ? buildDeskGraph(blueprint, specs, agentIdBySlot, deskOptions)
+          : buildAgentWiredGraph(blueprint, specs, agentIdBySlot);
+
       if (opts.dryRun) {
-        // Show plan without side effects
+        // Show plan without side effects. Building with placeholder ids gives
+        // exact node/edge counts (and validates desk slot-role requirements)
+        // without creating anything.
+        const placeholderIds = Object.fromEntries(specs.map((s) => [s.slotKey, "dry-run-agent-id"]));
+        const previewGraph = buildGraph(placeholderIds);
         const plan = {
           schema: "agenticflow.dry_run.v1",
           valid: true,
           target: "workforce.init",
           mode: "full",
+          topology: isDesk ? "desk" : "star",
           blueprint: blueprint.id,
           workforce: { name: workforceName, description: blueprint.description },
           agents_to_create: specs.map((s) => ({
             slot_role: s.slotKey,
             title: s.slot.title,
             model: s.body["model"],
+            structured_output: Boolean(s.body["response_format"]),
             preview_system_prompt: (s.body["system_prompt"] as string).slice(0, 120) + "…",
           })),
-          estimated_node_count: specs.length + 2, // + trigger + output
-          estimated_edge_count: specs.length + 1, // trigger→coordinator + coordinator→{workers,output}
+          estimated_node_count: previewGraph.nodes.length,
+          estimated_edge_count: previewGraph.edges.length,
+          attached_workflow_id: deskOptions.toolWorkflowId ?? null,
         };
         printResult(plan);
         return;
@@ -6475,7 +6506,7 @@ export function createProgram(): Command {
         }
 
         // 3. Build the fully-wired graph + PUT schema
-        const graph = buildAgentWiredGraph(blueprint, specs, agentIdBySlot);
+        const graph = buildGraph(agentIdBySlot);
         await client.workforces.putSchema(workforceId, graph, { workspaceId: opts.workspaceId });
 
         // 4. Return structured deploy report
@@ -6484,6 +6515,8 @@ export function createProgram(): Command {
           workforce_id: workforceId,
           blueprint: blueprint.id,
           mode: "full",
+          topology: isDesk ? "desk" : "star",
+          attached_workflow_id: deskOptions.toolWorkflowId ?? null,
           node_count: graph.nodes.length,
           edge_count: graph.edges.length,
           skeleton: false,
