@@ -14,6 +14,21 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.8",
+    date: "2026-07-07",
+    highlights: [
+      "NEW blueprint `batch-research-desk` — the first loop-topology workforce: a Planner splits any multi-target mission into targets[], a loop node runs a web-equipped Researcher once per target, and an Editor composes the comparative digest. Verified end-to-end against live production runs",
+      "`af workforce init` now putSchemas TWICE for graphs with parented nodes (loop bodies) — the bulk endpoint resolves parent_node_name against pre-existing nodes only, so parent+child created in one pass would otherwise lose the link",
+      "Playbook `mas-graph-building` gains Rule 8: loop-node contract (body subgraphs need >=2 nodes + internal edge, loop→child entry / child→loop exit edges, {{loop_item.*}} + loop variables seed + loop_output collection, NO_CYCLES warnings are cosmetic for loop bodies)",
+    ],
+    for_ai: [
+      "For multi-target missions ('brief me on each of N competitors/tickers/prospects'), deploy `af workforce init --blueprint batch-research-desk --json` — the loop primitive is pre-wired",
+      "Hand-authoring a loop: body nodes carry parent_node_name; add an edge loop→first_child (becomes START) and last_child→loop (becomes END); pass global context via the loop's `variables` seed because subgraphs cannot see root nodes; collect per-iteration results via loop_output and read them at {{nodes.<loop>.output.loop_results.<key>}}",
+      "If a hand-deployed loop graph errors 'Workforce has no nodes'/'no edges' at RUN time despite a clean deploy, the parent link was dropped — run `af workforce deploy` with the same body twice",
+      "`af workforce validate` reporting NO_CYCLES on exactly the loop entry/internal/exit edges is expected for loop bodies — the engine rewrites those edges as START/END in the nested graph",
+    ],
+  },
+  {
     version: "1.10.7",
     date: "2026-07-07",
     highlights: [

@@ -155,8 +155,12 @@ export interface CompanyBlueprint {
    *                          planner/critic drive condition gates; state_modifier nodes
    *                          merge branch drafts into `{{variables.draft}}`. The verified
    *                          high-autonomy pattern (see `af playbook mas-graph-building`).
+   *   "batch"              — plan → loop over N targets (researcher per target) →
+   *                          editor digest → output. The planner's structured `targets[]`
+   *                          feeds a loop node; each iteration researches one target via
+   *                          `{{loop_item.target}}`; results collect through loop_output.
    */
-  topology?: "star" | "desk";
+  topology?: "star" | "desk" | "batch";
   /**
    * Per-user-facing use cases this blueprint supports. Surfaced in `af bootstrap` so
    * an AI operator can pick the right blueprint without reading descriptions.
@@ -28022,6 +28026,80 @@ PAGE CONTENT:
         plugins: [],
         systemPromptOverride: [
           "You are the editor of an autonomous research desk. You receive: the mission plan, the latest draft, and the critic's verdict/feedback. Produce the final deliverable in clean markdown: an executive summary (3 bullets max), findings organized under the plan's research questions, a risks/caveats section incorporating the critic's unresolved concerns, and a next-steps list. If anything remains unverified, say so plainly — flag it for human attention rather than papering over it. End with a one-line provenance note naming which desk roles contributed.",
+        ].join("\n"),
+      },
+    ],
+    starterTasks: [],
+  },
+  "batch-research-desk": {
+    id: "batch-research-desk",
+    tier: 3,
+    topology: "batch",
+    name: "Batch Research Desk",
+    description:
+      "A multi-target research desk built on the MAS loop node: a Planner splits any multi-target mission (competitors, tickers, prospects, products) into discrete targets plus one shared research question, a loop runs a web-equipped Researcher once per target, and an Editor composes the per-target mini-briefs into a single comparative digest. The first blueprint to exercise the loop primitive — iteration templating, loop variables, and loop_output collection all pre-wired.",
+    goal: "Turn one multi-target mission into a comparative digest with a researched mini-brief per target",
+    useCases: [
+      "brief me on each of N competitors / tickers / prospects",
+      "batch due-diligence sweeps with one shared question per target",
+      "demonstrating MAS loop topology (array iteration, loop_item templating)",
+    ],
+    agents: [
+      {
+        role: "planner",
+        title: "Batch Planner",
+        description:
+          "Splits a multi-target mission into discrete targets and one shared per-target research question. Its structured `targets[]` array feeds the loop node.",
+        plugins: [],
+        modelOverride: "agenticflow/gpt-4o-mini",
+        systemPromptOverride: [
+          "You are the planning brain of a batch research desk. The user's mission covers MULTIPLE targets (companies, tickers, products, prospects, competitors...).",
+          "",
+          "Extract each distinct target as its own list entry, write ONE shared research question template that should be answered PER target (phrase it so it applies to any single target), capture the mission lens/constraints, and write a crisp mission summary.",
+        ].join("\n"),
+        responseFormat: {
+          enable: true,
+          prompt: "Return the batch plan as JSON.",
+          schema: {
+            name: "batch_plan",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                targets: { type: "array", items: { type: "string" } },
+                per_target_question: { type: "string" },
+                mission_lens: { type: "string" },
+                mission_summary: { type: "string" },
+              },
+              required: ["targets", "per_target_question", "mission_lens", "mission_summary"],
+            },
+          },
+        },
+      },
+      {
+        role: "researcher",
+        title: "Target Researcher",
+        description:
+          "Researches ONE target per loop iteration with live web evidence, producing a focused, cited mini-brief.",
+        plugins: [{ nodeTypeName: "web_search" }, { nodeTypeName: "web_retrieval" }],
+        systemPromptOverride: [
+          "You are the per-target researcher of a batch research desk. Each invocation gives you exactly ONE target plus a shared research question and a mission lens.",
+          "",
+          "Use web_search and web_retrieval to gather current, sourced evidence for YOUR target only — never answer from memory alone, never research other targets. Cite source names/URLs inline, separate facts from interpretation, flag anything you could not verify, and keep it a focused mini-brief.",
+          "",
+          "Your first action is a tool call — never 'I will await...'.",
+        ].join("\n"),
+      },
+      {
+        role: "editor",
+        title: "Digest Editor",
+        description: "Composes the per-target mini-briefs into one comparative digest.",
+        plugins: [],
+        systemPromptOverride: [
+          "You are the editor of a batch research desk. You receive a mission plan and a LIST of per-target mini-briefs (one per target, in order).",
+          "",
+          "Produce one digest in clean markdown: an executive summary that COMPARES the targets against the mission lens, then one section per target (preserving citations), then a combined next-steps list. If any target's brief is thin or missing, say so plainly rather than papering over it. End with a one-line provenance note.",
         ].join("\n"),
       },
     ],
