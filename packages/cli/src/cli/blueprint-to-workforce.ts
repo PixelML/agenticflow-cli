@@ -790,3 +790,168 @@ export function buildDeskGraph(
 
   return { nodes, edges };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Batch topology — plan → loop(one researcher pass per target) → editor digest.
+// First topology to exercise the MAS loop node (verified live 2026-07-07).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Build the batch-topology graph. Slot roles MUST include: planner (structured
+ * `targets[]` + `per_target_question` + `mission_lens`), researcher, editor.
+ *
+ * Loop-node rules this builder encodes (all field-verified — see
+ * `af playbook mas-graph-building`):
+ *   - Loop body nodes carry `parent_node_name: <loop node>`. The body is a
+ *     nested subgraph and needs >= 2 nodes with >= 1 internal edge — a single
+ *     child fails the engine's edge check.
+ *   - Body ENTRY is an edge loop → first child (engine rewrites it to START
+ *     inside the subgraph); body EXIT is an edge last child → loop (rewritten
+ *     to END). `af workforce validate` flags these exact edges as NO_CYCLES —
+ *     expected and cosmetic for loop bodies; the engine handles them specially.
+ *   - Each iteration exposes `{{loop_item.<variable_name>}}` and
+ *     `{{loop_iteration}}`. The body CANNOT see root-graph nodes — global
+ *     context must be passed via the loop's `variables` seed (substituted
+ *     against global state when the loop node parses its input), then read as
+ *     `{{variables.<x>}}` inside the body.
+ *   - `loop_output` maps collect per-iteration refs (evaluated against the
+ *     body sub-state) into lists, read downstream at
+ *     `{{nodes.<loop>.output.loop_results.<key>}}`.
+ *   - DEPLOY NOTE: the bulk schema update resolves `parent_node_name` against
+ *     pre-existing nodes only, so a child created in the same pass as its
+ *     parent loses the link. Callers must putSchema TWICE (the second pass
+ *     re-links via the update branch). `af workforce init` does this
+ *     automatically for graphs containing parented nodes.
+ */
+export function buildBatchGraph(
+  blueprint: CompanyBlueprint,
+  specs: AgentSpec[],
+  agentIdBySlot: Record<string, string>,
+): { nodes: WorkforceSchema["nodes"][number][]; edges: WorkforceSchema["edges"][number][] } {
+  const byRole = (role: string): AgentSpec => {
+    const spec = specs.find((s) => s.slotKey === role);
+    if (!spec) throw new Error(`Batch topology requires a "${role}" slot in blueprint "${blueprint.id}".`);
+    return spec;
+  };
+  const idFor = (role: string): string => {
+    const id = agentIdBySlot[role];
+    if (!id) throw new Error(`Missing agent_id for batch slot "${role}"`);
+    return id;
+  };
+  const planner = byRole("planner");
+  const researcher = byRole("researcher");
+  const editor = byRole("editor");
+  const plannerNode = slotToNodeName(planner.slot);
+  const editorNode = slotToNodeName(editor.slot);
+
+  const GRID_X = 300;
+  const GRID_Y = 200;
+
+  const nodes: WorkforceSchema["nodes"][number][] = [
+    {
+      name: "trigger",
+      type: "trigger",
+      position: { x: 0, y: GRID_Y },
+      input: {},
+      meta: {
+        source_blueprint: blueprint.id,
+        blueprint_name: blueprint.name,
+        blueprint_goal: blueprint.goal,
+        topology: "batch",
+      },
+    },
+    {
+      name: plannerNode,
+      type: "agent",
+      position: { x: GRID_X, y: GRID_Y },
+      input: {
+        agent_id: idFor("planner"),
+        message: "Mission from the user:\n\n{{trigger.message}}",
+        thread_option: "create_new",
+      },
+      meta: { role: "planner", title: planner.slot.title },
+    },
+    {
+      name: "batch_loop",
+      type: "loop",
+      position: { x: GRID_X * 2, y: GRID_Y },
+      input: {
+        loop_type: "array",
+        loop_arrays: [
+          {
+            variable_name: "target",
+            array: `{{nodes.${plannerNode}.output.structured_output.targets}}`,
+          },
+        ],
+        loop_output: {
+          briefs: "{{nodes.target_researcher.output.last_message}}",
+        },
+        // Global context the body can't otherwise reach (subgraphs don't see
+        // root nodes) — substituted against global state at loop start.
+        variables: {
+          question: `{{nodes.${plannerNode}.output.structured_output.per_target_question}}`,
+          lens: `{{nodes.${plannerNode}.output.structured_output.mission_lens}}`,
+        },
+      },
+    },
+    {
+      name: "target_researcher",
+      type: "agent",
+      position: { x: GRID_X * 2, y: GRID_Y * 2 },
+      parent_node_name: "batch_loop",
+      input: {
+        agent_id: idFor("researcher"),
+        message:
+          "Research ONE target of a batch mission.\n\nTarget: {{loop_item.target}}\n\nQuestion to answer for this target:\n{{variables.question}}\n\nLens/constraints: {{variables.lens}}\n\nUse your web tools; cite sources; keep it a focused mini-brief on THIS target only.",
+        thread_option: "create_new",
+      },
+      meta: { role: "researcher", title: researcher.slot.title },
+    },
+    {
+      // Second body node: loop subgraphs need >= 2 nodes and >= 1 internal
+      // edge; also keeps the latest brief readable inside the body.
+      name: "save_target_brief",
+      type: "state_modifier",
+      position: { x: GRID_X * 3, y: GRID_Y * 2 },
+      parent_node_name: "batch_loop",
+      input: {
+        name: "variables.last_brief",
+        value: "{{nodes.target_researcher.output.last_message}}",
+        reducer: "set",
+      },
+    },
+    {
+      name: editorNode,
+      type: "agent",
+      position: { x: GRID_X * 3, y: GRID_Y },
+      input: {
+        agent_id: idFor("editor"),
+        message: `Compose one digest deliverable from a batch research run.\n\nMission plan (JSON):\n{{nodes.${plannerNode}.output.last_message}}\n\nPer-target mini-briefs (list, one per target, in order):\n{{nodes.batch_loop.output.loop_results.briefs}}\n\nStructure: executive summary comparing the targets, then one section per target, then a combined next-steps list.`,
+        thread_option: "create_new",
+      },
+      meta: { role: "editor", title: editor.slot.title },
+    },
+    {
+      name: "output",
+      type: "output",
+      position: { x: GRID_X * 4, y: GRID_Y },
+      input: { message: `{{nodes.${editorNode}.output.last_message}}` },
+    },
+  ];
+
+  const edges: WorkforceSchema["edges"][number][] = [
+    { source_node_name: "trigger", target_node_name: plannerNode, connection_type: "next_step" },
+    { source_node_name: plannerNode, target_node_name: "batch_loop", connection_type: "next_step" },
+    // Body entry (engine → START inside the subgraph)
+    { source_node_name: "batch_loop", target_node_name: "target_researcher", connection_type: "next_step" },
+    // Body internal
+    { source_node_name: "target_researcher", target_node_name: "save_target_brief", connection_type: "next_step" },
+    // Body exit (engine → END inside the subgraph)
+    { source_node_name: "save_target_brief", target_node_name: "batch_loop", connection_type: "next_step" },
+    // After-loop continuation at root
+    { source_node_name: "batch_loop", target_node_name: editorNode, connection_type: "next_step" },
+    { source_node_name: editorNode, target_node_name: "output", connection_type: "next_step" },
+  ];
+
+  return { nodes, edges };
+}

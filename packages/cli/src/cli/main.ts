@@ -6347,7 +6347,7 @@ export function createProgram(): Command {
     .option("--tool-workflow-input <json>", "JSON *string* template for the attached workflow's input, may reference planner output, e.g. '{\"ticker\": \"{{nodes.agent_planner.output.structured_output.workflow_input_primary}}\"}'. Defaults to '{\"message\": \"<mission summary ref>\"}'.")
     .option("--dry-run", "Show the graph + agent specs that would be created without writing")
     .action(async (opts) => {
-      const { blueprintToWorkforce, blueprintToAgentSpecs, buildAgentWiredGraph, buildDeskGraph } = await import(
+      const { blueprintToWorkforce, blueprintToAgentSpecs, buildAgentWiredGraph, buildDeskGraph, buildBatchGraph } = await import(
         "./blueprint-to-workforce.js"
       );
       const blueprint = getBlueprint(opts.blueprint as string);
@@ -6433,11 +6433,12 @@ export function createProgram(): Command {
       // Desk-topology plumbing. --tool-workflow-id is only meaningful for
       // topology "desk"; star blueprints reject it early so the flag never
       // silently no-ops.
-      const isDesk = blueprint.topology === "desk";
+      const topology = blueprint.topology ?? "star";
+      const isDesk = topology === "desk";
       if (!isDesk && opts.toolWorkflowId) {
         fail(
           "invalid_option_value",
-          `--tool-workflow-id is only supported by desk-topology blueprints (blueprint "${blueprint.id}" is "${blueprint.topology ?? "star"}").`,
+          `--tool-workflow-id is only supported by desk-topology blueprints (blueprint "${blueprint.id}" is "${topology}").`,
           "Use --blueprint autonomous-desk, or drop the flag.",
         );
       }
@@ -6447,9 +6448,11 @@ export function createProgram(): Command {
         toolWorkflowInputTemplate: opts.toolWorkflowInput as string | undefined,
       };
       const buildGraph = (agentIdBySlot: Record<string, string>) =>
-        isDesk
+        topology === "desk"
           ? buildDeskGraph(blueprint, specs, agentIdBySlot, deskOptions)
-          : buildAgentWiredGraph(blueprint, specs, agentIdBySlot);
+          : topology === "batch"
+            ? buildBatchGraph(blueprint, specs, agentIdBySlot)
+            : buildAgentWiredGraph(blueprint, specs, agentIdBySlot);
 
       if (opts.dryRun) {
         // Show plan without side effects. Building with placeholder ids gives
@@ -6462,7 +6465,7 @@ export function createProgram(): Command {
           valid: true,
           target: "workforce.init",
           mode: "full",
-          topology: isDesk ? "desk" : "star",
+          topology,
           blueprint: blueprint.id,
           workforce: { name: workforceName, description: blueprint.description },
           agents_to_create: specs.map((s) => ({
@@ -6508,6 +6511,13 @@ export function createProgram(): Command {
         // 3. Build the fully-wired graph + PUT schema
         const graph = buildGraph(agentIdBySlot);
         await client.workforces.putSchema(workforceId, graph, { workspaceId: opts.workspaceId });
+        // Graphs with parented nodes (loop bodies) need a second identical
+        // putSchema: the bulk endpoint resolves parent_node_name against
+        // pre-existing nodes only, so parent+child created in one pass lose
+        // the link — the second pass re-links via the update branch.
+        if (graph.nodes.some((n) => (n as { parent_node_name?: string | null }).parent_node_name)) {
+          await client.workforces.putSchema(workforceId, graph, { workspaceId: opts.workspaceId });
+        }
 
         // 4. Return structured deploy report
         printResult({
@@ -6515,7 +6525,7 @@ export function createProgram(): Command {
           workforce_id: workforceId,
           blueprint: blueprint.id,
           mode: "full",
-          topology: isDesk ? "desk" : "star",
+          topology,
           attached_workflow_id: deskOptions.toolWorkflowId ?? null,
           node_count: graph.nodes.length,
           edge_count: graph.edges.length,
