@@ -55,6 +55,36 @@ export interface AgentSlot {
    * (e.g. parallel-research: coordinator → 2 researchers → synthesizer → output).
    */
   isSynthesizer?: boolean;
+  /**
+   * Structured-output (JSON mode) config for this slot's agent. Passed to
+   * agent create as `response_format`. MUST follow the server contract
+   * exactly (verified live 2026-07-07):
+   *
+   *   { enable: true, prompt: "...", schema: { name, strict: true, schema: {...} } }
+   *
+   * — the inner OpenAI-style `{name, schema}` wrapper is REQUIRED (bare JSON
+   * schema → 400 "Schema is missing required fields {'schema','name'}"), and
+   * the inner schema needs `"additionalProperties": false` on EVERY object
+   * level or agent calls fail at runtime inside MAS runs (opaquely on
+   * non-OpenAI models). Slots with responseFormat feed the MAS agent node's
+   * `structured_output`, which condition gates can route on via
+   * `{{nodes.<name>.output.structured_output.<field>}}`.
+   */
+  responseFormat?: Record<string, unknown>;
+  /**
+   * Pin this slot to a specific model regardless of the user's `--model`.
+   * Use for JSON-router slots: structured-output-native models
+   * (gpt-4o-mini class) parse strict schemas reliably AND surface real
+   * provider errors when a schema is wrong; routing decisions don't need a
+   * frontier model.
+   */
+  modelOverride?: string;
+  /**
+   * Verbatim system prompt for this slot, bypassing buildSystemPrompt().
+   * Use when the slot's behavior is load-bearing for the graph (e.g. a
+   * planner whose JSON `route` field drives a condition gate).
+   */
+  systemPromptOverride?: string;
 }
 
 /**
@@ -117,6 +147,16 @@ export interface CompanyBlueprint {
    * Prefer `kind` + `complexity` for new blueprints.
    */
   tier?: 1 | 2 | 3;
+  /**
+   * Workforce graph topology (kind "workforce" only):
+   *   "star" (default)     — coordinator fans out to workers; optional synthesizer fan-in.
+   *   "desk"               — plan → (optional workflow route) → execute → critic QA gate →
+   *                          approve/revise loop → editor → output. Structured-output
+   *                          planner/critic drive condition gates; state_modifier nodes
+   *                          merge branch drafts into `{{variables.draft}}`. The verified
+   *                          high-autonomy pattern (see `af playbook mas-graph-building`).
+   */
+  topology?: "star" | "desk";
   /**
    * Per-user-facing use cases this blueprint supports. Surfaced in `af bootstrap` so
    * an AI operator can pick the right blueprint without reading descriptions.
@@ -27857,6 +27897,132 @@ PAGE CONTENT:
         description: "You are a writer, not a coder. Read Researcher A's report and Researcher B's report (both provided in your input, separated by '---'). Write a clear, structured prose answer that merges both angles. Cite each fact with (Researcher A) or (Researcher B). If a researcher's section looks empty or placeholder-like (e.g. 'I will await...', short stub text), note that the angle is missing in your answer — do not fabricate content for it. Output plain markdown, no code blocks, no function definitions.",
         plugins: [],
         isSynthesizer: true,
+      },
+    ],
+    starterTasks: [],
+  },
+  "autonomous-desk": {
+    id: "autonomous-desk",
+    tier: 3,
+    topology: "desk",
+    name: "Autonomous Research Desk",
+    description:
+      "A self-correcting mission desk: a Planner decomposes any mission into a structured plan, a web-equipped Researcher executes it, a Critic QA-gates the draft against the plan, rejected drafts loop through a revision pass automatically, and an Editor ships the final deliverable. Optionally routes suitable missions through a deterministic workflow (pass --tool-workflow-id) instead of open-ended research — the workflow gives a cheap repeatable baseline, agent judgment is spent only on the delta. Demonstrates every MAS composition primitive: structured-output routing, condition gates, state_modifier branch-merging, workflow-in-workforce, and autonomous revision.",
+    goal: "Turn any mission into a verified deliverable with zero human involvement after the trigger",
+    useCases: [
+      "research missions that need built-in quality control",
+      "briefs that should reuse a deterministic workflow when one fits",
+      "demonstrating high-autonomy MAS patterns (plan → route → verify → revise)",
+    ],
+    agents: [
+      {
+        role: "planner",
+        title: "Planner",
+        description:
+          "Decomposes the mission into a structured plan and picks the execution route. Its JSON `route` field drives the desk's condition gate.",
+        plugins: [],
+        // Routers must be structured-output-native and cheap — see AgentSlot.modelOverride doc.
+        modelOverride: "agenticflow/gpt-4o-mini",
+        systemPromptOverride: [
+          "You are the planning brain of an autonomous research desk. Given any mission from the user, decompose it and decide the execution route.",
+          "",
+          "Routes:",
+          "- 'workflow' — the mission fits the desk's attached deterministic brief workflow (only choose this when the mission context notes a workflow is attached, and the mission matches its purpose).",
+          "- 'research' — everything else: open-ended questions, comparisons, landscape analysis.",
+          "",
+          "Always produce: a crisp mission summary, the route, workflow_input values when route=workflow (empty strings otherwise), and 3-5 concrete research questions a specialist should answer. Judge everything through any lens/constraints the mission states.",
+        ].join("\n"),
+        responseFormat: {
+          enable: true,
+          prompt: "Return the plan as JSON.",
+          schema: {
+            name: "mission_plan",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                route: { type: "string", enum: ["workflow", "research"] },
+                mission_summary: { type: "string" },
+                workflow_input_primary: {
+                  type: "string",
+                  description: "Primary input value for the attached workflow (e.g. a ticker, URL, or company name). Empty string when route=research.",
+                },
+                workflow_input_secondary: {
+                  type: "string",
+                  description: "Secondary input value for the attached workflow. Empty string when unused.",
+                },
+                mission_lens: {
+                  type: "string",
+                  description: "The perspective/constraints the mission implies (e.g. 'conservative long-term watchlist').",
+                },
+                research_questions: { type: "array", items: { type: "string" } },
+              },
+              required: [
+                "route",
+                "mission_summary",
+                "workflow_input_primary",
+                "workflow_input_secondary",
+                "mission_lens",
+                "research_questions",
+              ],
+            },
+          },
+        },
+      },
+      {
+        role: "researcher",
+        title: "Researcher",
+        description:
+          "Executes the plan with live web evidence. Also serves as the desk's reviser: when the Critic rejects a draft, this agent receives the draft + itemized feedback and repairs it with fresh research.",
+        plugins: [{ nodeTypeName: "web_search" }, { nodeTypeName: "web_retrieval" }],
+        systemPromptOverride: [
+          "You are the research specialist of an autonomous research desk. You receive either (a) a mission plan with research questions, or (b) a draft that failed review plus the critic's itemized feedback.",
+          "",
+          "For (a): use web_search and web_retrieval to gather current, sourced evidence for every research question — never answer from memory alone. Structure your answer per question, cite source names/URLs inline, separate facts from interpretation, and flag anything you could not verify.",
+          "For (b): fix every point of feedback and fill every missing item, using your tools where new evidence is needed. Return the FULL revised draft, not a diff.",
+          "",
+          "Your first action when evidence is needed is a tool call — never 'I will await...'. Be thorough but concise.",
+        ].join("\n"),
+      },
+      {
+        role: "critic",
+        title: "Critic",
+        description:
+          "Adversarial QA gate. Scores the draft against the mission plan; its JSON `approved` field drives the desk's revise-or-ship gate.",
+        plugins: [],
+        modelOverride: "agenticflow/gpt-4o-mini",
+        systemPromptOverride: [
+          "You are an adversarial reviewer on an autonomous research desk. You receive a mission plan and a draft research result. Try to find real flaws: unanswered research questions, unsupported claims, missing risks, stale or thin evidence, advice-like language that should be observational. Approve only work you would forward to an executive. Score 1-10; approved=true only when score >= 7. Always give concrete, actionable feedback — the reviser will apply it verbatim.",
+        ].join("\n"),
+        responseFormat: {
+          enable: true,
+          prompt: "Return the verdict as JSON.",
+          schema: {
+            name: "review_verdict",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                approved: { type: "boolean" },
+                quality_score: { type: "integer" },
+                feedback: { type: "string" },
+                missing_items: { type: "array", items: { type: "string" } },
+              },
+              required: ["approved", "quality_score", "feedback", "missing_items"],
+            },
+          },
+        },
+      },
+      {
+        role: "editor",
+        title: "Editor",
+        description: "Synthesizes the final deliverable from plan + draft + critic verdict.",
+        plugins: [],
+        systemPromptOverride: [
+          "You are the editor of an autonomous research desk. You receive: the mission plan, the latest draft, and the critic's verdict/feedback. Produce the final deliverable in clean markdown: an executive summary (3 bullets max), findings organized under the plan's research questions, a risks/caveats section incorporating the critic's unresolved concerns, and a next-steps list. If anything remains unverified, say so plainly — flag it for human attention rather than papering over it. End with a one-line provenance note naming which desk roles contributed.",
+        ].join("\n"),
       },
     ],
     starterTasks: [],

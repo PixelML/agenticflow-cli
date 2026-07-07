@@ -14,6 +14,22 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.10.7",
+    date: "2026-07-07",
+    highlights: [
+      "NEW blueprint `autonomous-desk` — the first desk-topology workforce: Planner → route gate → (deterministic workflow | web Researcher) → Critic QA gate → automatic revision pass → Editor. Deploys 4 agents + a fully wired graph in one `af workforce init` call, verified end-to-end against live production runs",
+      "`af workforce init` gains `--tool-workflow-id`, `--tool-workflow-purpose`, and `--tool-workflow-input` (desk topology only) — attach a deployed workflow as the desk's deterministic execution route. The workflow must be public_runnable",
+      "NEW playbook `mas-graph-building` — the field-verified rulebook for hand-authored workforce graphs: templating (`.output` hop, silent empty-string failure mode), condition/branch_index edges, state_modifier branch merging, structured-output schema contract, workflow-in-workforce invocation via plugin/call_other_workflow",
+      "Blueprint slots can now pin models (`modelOverride`), carry verbatim system prompts (`systemPromptOverride`), and declare structured output (`responseFormat`) — desk routers ship pinned to gpt-4o-mini with strict JSON schemas",
+    ],
+    for_ai: [
+      "For any mission-with-quality-control ask ('research X and verify it', 'self-correcting team'), deploy `af workforce init --blueprint autonomous-desk --json` instead of hand-authoring the graph — every field-verified MAS rule is already applied",
+      "BEFORE hand-authoring or editing any workforce graph, read `af playbook mas-graph-building`. The #1 trap: node refs need the `.output` hop ({{nodes.X.output.last_message}}) — wrong refs render as EMPTY STRINGS, not errors, so smoke-run once and check node_start.node_input in the event stream",
+      "Structured-output agents: response_format.schema needs the {name, strict, schema} wrapper AND additionalProperties:false on every object level, or the agent fails at runtime inside MAS runs. Pin router agents to gpt-4o-mini-class models",
+      "To invoke a deployed workflow from a workforce graph, use a plugin node wrapping call_other_workflow (workflow_input is a JSON STRING; target workflow must be public_runnable) — prefer it over the raw tool node",
+    ],
+  },
+  {
     version: "1.10.5",
     date: "2026-04-18",
     highlights: [
