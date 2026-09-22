@@ -179,6 +179,10 @@ describe("buildAgentWiredGraph — full deploy graph wiring (v1.6)", () => {
       const specs = blueprintToAgentSpecs(bp, {
         projectId: "p",
         workforceName: "T",
+        // Tier 3 Jev blueprints intentionally require a PixelML connection.
+        // Resolve it here so this generic graph round-trip test exercises the
+        // full deploy path without depending on a user's local credentials.
+        connectionsByCategory: { pixelml: "pixelml-test-connection" },
       });
       const ids = Object.fromEntries(specs.map((s, i) => [s.slotKey, `agent-${i + 1}`]));
       const graph = buildAgentWiredGraph(bp, specs, ids);
