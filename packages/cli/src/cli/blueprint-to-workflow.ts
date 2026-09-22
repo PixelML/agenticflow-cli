@@ -242,8 +242,15 @@ export function workflowBlueprintToPayload(
   }
 
   const rawSchema = blueprint.workflowInputJsonSchema;
+  const rawTitle = typeof rawSchema?.title === "string" ? rawSchema.title : schemaTitle;
+  const rawRequired = Array.isArray(rawSchema?.required) && rawSchema.required.every((value) => typeof value === "string")
+    ? (rawSchema.required as string[])
+    : required;
+  const rawProperties = rawSchema?.properties && typeof rawSchema.properties === "object"
+    ? (rawSchema.properties as Record<string, unknown>)
+    : properties;
   const inputSchema = rawSchema
-    ? { ...rawSchema, type: "object" as const, title: rawSchema.title ?? schemaTitle, required: rawSchema.required ?? required, properties: rawSchema.properties ?? properties }
+    ? { ...rawSchema, type: "object" as const, title: rawTitle, required: rawRequired, properties: rawProperties }
     : { type: "object" as const, title: schemaTitle, required, properties };
   const payload: WorkflowCreatePayload = {
     name: options.workflowName ?? blueprint.name,
