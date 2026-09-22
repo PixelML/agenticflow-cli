@@ -163,7 +163,7 @@ export function workflowBlueprintToPayload(
       required,
       properties,
     },
-    output_mapping: {},
+    output_mapping: blueprint.workflowOutputMapping ?? {},
   };
 
   // Build a concrete run example using the first required input field from

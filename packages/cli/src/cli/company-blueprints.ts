@@ -24,13 +24,17 @@
  *   tier 3 = kind "workforce" + complexity 6
  */
 
+import type { WorkflowInputConfig } from "./ai-node-config.js";
+
 export interface AgentPluginSpec {
   /** Node type name (e.g. "web_search", "agenticflow_generate_image"). */
   nodeTypeName: string;
   /** Optional pre-set input values (reduces what the LLM has to decide). */
   input?: Record<string, { value: unknown; description?: string }>;
   /** Whether the plugin needs a connection. If omitted, the CLI auto-discovers. */
-  connectionCategory?: "pixelml" | "none";
+  connectionCategory?: string;
+  /** Explicit connection ID/name/reference. null intentionally disables resolution. */
+  connection?: string | null;
 }
 
 export interface AgentSlot {
@@ -92,21 +96,25 @@ export interface AgentSlot {
  * `WorkflowNodeCreateDTO` shape but only the fields a blueprint needs to
  * preset at deploy time.
  */
-export interface WorkflowNodeSpec {
+export interface WorkflowNodeSpec<T extends string = string> {
   /** Stable handle for wiring (node names in input_config templates). */
   name: string;
   /** Node type (e.g. "llm", "web_retrieval", "api_call"). */
-  nodeType: string;
+  nodeType: T;
   /** Human-readable title shown in the UI. */
   title?: string;
   /** What this node does — shown on hover in the builder. */
   description?: string;
   /** Input config passed to the node runner. Values may use `{{trigger.X}}` or `{{nodes.Y.output.Z}}` templates. */
-  inputConfig?: Record<string, unknown>;
+  inputConfig?: WorkflowInputConfig<T>;
   /** Optional output mapping. Usually unset — defaults work. */
   outputMapping?: Record<string, unknown> | null;
   /** Optional grid position — auto-assigned if omitted. */
   position?: { x: number; y: number };
+  /** Explicit connection ID/name/reference. null intentionally disables resolution. */
+  connection?: string | null;
+  /** Resolve a workspace connection by category; "none" disables resolution. */
+  connectionCategory?: string;
 }
 
 /** Explicit edge between two workflow nodes. */
@@ -172,8 +180,12 @@ export interface CompanyBlueprint {
   agents: AgentSlot[];
   /** Workflow-kind blueprints define nodes directly (no agent slots). */
   workflowNodes?: WorkflowNodeSpec[];
+  /** Named outputs returned by the workflow, including mapped AI Switch outputs. */
+  workflowOutputMapping?: Record<string, string>;
   /** Workflow-kind blueprints may specify explicit edges (otherwise sequential wiring is assumed). */
   workflowEdges?: WorkflowEdgeSpec[];
+  /** Optional raw input schema for faithful imports (preserves titles, descriptions, and UI metadata). */
+  workflowInputJsonSchema?: Record<string, unknown>;
   /** Workflow-kind blueprints may expose named input fields to the trigger. */
   workflowInputSchema?: {
     title?: string;
