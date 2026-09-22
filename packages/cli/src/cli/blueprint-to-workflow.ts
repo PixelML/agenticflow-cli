@@ -175,10 +175,17 @@ function serializeInlineWorkflowBranch(
 ): unknown {
   if (!value || typeof value !== "object") return value;
   const branch = value as Record<string, unknown>;
+  const serialized = { ...branch };
   if (branch.inline_workflow) {
-    return { ...branch, inline_workflow: serializeInlineWorkflow(branch.inline_workflow, resolveConnection) };
+    serialized.inline_workflow = serializeInlineWorkflow(branch.inline_workflow, resolveConnection);
   }
-  return branch;
+  // The canonical fallback DTO nests its target under `destination`; branch
+  // DTOs keep destination fields at the branch level. Support both shapes so
+  // portable blueprints can be serialized without hard-coded IDs.
+  if (branch.destination && typeof branch.destination === "object") {
+    serialized.destination = serializeInlineWorkflowBranch(branch.destination, resolveConnection);
+  }
+  return serialized;
 }
 
 /**

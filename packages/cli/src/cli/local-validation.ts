@@ -143,7 +143,9 @@ function validateDecisionConfig(value: unknown, issues: LocalValidationIssue[], 
     const qPath = `${path}.questions.${questionId}`;
     if (!AI_ID_PATTERN.test(questionId)) addIssue(issues, qPath, "invalid question id");
     if (!validateObject(rawQuestion, issues, qPath, true)) continue;
-    validateString(rawQuestion["instructions"], issues, `${qPath}.instructions`, { required: true, minLength: 1 });
+    if (!isDecisionValue(rawQuestion["instructions"])) {
+      addIssue(issues, `${qPath}.instructions`, "must be a non-null string, object, or array");
+    }
     const type = rawQuestion["type"];
     if (type !== "choice" && type !== "score" && type !== "noul") { addIssue(issues, `${qPath}.type`, "must be choice, score, or noul"); continue; }
     const criteria = rawQuestion["criteria"];
@@ -161,7 +163,15 @@ function validateDecisionConfig(value: unknown, issues: LocalValidationIssue[], 
         if (criteria.length < 2 || criteria.length > 10) addIssue(issues, `${qPath}.criteria`, "must contain 2 to 10 levels");
         criteria.forEach((item, index) => { if (!isDecisionValue(item) || item === null) addIssue(issues, `${qPath}.criteria[${index}]`, "must be a string, object, or array"); });
       }
-    } else if (criteria != null && !isRecord(criteria)) addIssue(issues, `${qPath}.criteria`, "must be null or an object");
+    } else if (criteria != null) {
+      if (!isRecord(criteria)) addIssue(issues, `${qPath}.criteria`, "must be null or an object");
+      else {
+        for (const [key, item] of Object.entries(criteria)) {
+          if (key !== "true" && key !== "false") addIssue(issues, `${qPath}.criteria.${key}`, "must be true or false");
+          if (!isDecisionValue(item)) addIssue(issues, `${qPath}.criteria.${key}`, "must be a string, object, or array");
+        }
+      }
+    }
   }
   if (value["schema_version"] != null && value["schema_version"] !== 1) addIssue(issues, `${path}.schema_version`, "must be 1");
   if (value["billing_mode"] != null && !["pixelml", "byok", "agenticflow"].includes(String(value["billing_mode"]))) addIssue(issues, `${path}.billing_mode`, "invalid billing mode");
@@ -414,6 +424,24 @@ function validateDestination(value: unknown, issues: LocalValidationIssue[], pat
   if (value["output_mapping"] != null) validateStringMap(value["output_mapping"], issues, path + ".output_mapping");
 }
 
+function validateFallback(value: unknown, issues: LocalValidationIssue[], path: string): void {
+  if (!validateObject(value, issues, path, true)) return;
+  if (value["id"] != null && value["id"] !== "fallback") addIssue(issues, path + ".id", "must be fallback");
+  if (value["action"] !== "skip" && value["action"] !== "workflow") {
+    addIssue(issues, path + ".action", "must be skip or workflow");
+    return;
+  }
+  if (value["destination"] != null) validateDestination(value["destination"], issues, path + ".destination", value["action"] === "workflow");
+  // Older checked-in blueprints used destination fields directly on fallback.
+  // Continue validating that shape while the registry migrates to the live DTO.
+  const legacyDestinationKeys = ["workflow_id", "inline_workflow", "input_mapping", "output_mapping"];
+  if (value["destination"] == null && legacyDestinationKeys.some((key) => key in value)) {
+    if (value["action"] === "workflow") validateDestination(value, issues, path, true);
+  } else if (value["action"] === "workflow" && value["destination"] == null) {
+    addIssue(issues, path + ".destination", "is required for workflow fallback");
+  }
+}
+
 function validateAiNodeInput(nodeType: string, value: Record<string, unknown>, issues: LocalValidationIssue[], path: string): void {
   if (isAiDecisionNode(nodeType)) { validateDecisionConfig(value, issues, path); return; }
   if (!isAiSwitchNode(nodeType)) return;
@@ -435,9 +463,6 @@ function validateAiNodeInput(nodeType: string, value: Record<string, unknown>, i
       validateDestination(rawBranch, issues, bPath, true);
     });
   }
-  if (!validateObject(value["fallback"], issues, path + ".fallback", true)) return;
-  const fallback = value["fallback"] as Record<string, unknown>;
-  if (fallback["action"] !== "skip" && fallback["action"] !== "workflow") addIssue(issues, path + ".fallback.action", "must be skip or workflow");
-  if (fallback["action"] === "workflow") validateDestination(fallback, issues, path + ".fallback", true);
+  validateFallback(value["fallback"], issues, path + ".fallback");
   if (value["timeout_seconds"] != null) validateNumber(value["timeout_seconds"], issues, path + ".timeout_seconds", { min: 1, integer: true });
 }

@@ -8,11 +8,12 @@ export type AiSwitchNodeType =
   | "typesafe_ai_switch"
   | "agenticflow_ai_switch";
 
-export type AiDecisionScalar = string | Record<string, unknown> | unknown[] | null;
+export type AiDecisionValue = string | Record<string, unknown> | unknown[];
+export type AiDecisionScalar = AiDecisionValue | null;
 export type AiDecisionQuestion =
-  | { type: "choice"; instructions: string; criteria: Record<string, AiDecisionScalar> }
-  | { type: "score"; instructions: string; criteria: AiDecisionScalar[] }
-  | { type: "noul"; instructions: string; criteria?: { true?: AiDecisionScalar; false?: AiDecisionScalar } | null };
+  | { type: "choice"; instructions: AiDecisionValue; criteria: Record<string, AiDecisionScalar> }
+  | { type: "score"; instructions: AiDecisionValue; criteria: AiDecisionValue[] }
+  | { type: "noul"; instructions: AiDecisionValue; criteria?: { true?: AiDecisionValue; false?: AiDecisionValue } | null };
 
 export interface AiDecisionInputConfig extends Record<string, unknown> {
   state: string | Record<string, unknown> | unknown[];
@@ -52,9 +53,14 @@ export interface AiSwitchBranch extends AiSwitchDestination {
 export type AiSwitchFallback = {
   id?: "fallback";
   action: "workflow" | "skip";
+  destination?: AiSwitchDestination | null;
+  /** @deprecated Use `destination.workflow_id`; retained for older blueprints. */
   workflow_id?: string | null;
+  /** @deprecated Use `destination.inline_workflow`; retained for older blueprints. */
   inline_workflow?: AiSwitchInlineWorkflow | null;
+  /** @deprecated Use `destination.input_mapping`; retained for older blueprints. */
   input_mapping?: Record<string, unknown>;
+  /** @deprecated Use `destination.output_mapping`; retained for older blueprints. */
   output_mapping?: Record<string, string>;
 };
 
