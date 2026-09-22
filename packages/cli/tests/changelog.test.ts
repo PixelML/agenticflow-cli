@@ -47,7 +47,7 @@ describe("changelog", () => {
 
     it("returns the correct version", () => {
       const latest = getLatestChangelog();
-      expect(latest.version).toBe("1.11.0");
+      expect(latest.version).toBe("1.11.1");
     });
   });
 
@@ -59,16 +59,16 @@ describe("changelog", () => {
     });
 
     it("returns only the latest entry when given the latest version", () => {
-      const since = getChangelogSince("1.11.0");
+      const since = getChangelogSince("1.11.1");
       // When version is found at index 0, returns [CHANGELOG[0]]
       expect(since.length).toBe(1);
-      expect(since[0]!.version).toBe("1.11.0");
+      expect(since[0]!.version).toBe("1.11.1");
     });
 
     it("returns only the latest entry for non-existent version (before all)", () => {
       const since = getChangelogSince("0.0.1");
       expect(since.length).toBe(1);
-      expect(since[0]!.version).toBe("1.11.0");
+      expect(since[0]!.version).toBe("1.11.1");
     });
 
     it("returns entries between two known versions", () => {

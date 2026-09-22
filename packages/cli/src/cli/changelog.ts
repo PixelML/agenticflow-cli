@@ -14,6 +14,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.11.1",
+    date: "2026-09-22",
+    highlights: [
+      "FIX npm CLI release publication to use the repository's configured npm Trusted Publishing OIDC flow",
+    ],
+    for_ai: [
+      "Install @pixelml/agenticflow-cli@1.11.1 or newer to use the Jev decision and switch blueprints with the corrected release metadata",
+    ],
+  },
+  {
     version: "1.11.0",
     date: "2026-09-22",
     highlights: [

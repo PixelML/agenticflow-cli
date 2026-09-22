@@ -2,7 +2,7 @@
 
 Command-line interface for the [AgenticFlow](https://agenticflow.ai) platform. Build workflows, agents, and multi-agent workforces. Designed as the **API contract for AI agents** — Ishi (AgenticFlow's first-party desktop agent), Claude Code, OpenAI Codex, Cursor, Gemini CLI, and other compatible hosts all drive AgenticFlow through this CLI.
 
-Current version: **1.11.0**. Built on [`@pixelml/agenticflow-sdk@1.6.0`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
+Current version: **1.11.1**. Built on [`@pixelml/agenticflow-sdk@1.6.0`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
 
 ## Install
 
