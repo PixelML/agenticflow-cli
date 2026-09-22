@@ -103,10 +103,9 @@ describe("local payload validation", () => {
             decision_config: validDecision,
             branches: [{
               id: "standard", question_id: "route", option_id: "a", threshold: null, operator: "gte", min_confidence: 0.8,
-              destination: {
-                inline_workflow: { nodes: [{ name: "draft", node_type_name: "pml_llm", input_config: { model: "pixelml/gpt-4.1-mini" } }], output_mapping: { result: "{{draft.content}}" } },
-                input_mapping: {}, output_mapping: { result: "/result" },
-              },
+              workflow_id: null,
+              inline_workflow: { nodes: [{ name: "draft", node_type_name: "pml_llm", input_config: { model: "pixelml/gpt-4.1-mini" } }], output_mapping: { result: "{{draft.content}}" } },
+              input_mapping: {}, output_mapping: { result: "/result" },
             }],
             fallback: { action: "skip" },
           },
