@@ -155,6 +155,7 @@ export function blueprintToAgentSpecs(
     workforceName: string;
     model?: string;
     includeOptionalSlots?: boolean;
+    connectionsByCategory?: Partial<Record<string, string>>;
   },
 ): AgentSpec[] {
   // Default model choice for Tier 3: gpt-4o-mini matches Tier 1 (PDCA
@@ -172,9 +173,16 @@ export function blueprintToAgentSpecs(
     const plugins = (slot.plugins ?? []).map((spec) => {
       let connection: string | null = null;
       if (spec.connectionCategory === "pixelml") {
-        throw new Error(
-          `Tier 3 blueprint slot "${slot.role}" needs pixelml connection for plugin "${spec.nodeTypeName}" — not yet supported. Use only connection=None plugins (web_search, web_retrieval, api_call, agenticflow_generate_image, string_to_json).`,
-        );
+        const resolved = spec.connection ?? options.connectionsByCategory?.pixelml;
+        if (!resolved) {
+          throw new Error(
+            `Tier 3 blueprint slot "${slot.role}" needs pixelml connection for plugin "${spec.nodeTypeName}". ` +
+              `Run 'af connections list' and provide a pixelml connection before deploying.`,
+          );
+        }
+        connection = resolved;
+      } else if (spec.connection) {
+        connection = spec.connection;
       }
       const inputConfig = spec.input
         ? Object.fromEntries(

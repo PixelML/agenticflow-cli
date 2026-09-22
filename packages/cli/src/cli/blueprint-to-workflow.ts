@@ -25,6 +25,9 @@ import type { CompanyBlueprint, WorkflowNodeSpec } from "./company-blueprints.js
  * Adjust if the backend adds categories.
  */
 const LLM_PROVIDER_CATEGORIES = ["straico", "openai", "anthropic", "google", "deepseek", "groq"];
+// ai_switch can consume an existing decision without a second provider call;
+// the native action therefore allows a null connection.
+const PIXELML_NODE_TYPES = new Set(["pml_llm", "ai_decision"]);
 
 export interface WorkflowCreatePayload {
   name: string;
@@ -36,9 +39,10 @@ export interface WorkflowCreatePayload {
   nodes: WorkflowCreateNode[];
   input_schema: {
     type: "object";
-    title: string;
-    required: string[];
-    properties: Record<string, unknown>;
+    title?: string;
+    required?: string[];
+    properties?: Record<string, unknown>;
+    [key: string]: unknown;
   };
   output_mapping: Record<string, unknown>;
   variables?: Record<string, unknown> | null;
@@ -79,6 +83,73 @@ export function findWorkspaceLLMConnection(
   return null;
 }
 
+/** Resolve a connection by category, preferring the first matching workspace connection. */
+export function findWorkspaceConnection(
+  connections: Array<{ id: string; category?: string }>,
+  category: string,
+): string | null {
+  return connections.find((connection) => connection.category === category)?.id ?? null;
+}
+
+function connectionReference(connectionId: string): string {
+  return `{{__app_connections__['${connectionId}']}}`;
+}
+
+function nodeTypeOf(node: Record<string, unknown>): string {
+  return String(node.node_type_name ?? node.nodeType ?? "");
+}
+
+function inputConfigOf(node: Record<string, unknown>): Record<string, unknown> {
+  const value = node.input_config ?? node.inputConfig;
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function serializeInlineWorkflow(
+  value: unknown,
+  resolveConnection: (nodeType: string, explicit: unknown) => string | null,
+): unknown {
+  if (!value || typeof value !== "object") return value;
+  const workflow = value as Record<string, unknown>;
+  if (!Array.isArray(workflow.nodes)) return value;
+  const nodes = workflow.nodes.map((raw) => {
+    if (!raw || typeof raw !== "object") return raw;
+    const node = raw as Record<string, unknown>;
+    const nodeType = nodeTypeOf(node);
+    const inputConfig = inputConfigOf(node);
+    const serializedInput = { ...inputConfig };
+    if (Array.isArray(serializedInput.branches)) {
+      serializedInput.branches = serializedInput.branches.map((branch) => serializeInlineWorkflowBranch(branch, resolveConnection));
+    }
+    if (serializedInput.fallback && typeof serializedInput.fallback === "object") {
+      serializedInput.fallback = serializeInlineWorkflowBranch(serializedInput.fallback, resolveConnection);
+    }
+    return {
+      name: String(node.name ?? "node"),
+      title: String(node.title ?? node.name ?? nodeType),
+      description: String(node.description ?? `${nodeType} node`),
+      node_type_name: nodeType,
+      input_config: serializedInput,
+      output_mapping: (node.output_mapping ?? node.outputMapping ?? null) as Record<string, unknown> | null,
+      connection: resolveConnection(nodeType, node.connection),
+      cost: (node.cost ?? null) as number | null,
+      metadata: (node.metadata ?? null) as Record<string, unknown> | null,
+    };
+  });
+  return { ...workflow, nodes };
+}
+
+function serializeInlineWorkflowBranch(
+  value: unknown,
+  resolveConnection: (nodeType: string, explicit: unknown) => string | null,
+): unknown {
+  if (!value || typeof value !== "object") return value;
+  const branch = value as Record<string, unknown>;
+  if (branch.inline_workflow) {
+    return { ...branch, inline_workflow: serializeInlineWorkflow(branch.inline_workflow, resolveConnection) };
+  }
+  return branch;
+}
+
 /**
  * Convert a blueprint's workflowNodes into the workflow-create payload shape
  * the backend expects. Pure function — no side effects.
@@ -89,6 +160,7 @@ export function workflowBlueprintToPayload(
     projectId: string;
     workflowName?: string;
     llmConnectionId?: string | null;
+    pixelmlConnectionId?: string | null;
   },
 ): WorkflowBlueprintTranslation {
   if (!blueprint.workflowNodes || blueprint.workflowNodes.length === 0) {
@@ -100,29 +172,46 @@ export function workflowBlueprintToPayload(
 
   const warnings: string[] = [];
   const missingConnections: string[] = [];
+  const missingConnectionSet = new Set<string>();
+  const resolveConnection = (nodeType: string, explicit: unknown): string | null => {
+    if (explicit === null) return null;
+    if (typeof explicit === "string" && explicit.length > 0) {
+      return explicit.startsWith("{{") ? explicit : connectionReference(explicit);
+    }
+    if (nodeType === "llm") {
+      if (options.llmConnectionId) return connectionReference(options.llmConnectionId);
+      missingConnectionSet.add("llm-provider (straico/openai/anthropic/etc.)");
+      return null;
+    }
+    if (PIXELML_NODE_TYPES.has(nodeType)) {
+      if (options.pixelmlConnectionId) return connectionReference(options.pixelmlConnectionId);
+      missingConnectionSet.add("pixelml");
+    }
+    return null;
+  };
 
   const nodes: WorkflowCreateNode[] = blueprint.workflowNodes.map((spec) => {
-    const needsLLMConnection = spec.nodeType === "llm";
-    let connection: string | null = null;
-    if (needsLLMConnection) {
-      if (options.llmConnectionId) {
-        connection = `{{__app_connections__['${options.llmConnectionId}']}}`;
-      } else {
-        missingConnections.push("llm-provider (straico/openai/anthropic/etc.)");
-      }
+    const rawInput = (spec.inputConfig ?? {}) as Record<string, unknown>;
+    const inputConfig = { ...rawInput };
+    if (Array.isArray(inputConfig.branches)) {
+      inputConfig.branches = inputConfig.branches.map((branch) => serializeInlineWorkflowBranch(branch, resolveConnection));
+    }
+    if (inputConfig.fallback && typeof inputConfig.fallback === "object") {
+      inputConfig.fallback = serializeInlineWorkflowBranch(inputConfig.fallback, resolveConnection);
     }
     return {
       name: spec.name,
       title: spec.title ?? spec.name,
       description: spec.description ?? `${spec.nodeType} node`,
       node_type_name: spec.nodeType,
-      input_config: spec.inputConfig ?? {},
+      input_config: inputConfig,
       output_mapping: spec.outputMapping ?? null,
-      connection,
+      connection: resolveConnection(spec.nodeType, spec.connection),
       cost: null,
       metadata: null,
     };
   });
+  for (const missing of missingConnectionSet) missingConnections.push(missing);
 
   if (missingConnections.length > 0) {
     warnings.push(
@@ -152,17 +241,16 @@ export function workflowBlueprintToPayload(
     });
   }
 
+  const rawSchema = blueprint.workflowInputJsonSchema;
+  const inputSchema = rawSchema
+    ? { ...rawSchema, type: "object" as const, title: rawSchema.title ?? schemaTitle, required: rawSchema.required ?? required, properties: rawSchema.properties ?? properties }
+    : { type: "object" as const, title: schemaTitle, required, properties };
   const payload: WorkflowCreatePayload = {
     name: options.workflowName ?? blueprint.name,
     description: blueprint.description,
     project_id: options.projectId,
     nodes,
-    input_schema: {
-      type: "object",
-      title: schemaTitle,
-      required,
-      properties,
-    },
+    input_schema: inputSchema,
     output_mapping: blueprint.workflowOutputMapping ?? {},
   };
 

@@ -4356,7 +4356,7 @@ export function createProgram(): Command {
         );
       }
 
-      const { workflowBlueprintToPayload, findWorkspaceLLMConnection } = await import("./blueprint-to-workflow.js");
+      const { workflowBlueprintToPayload, findWorkspaceLLMConnection, findWorkspaceConnection } = await import("./blueprint-to-workflow.js");
       const initClient = buildClient(program.opts());
       const projectId =
         (opts.projectId as string | undefined) ??
@@ -4373,11 +4373,14 @@ export function createProgram(): Command {
 
       // Auto-discover an LLM-provider connection if the blueprint needs one.
       let llmConnectionId: string | null = (opts.llmConnectionId as string | undefined) ?? null;
+      let pixelmlConnectionId: string | null = null;
       const needsLLM = (b.workflowNodes ?? []).some((n) => n.nodeType === "llm");
-      if (needsLLM && !llmConnectionId && !opts.dryRun) {
+      const needsPixelML = JSON.stringify(b.workflowNodes ?? []).match(/\"(?:pml_llm|ai_decision|ai_switch)\"/);
+      if ((needsLLM || needsPixelML) && !opts.dryRun) {
         try {
           const conns = (await initClient.connections.list()) as Array<{ id: string; category?: string }>;
-          llmConnectionId = findWorkspaceLLMConnection(conns);
+          if (needsLLM && !llmConnectionId) llmConnectionId = findWorkspaceLLMConnection(conns);
+          if (needsPixelML) pixelmlConnectionId = findWorkspaceConnection(conns, "pixelml");
         } catch {
           // Tolerate list failure; fall through with llmConnectionId=null so the
           // warning fires below.
@@ -4390,6 +4393,7 @@ export function createProgram(): Command {
           projectId: (projectId as string) ?? "DRY_RUN_PROJECT_ID",
           workflowName: opts.name as string | undefined,
           llmConnectionId,
+          pixelmlConnectionId,
         });
       } catch (err) {
         fail("invalid_blueprint", err instanceof Error ? err.message : String(err));
@@ -5207,10 +5211,24 @@ export function createProgram(): Command {
 
       let payload: import("./blueprint-to-agent.js").AgentInitPayload;
       try {
+        let connectionsByCategory: Partial<Record<"pixelml", string>> = {};
+        if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory === "pixelml"))) {
+          try {
+            const connections = (await initClient.connections.list({ workspaceId: opts.workspaceId })) as Array<{ id: string; category?: string }>;
+            const pixelml = connections.find((connection) => connection.category === "pixelml");
+            if (pixelml) connectionsByCategory.pixelml = pixelml.id;
+          } catch {
+            // The translator emits the actionable missing-connection error.
+          }
+        }
+        if (opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory === "pixelml"))) {
+          connectionsByCategory.pixelml = "<workspace-pixelml-connection>";
+        }
         payload = tier1BlueprintToAgentPayload(blueprint, {
           projectId: projectId as string,
           agentName: opts.name as string | undefined,
           model: opts.model as string | undefined,
+          connectionsByCategory,
         });
       } catch (err) {
         fail("invalid_blueprint", err instanceof Error ? err.message : String(err));
@@ -6423,11 +6441,26 @@ export function createProgram(): Command {
       }
 
       const workforceName = (opts.name as string | undefined) ?? blueprint.name;
+      let connectionsByCategory: Record<string, string> = {};
+      if (opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory === "pixelml"))) {
+        connectionsByCategory.pixelml = "<workspace-pixelml-connection>";
+      }
+      if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory))) {
+        try {
+          const connections = (await fullClient.connections.list({ workspaceId: opts.workspaceId })) as Array<{ id: string; category?: string }>;
+          for (const connection of connections) {
+            if (connection.category && !connectionsByCategory[connection.category]) connectionsByCategory[connection.category] = connection.id;
+          }
+        } catch {
+          // Missing connection errors are reported by the pure translator below.
+        }
+      }
       const specs = blueprintToAgentSpecs(blueprint, {
         projectId: projectId as string,
         workforceName,
         model: opts.model as string,
         includeOptionalSlots: Boolean(opts.includeOptionalSlots),
+        connectionsByCategory,
       });
 
       // Desk-topology plumbing. --tool-workflow-id is only meaningful for
