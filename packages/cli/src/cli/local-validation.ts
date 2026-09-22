@@ -4,6 +4,8 @@
  * create/update entrypoints.
  */
 
+import { isAiDecisionNode, isAiSwitchNode } from "./ai-node-config.js";
+
 export interface LocalValidationIssue {
   path: string;
   message: string;
@@ -124,6 +126,51 @@ function validateStringMap(
   }
 }
 
+const AI_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+function isDecisionValue(value: unknown): boolean {
+  return typeof value === "string" || Array.isArray(value) || isRecord(value);
+}
+
+function validateDecisionConfig(value: unknown, issues: LocalValidationIssue[], path: string): void {
+  if (!validateObject(value, issues, path, true)) return;
+  const state = value["state"];
+  if (!(typeof state === "string" || Array.isArray(state) || isRecord(state))) addIssue(issues, `${path}.state`, "must be a string, object, or array");
+  const questions = value["questions"];
+  if (!validateObject(questions, issues, `${path}.questions`, true)) return;
+  const entries = Object.entries(questions);
+  if (entries.length < 1 || entries.length > 32) addIssue(issues, `${path}.questions`, "must contain 1 to 32 questions");
+  for (const [questionId, rawQuestion] of entries) {
+    const qPath = `${path}.questions.${questionId}`;
+    if (!AI_ID_PATTERN.test(questionId)) addIssue(issues, qPath, "invalid question id");
+    if (!validateObject(rawQuestion, issues, qPath, true)) continue;
+    validateString(rawQuestion["instructions"], issues, `${qPath}.instructions`, { required: true, minLength: 1 });
+    const type = rawQuestion["type"];
+    if (type !== "choice" && type !== "score" && type !== "noul") { addIssue(issues, `${qPath}.type`, "must be choice, score, or noul"); continue; }
+    const criteria = rawQuestion["criteria"];
+    if (type === "choice") {
+      if (!validateObject(criteria, issues, `${qPath}.criteria`, true)) continue;
+      const options = Object.entries(criteria);
+      if (options.length < 2 || options.length > 255) addIssue(issues, `${qPath}.criteria`, "must contain 2 to 255 options");
+      for (const [optionId, option] of options) {
+        if (!AI_ID_PATTERN.test(optionId)) addIssue(issues, `${qPath}.criteria.${optionId}`, "invalid option id");
+        if (option !== null && !isDecisionValue(option)) addIssue(issues, `${qPath}.criteria.${optionId}`, "must be a string, object, array, or null");
+      }
+    } else if (type === "score") {
+      if (!Array.isArray(criteria)) addIssue(issues, `${qPath}.criteria`, "must be an array");
+      else {
+        if (criteria.length < 2 || criteria.length > 10) addIssue(issues, `${qPath}.criteria`, "must contain 2 to 10 levels");
+        criteria.forEach((item, index) => { if (!isDecisionValue(item) || item === null) addIssue(issues, `${qPath}.criteria[${index}]`, "must be a string, object, or array"); });
+      }
+    } else if (criteria != null && !isRecord(criteria)) addIssue(issues, `${qPath}.criteria`, "must be null or an object");
+  }
+  if (value["schema_version"] != null && value["schema_version"] !== 1) addIssue(issues, `${path}.schema_version`, "must be 1");
+  if (value["billing_mode"] != null && !["pixelml", "byok", "agenticflow"].includes(String(value["billing_mode"]))) addIssue(issues, `${path}.billing_mode`, "invalid billing mode");
+  if (value["max_input_tokens"] != null) validateNumber(value["max_input_tokens"], issues, `${path}.max_input_tokens`, { min: 1, max: 64000, integer: true });
+  if (value["max_run_credits"] != null) validateNumber(value["max_run_credits"], issues, `${path}.max_run_credits`, { min: 0 });
+  if (value["max_calls"] != null) validateNumber(value["max_calls"], issues, `${path}.max_calls`, { min: 1, max: 32, integer: true });
+  if (value["on_budget_exceeded"] != null && value["on_budget_exceeded"] !== "error" && value["on_budget_exceeded"] !== "skip") addIssue(issues, `${path}.on_budget_exceeded`, "must be error or skip");
+}
+
 function validateNodePayload(node: unknown, issues: LocalValidationIssue[], path: string): void {
   if (!validateObject(node, issues, path, true)) return;
 
@@ -132,6 +179,9 @@ function validateNodePayload(node: unknown, issues: LocalValidationIssue[], path
   validateString(node["description"], issues, `${path}.description`, { required: false, nullable: true, maxLength: 400 });
   validateString(node["node_type_name"], issues, `${path}.node_type_name`, { required: true, minLength: 1, maxLength: 100 });
   validateObject(node["input_config"], issues, `${path}.input_config`, true);
+  if (isRecord(node["input_config"])) {
+    validateAiNodeInput(String(node["node_type_name"] ?? ""), node["input_config"] as Record<string, unknown>, issues, `${path}.input_config`);
+  }
 
   if (node["output_mapping"] != null) {
     validateStringMap(node["output_mapping"], issues, `${path}.output_mapping`, false);
@@ -348,4 +398,46 @@ export function validateAgentStreamPayload(payload: unknown): LocalValidationIss
   }
 
   return issues;
+}
+function validateInlineWorkflow(value: unknown, issues: LocalValidationIssue[], path: string): void {
+  if (!validateObject(value, issues, path, true)) return;
+  validateNodesArray(value["nodes"], issues, path + ".nodes");
+  validateStringMap(value["output_mapping"], issues, path + ".output_mapping", true);
+}
+
+function validateDestination(value: unknown, issues: LocalValidationIssue[], path: string, required: boolean): void {
+  if (!validateObject(value, issues, path, required)) return;
+  if (value["workflow_id"] != null) validateString(value["workflow_id"], issues, path + ".workflow_id", { minLength: 1 });
+  if (value["inline_workflow"] != null) validateInlineWorkflow(value["inline_workflow"], issues, path + ".inline_workflow");
+  if (required && value["workflow_id"] == null && value["inline_workflow"] == null) addIssue(issues, path, "must include workflow_id or inline_workflow");
+  if (value["input_mapping"] != null && !isRecord(value["input_mapping"])) addIssue(issues, path + ".input_mapping", "must be an object");
+  if (value["output_mapping"] != null) validateStringMap(value["output_mapping"], issues, path + ".output_mapping");
+}
+
+function validateAiNodeInput(nodeType: string, value: Record<string, unknown>, issues: LocalValidationIssue[], path: string): void {
+  if (isAiDecisionNode(nodeType)) { validateDecisionConfig(value, issues, path); return; }
+  if (!isAiSwitchNode(nodeType)) return;
+  if (!["best_match", "ordered_conditions", "score_threshold"].includes(String(value["mode"]))) addIssue(issues, path + ".mode", "invalid switch mode");
+  if (value["decision_source"] !== "embedded" && value["decision_source"] !== "existing") addIssue(issues, path + ".decision_source", "invalid decision source");
+  validateDecisionConfig(value["decision_config"], issues, path + ".decision_config");
+  if (!Array.isArray(value["branches"])) addIssue(issues, path + ".branches", "must be an array");
+  else {
+    if (value["branches"].length < 1) addIssue(issues, path + ".branches", "must contain at least one branch");
+    value["branches"].forEach((rawBranch, index) => {
+      const bPath = path + ".branches[" + index + "]";
+      if (!validateObject(rawBranch, issues, bPath, true)) return;
+      validateString(rawBranch["id"], issues, bPath + ".id", { required: true, minLength: 1, maxLength: 32 });
+      if (typeof rawBranch["id"] === "string" && !AI_ID_PATTERN.test(rawBranch["id"] as string)) addIssue(issues, bPath + ".id", "invalid branch id");
+      validateString(rawBranch["question_id"], issues, bPath + ".question_id", { required: true, minLength: 1, maxLength: 32 });
+      if (rawBranch["threshold"] != null) validateNumber(rawBranch["threshold"], issues, bPath + ".threshold");
+      if (rawBranch["operator"] != null && !["gte", "gt", "lte", "lt"].includes(String(rawBranch["operator"]))) addIssue(issues, bPath + ".operator", "invalid operator");
+      if (rawBranch["min_confidence"] != null) validateNumber(rawBranch["min_confidence"], issues, bPath + ".min_confidence", { min: 0, max: 1 });
+      validateDestination(rawBranch, issues, bPath, true);
+    });
+  }
+  if (!validateObject(value["fallback"], issues, path + ".fallback", true)) return;
+  const fallback = value["fallback"] as Record<string, unknown>;
+  if (fallback["action"] !== "skip" && fallback["action"] !== "workflow") addIssue(issues, path + ".fallback.action", "must be skip or workflow");
+  if (fallback["action"] === "workflow") validateDestination(fallback, issues, path + ".fallback", true);
+  if (value["timeout_seconds"] != null) validateNumber(value["timeout_seconds"], issues, path + ".timeout_seconds", { min: 1, integer: true });
 }

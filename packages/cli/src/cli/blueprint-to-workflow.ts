@@ -25,9 +25,15 @@ import type { CompanyBlueprint, WorkflowNodeSpec } from "./company-blueprints.js
  * Adjust if the backend adds categories.
  */
 const LLM_PROVIDER_CATEGORIES = ["straico", "openai", "anthropic", "google", "deepseek", "groq"];
-// ai_switch can consume an existing decision without a second provider call;
-// the native action therefore allows a null connection.
-const PIXELML_NODE_TYPES = new Set(["pml_llm", "ai_decision"]);
+const DEFAULT_CONNECTION_CATEGORIES: Record<string, string> = {
+  pml_llm: "pixelml",
+  ai_decision: "pixelml",
+  ai_switch: "pixelml",
+  typesafe_ai_decision: "typesafe",
+  typesafe_ai_switch: "typesafe",
+};
+const CONNECTIONLESS_NODE_TYPES = new Set(["agenticflow_ai_decision", "agenticflow_ai_switch"]);
+const OPTIONAL_CONNECTION_NODE_TYPES = new Set(["ai_switch", "typesafe_ai_switch"]);
 
 export interface WorkflowCreatePayload {
   name: string;
@@ -48,7 +54,7 @@ export interface WorkflowCreatePayload {
   variables?: Record<string, unknown> | null;
 }
 
-interface WorkflowCreateNode {
+export interface WorkflowCreateNode {
   name: string;
   title: string;
   description: string;
@@ -104,9 +110,35 @@ function inputConfigOf(node: Record<string, unknown>): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function isAiSwitchNodeType(nodeType: string): boolean {
+  return nodeType === "ai_switch" || nodeType === "typesafe_ai_switch" || nodeType === "agenticflow_ai_switch";
+}
+
+function normalizeConnectionCategory(category: unknown): string | null | undefined {
+  if (category == null) return undefined;
+  if (typeof category !== "string") return null;
+  return category === "none" ? null : category;
+}
+
+function normalizeNodeInput(
+  nodeType: string,
+  inputConfig: Record<string, unknown>,
+  resolveConnection: (nodeType: string, explicit: unknown, category: unknown) => string | null,
+): Record<string, unknown> {
+  if (!isAiSwitchNodeType(nodeType)) return inputConfig;
+  const normalized = { ...inputConfig };
+  if (Array.isArray(normalized.branches)) {
+    normalized.branches = normalized.branches.map((branch) => serializeInlineWorkflowBranch(branch, resolveConnection));
+  }
+  if (normalized.fallback && typeof normalized.fallback === "object") {
+    normalized.fallback = serializeInlineWorkflowBranch(normalized.fallback, resolveConnection);
+  }
+  return normalized;
+}
+
 function serializeInlineWorkflow(
   value: unknown,
-  resolveConnection: (nodeType: string, explicit: unknown) => string | null,
+  resolveConnection: (nodeType: string, explicit: unknown, category: unknown) => string | null,
 ): unknown {
   if (!value || typeof value !== "object") return value;
   const workflow = value as Record<string, unknown>;
@@ -116,21 +148,20 @@ function serializeInlineWorkflow(
     const node = raw as Record<string, unknown>;
     const nodeType = nodeTypeOf(node);
     const inputConfig = inputConfigOf(node);
-    const serializedInput = { ...inputConfig };
-    if (Array.isArray(serializedInput.branches)) {
-      serializedInput.branches = serializedInput.branches.map((branch) => serializeInlineWorkflowBranch(branch, resolveConnection));
-    }
-    if (serializedInput.fallback && typeof serializedInput.fallback === "object") {
-      serializedInput.fallback = serializeInlineWorkflowBranch(serializedInput.fallback, resolveConnection);
-    }
+    const serializedInput = normalizeNodeInput(nodeType, inputConfig, resolveConnection);
+    const { name: _name, title: _title, description: _description, node_type_name: _nodeTypeName,
+      nodeType: _nodeType, input_config: _inputConfig, inputConfig: _inputConfigCamel,
+      output_mapping: _outputMapping, outputMapping: _outputMappingCamel,
+      connection: _connection, connectionCategory: _connectionCategory, ...extra } = node;
     return {
+      ...extra,
       name: String(node.name ?? "node"),
       title: String(node.title ?? node.name ?? nodeType),
       description: String(node.description ?? `${nodeType} node`),
       node_type_name: nodeType,
       input_config: serializedInput,
       output_mapping: (node.output_mapping ?? node.outputMapping ?? null) as Record<string, unknown> | null,
-      connection: resolveConnection(nodeType, node.connection),
+      connection: resolveConnection(nodeType, node.connection, node.connectionCategory),
       cost: (node.cost ?? null) as number | null,
       metadata: (node.metadata ?? null) as Record<string, unknown> | null,
     };
@@ -140,7 +171,7 @@ function serializeInlineWorkflow(
 
 function serializeInlineWorkflowBranch(
   value: unknown,
-  resolveConnection: (nodeType: string, explicit: unknown) => string | null,
+  resolveConnection: (nodeType: string, explicit: unknown, category: unknown) => string | null,
 ): unknown {
   if (!value || typeof value !== "object") return value;
   const branch = value as Record<string, unknown>;
@@ -161,6 +192,7 @@ export function workflowBlueprintToPayload(
     workflowName?: string;
     llmConnectionId?: string | null;
     pixelmlConnectionId?: string | null;
+    connectionsByCategory?: Record<string, string | null | undefined>;
   },
 ): WorkflowBlueprintTranslation {
   if (!blueprint.workflowNodes || blueprint.workflowNodes.length === 0) {
@@ -173,32 +205,34 @@ export function workflowBlueprintToPayload(
   const warnings: string[] = [];
   const missingConnections: string[] = [];
   const missingConnectionSet = new Set<string>();
-  const resolveConnection = (nodeType: string, explicit: unknown): string | null => {
+  const resolveConnection = (nodeType: string, explicit: unknown, explicitCategory: unknown): string | null => {
     if (explicit === null) return null;
     if (typeof explicit === "string" && explicit.length > 0) {
       return explicit.startsWith("{{") ? explicit : connectionReference(explicit);
     }
-    if (nodeType === "llm") {
+    // A blueprint can explicitly disable auto-discovery for a node.
+    if (explicitCategory === "none" || explicitCategory === null) return null;
+    if (CONNECTIONLESS_NODE_TYPES.has(nodeType)) return null;
+    const category = normalizeConnectionCategory(explicitCategory) ?? DEFAULT_CONNECTION_CATEGORIES[nodeType];
+    if (category == null) {
+      if (nodeType !== "llm") return null;
       if (options.llmConnectionId) return connectionReference(options.llmConnectionId);
       missingConnectionSet.add("llm-provider (straico/openai/anthropic/etc.)");
       return null;
     }
-    if (PIXELML_NODE_TYPES.has(nodeType)) {
-      if (options.pixelmlConnectionId) return connectionReference(options.pixelmlConnectionId);
-      missingConnectionSet.add("pixelml");
+    const categoryConnection = options.connectionsByCategory?.[category]
+      ?? (category === "pixelml" ? options.pixelmlConnectionId : undefined);
+    if (categoryConnection) return connectionReference(categoryConnection);
+    if (nodeType === "llm" && options.llmConnectionId && explicitCategory == null) {
+      return connectionReference(options.llmConnectionId);
     }
+    if (!OPTIONAL_CONNECTION_NODE_TYPES.has(nodeType)) missingConnectionSet.add(category);
     return null;
   };
 
   const nodes: WorkflowCreateNode[] = blueprint.workflowNodes.map((spec) => {
     const rawInput = (spec.inputConfig ?? {}) as Record<string, unknown>;
-    const inputConfig = { ...rawInput };
-    if (Array.isArray(inputConfig.branches)) {
-      inputConfig.branches = inputConfig.branches.map((branch) => serializeInlineWorkflowBranch(branch, resolveConnection));
-    }
-    if (inputConfig.fallback && typeof inputConfig.fallback === "object") {
-      inputConfig.fallback = serializeInlineWorkflowBranch(inputConfig.fallback, resolveConnection);
-    }
+    const inputConfig = normalizeNodeInput(spec.nodeType, rawInput, resolveConnection);
     return {
       name: spec.name,
       title: spec.title ?? spec.name,
@@ -206,7 +240,7 @@ export function workflowBlueprintToPayload(
       node_type_name: spec.nodeType,
       input_config: inputConfig,
       output_mapping: spec.outputMapping ?? null,
-      connection: resolveConnection(spec.nodeType, spec.connection),
+      connection: resolveConnection(spec.nodeType, spec.connection, spec.connectionCategory),
       cost: null,
       metadata: null,
     };
