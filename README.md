@@ -41,6 +41,20 @@ af workforce init --blueprint dev-shop --name "My Dev Team" --json
 
 Don't reach for a workforce when a single agent suffices — the 6 built-in workforce blueprints are for genuine multi-agent orchestration (dev-shop, marketing-agency, sales-team, content-studio, support-center, amazon-seller).
 
+### Jev decision workflows (CLI 1.11+)
+
+Use a typed `ai_decision` node to ask one Jev question, then an `ai_switch` node to route on the recorded result. This keeps inference separate from branching: a choice question can classify the request, a score question can gate draft quality, and a noul question can send ambiguous or policy-sensitive cases to manual review.
+
+```bash
+af workflow init --blueprint customer-support-triage-reply --name "Support triage" --json
+af workflow init --blueprint jev-ordered-exception-routing --name "Exception review" --json
+af workflow init --blueprint jev-score-quality-gate --name "Draft quality gate" --json
+af agent init --blueprint jev-review-assistant --name "Review assistant" --json
+af workforce init --blueprint jev-review-workforce --name "Review team" --json
+```
+
+The Jev blueprints require a `pixelml` connection and produce review artifacts only. They do not send messages, issue refunds, change accounts, or create tickets.
+
 ## Authentication
 
 | Method | Usage | Best For |

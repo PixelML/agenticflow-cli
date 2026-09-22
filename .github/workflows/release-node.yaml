@@ -49,8 +49,8 @@ jobs:
       - name: Run tests
         run: npm test --workspace=packages/cli
 
-      - name: Sync root README into package
-        run: cp README.md packages/cli/README.md
+      - name: Verify package README
+        run: test -s packages/cli/README.md
 
       - name: Set package version
         working-directory: packages/cli

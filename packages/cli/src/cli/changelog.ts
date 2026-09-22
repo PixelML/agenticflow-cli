@@ -14,6 +14,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.11.0",
+    date: "2026-09-22",
+    highlights: [
+      "NEW typed ai_decision and ai_switch workflow nodes with Jev 1.13.0 choice, score, and noul questions, nested branch/fallback workflows, decision reuse, and local validation",
+      "NEW Jev blueprints: customer-support-triage-reply, jev-ordered-exception-routing, and jev-score-quality-gate for draft-only support routing, exception review, and quality gates",
+      "NEW agent and workforce examples: jev-review-assistant and jev-review-workforce, with explicit PixelML connection resolution and human-review fallbacks",
+    ],
+    for_ai: [
+      "Use af workflow init --blueprint customer-support-triage-reply --name \"Support triage\" --json for a draft-only support workflow; provide a pixelml connection before deployment",
+      "Use one ai_decision to answer typed Jev questions, then configure ai_switch with decision_source: existing to route on the recorded result without a second inference request",
+      "Treat uncertain, low-confidence, unsupported, and policy-sensitive cases as explicit fallback/manual-review paths; never infer that a draft was sent or an account action occurred",
+    ],
+  },
+  {
     version: "1.10.8",
     date: "2026-07-07",
     highlights: [

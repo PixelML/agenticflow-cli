@@ -2,7 +2,7 @@
 
 Command-line interface for the [AgenticFlow](https://agenticflow.ai) platform. Build workflows, agents, and multi-agent workforces. Designed as the **API contract for AI agents** — Ishi (AgenticFlow's first-party desktop agent), Claude Code, OpenAI Codex, Cursor, Gemini CLI, and other compatible hosts all drive AgenticFlow through this CLI.
 
-Current version: **1.10.0**. Built on [`@pixelml/agenticflow-sdk@1.6.0`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
+Current version: **1.11.0**. Built on [`@pixelml/agenticflow-sdk@1.6.0`](https://www.npmjs.com/package/@pixelml/agenticflow-sdk).
 
 ## Install
 
@@ -25,6 +25,26 @@ Three deploy verbs map 1:1 to rungs on a 7-level complexity ladder. **Start at t
 | 6 | workforce | `af workforce init --blueprint parallel-research` (multi-agent DAG) |
 
 Run `af playbook composition-ladder` for the decision rule.
+
+### Jev decision workflows
+
+CLI 1.11 adds typed `ai_decision` and `ai_switch` support backed by Jev 1.13.0.
+Use `ai_decision` for named choice, score, or noul questions, then reuse its
+recorded result from `ai_switch` with `decision_source: existing`. The shipped
+blueprints keep uncertain or policy-sensitive cases on explicit human-review
+paths:
+
+```bash
+af workflow init --blueprint customer-support-triage-reply --name "Support triage" --json
+af workflow init --blueprint jev-ordered-exception-routing --name "Exception review" --json
+af workflow init --blueprint jev-score-quality-gate --name "Draft quality gate" --json
+af agent init --blueprint jev-review-assistant --name "Review assistant" --json
+af workforce init --blueprint jev-review-workforce --name "Review team" --json
+```
+
+These Jev blueprints require a `pixelml` connection. They produce review
+artifacts only; they do not send messages, issue refunds, change accounts, or
+create tickets.
 
 ## Quick Start
 

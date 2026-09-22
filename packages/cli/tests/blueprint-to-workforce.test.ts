@@ -171,6 +171,13 @@ describe("buildAgentWiredGraph — full deploy graph wiring (v1.6)", () => {
     expect(() => buildAgentWiredGraph(bp, [], {})).toThrow(/No agent specs/);
   });
 
+  it("requires a PixelML connection for Jev workforce plugins", () => {
+    const bp = getBlueprint("jev-review-workforce")!;
+    expect(() => blueprintToAgentSpecs(bp, { projectId: "p", workforceName: "T" })).toThrow(
+      /needs pixelml connection/,
+    );
+  });
+
   it("every agent/workforce blueprint round-trips through full deploy without error", () => {
     // Workflow-kind blueprints (v1.10+) have empty .agents — they deploy via
     // af workflow init, not workforce init. Exclude them from this test.
