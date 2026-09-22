@@ -51,6 +51,84 @@ describe("local payload validation", () => {
       });
       expect(issues.some((i) => i.path === "$.name")).toBe(true);
     });
+
+    it("validates typed AI Decision questions and criteria", () => {
+      const issues = validateWorkflowCreatePayload({
+        name: "Jev workflow",
+        project_id: "proj-1",
+        nodes: [{
+          name: "decide",
+          node_type_name: "ai_decision",
+          input_config: {
+            state: { request: "{{request}}" },
+            questions: {
+              route: {
+                type: "choice",
+                instructions: { prompt: "Choose the safest route" },
+                criteria: { standard: "ordinary review", exception: { label: "specialist" } },
+              },
+              urgency: {
+                type: "score",
+                instructions: ["Rate impact"],
+                criteria: ["routine", { label: "blocked" }],
+              },
+              specialist: { type: "noul", instructions: "Needs a human?", criteria: { true: "yes", false: "no" } },
+            },
+            schema_version: 1,
+            billing_mode: "pixelml",
+          },
+        }],
+        output_mapping: {},
+        input_schema: { type: "object", properties: {} },
+      });
+      expect(issues).toEqual([]);
+    });
+
+    it("validates nested AI Switch destinations and rejects malformed destinations", () => {
+      const validDecision = {
+        state: "{{request}}",
+        questions: { route: { type: "choice", instructions: "Choose route", criteria: { a: "A", b: "B" } } },
+        schema_version: 1,
+      };
+      const valid = validateWorkflowCreatePayload({
+        name: "Switch workflow",
+        project_id: "proj-1",
+        nodes: [{
+          name: "route",
+          node_type_name: "ai_switch",
+          input_config: {
+            mode: "ordered_conditions",
+            decision_source: "existing",
+            existing_decision: "{{decide}}",
+            decision_config: validDecision,
+            branches: [{
+              id: "standard", question_id: "route", option_id: "a", threshold: null, operator: "gte", min_confidence: 0.8,
+              destination: {
+                inline_workflow: { nodes: [{ name: "draft", node_type_name: "pml_llm", input_config: { model: "pixelml/gpt-4.1-mini" } }], output_mapping: { result: "{{draft.content}}" } },
+                input_mapping: {}, output_mapping: { result: "/result" },
+              },
+            }],
+            fallback: { action: "skip" },
+          },
+        }],
+        output_mapping: {},
+        input_schema: { type: "object", properties: {} },
+      });
+      expect(valid).toEqual([]);
+
+      const invalid = validateWorkflowCreatePayload({
+        name: "Switch workflow", project_id: "proj-1", output_mapping: {}, input_schema: { type: "object", properties: {} },
+        nodes: [{
+          name: "route", node_type_name: "ai_switch", input_config: {
+            mode: "score_threshold", decision_source: "embedded", decision_config: validDecision,
+            branches: [{ id: "bad id", question_id: "route", destination: {} }],
+            fallback: { action: "workflow" },
+          },
+        }],
+      });
+      expect(invalid.some((issue) => issue.path.includes("branches[0].id"))).toBe(true);
+      expect(invalid.some((issue) => issue.path.includes("fallback.destination"))).toBe(true);
+    });
   });
 
   describe("validateWorkflowUpdatePayload", () => {
