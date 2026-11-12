@@ -23,3 +23,5 @@ export {
   MasTemplatesResource,
 } from "./marketplace.js";
 export type { MarketplaceItemType, MarketplaceListOptions } from "./marketplace.js";
+export { PixelMLToolsResource } from './pixelml-tools.js';
+export type { PixelMLToolSummary, PixelMLToolDetail, PixelMLToolPage, PixelMLToolScope, PixelMLToolListOptions } from './pixelml-tools.js';

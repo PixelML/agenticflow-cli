@@ -56,6 +56,8 @@ import {
 } from "./template-cache.js";
 import {
   validateWorkflowCreatePayload,
+  pixelMLConfigureExample,
+  preparePixelMLBuild,
   validateWorkflowUpdatePayload,
   validateWorkflowRunPayload,
   validateAgentCreatePayload,
@@ -552,6 +554,12 @@ function shouldUseColor(parentOpts: { color?: boolean }): boolean {
 /** Print an SDK result in CLI-friendly format. */
 function printResult(data: unknown): void {
   printJson(data);
+}
+
+async function preparePixelMLPayload(client: AgenticFlowClient, body: unknown, kind: 'workflow' | 'agent'): Promise<Record<string, unknown>> {
+  const prepared = await preparePixelMLBuild(client, body, kind);
+  ensureLocalValidation(`${kind}.pixelml`, prepared.issues);
+  return prepared.payload;
 }
 
 /** Load the active auth profile from ~/.agenticflow/auth.json */
@@ -4375,7 +4383,7 @@ export function createProgram(): Command {
       let llmConnectionId: string | null = (opts.llmConnectionId as string | undefined) ?? null;
       let pixelmlConnectionId: string | null = null;
       const needsLLM = (b.workflowNodes ?? []).some((n) => n.nodeType === "llm");
-      const needsPixelML = JSON.stringify(b.workflowNodes ?? []).match(/\"(?:pml_llm|ai_decision|ai_switch)\"/);
+      const needsPixelML = JSON.stringify(b.workflowNodes ?? []).match(/\"(?:pml_llm|pml_run_tool|ai_decision|ai_switch)\"/);
       if ((needsLLM || needsPixelML) && !opts.dryRun) {
         try {
           const conns = (await initClient.connections.list()) as Array<{ id: string; category?: string }>;
@@ -4427,7 +4435,7 @@ export function createProgram(): Command {
 
       await run(async () => {
         const created = (await initClient.workflows.create(
-          translated.payload as unknown as Record<string, unknown>,
+          await preparePixelMLPayload(initClient, translated.payload, 'workflow'),
           opts.workspaceId as string | undefined,
         )) as Record<string, unknown>;
         const workflowId = created["id"] as string | undefined;
@@ -4509,7 +4517,7 @@ export function createProgram(): Command {
         printResult({ schema: "agenticflow.dry_run.v1", valid: true, target: "workflow.create", payload: body });
         return;
       }
-      await run(() => client.workflows.create(body, opts.workspaceId));
+      await run(async () => client.workflows.create(await preparePixelMLPayload(client, body, 'workflow'), opts.workspaceId));
     });
 
   workflowCmd
@@ -4522,7 +4530,7 @@ export function createProgram(): Command {
       const client = buildClient(program.opts());
       const body = loadJsonPayload(opts.body);
       ensureLocalValidation("workflow.update", validateWorkflowUpdatePayload(body));
-      await run(() => client.workflows.update(opts.workflowId, body, opts.workspaceId));
+      await run(async () => client.workflows.update(opts.workflowId, await preparePixelMLPayload(client, body, 'workflow'), opts.workspaceId));
     });
 
   workflowCmd
@@ -4883,7 +4891,7 @@ export function createProgram(): Command {
         return;
       }
 
-      await run(() => client.workflows.validate(body));
+      await run(async () => client.workflows.validate(await preparePixelMLPayload(client, body, 'workflow')));
     });
 
   workflowCmd
@@ -4976,7 +4984,7 @@ export function createProgram(): Command {
         printResult({ schema: "agenticflow.dry_run.v1", valid: true, target: "agent.create", payload: body });
         return;
       }
-      await run(() => client.agents.create(body));
+      await run(async () => client.agents.create(await preparePixelMLPayload(client, body, 'agent')));
     });
 
   agentCmd
@@ -4995,8 +5003,8 @@ export function createProgram(): Command {
       ensureLocalValidation("agent.update", validateAgentUpdatePayload(body));
       preflightModel(body as Record<string, unknown>, "agent update");
       if (opts.patch) {
-        await run(() =>
-          client.agents.patch(opts.agentId, body as Record<string, unknown>, {
+        await run(async () =>
+          client.agents.patch(opts.agentId, await preparePixelMLPayload(client, body, 'agent'), {
             prepare: (merged) => {
               const stripped = stripNullFields(merged);
               warnOnStrippedNulls(merged, stripped);
@@ -5010,7 +5018,7 @@ export function createProgram(): Command {
         const original = body as Record<string, unknown>;
         const prepared = stripNullFields(original);
         warnOnStrippedNulls(original, prepared);
-        await run(() => client.agents.update(opts.agentId, prepared));
+        await run(async () => client.agents.update(opts.agentId, await preparePixelMLPayload(client, prepared, 'agent')));
       }
     });
 
@@ -5212,7 +5220,7 @@ export function createProgram(): Command {
       let payload: import("./blueprint-to-agent.js").AgentInitPayload;
       try {
         let connectionsByCategory: Partial<Record<"pixelml", string>> = {};
-        if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory === "pixelml"))) {
+        if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => (plugin.connectionCategory === "pixelml" || plugin.nodeTypeName === "pml_run_tool")))) {
           try {
             const connections = (await initClient.connections.list({ workspaceId: opts.workspaceId })) as Array<{ id: string; category?: string }>;
             const pixelml = connections.find((connection) => connection.category === "pixelml");
@@ -5221,7 +5229,7 @@ export function createProgram(): Command {
             // The translator emits the actionable missing-connection error.
           }
         }
-        if (opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory === "pixelml"))) {
+        if (opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => (plugin.connectionCategory === "pixelml" || plugin.nodeTypeName === "pml_run_tool")))) {
           connectionsByCategory.pixelml = "<workspace-pixelml-connection>";
         }
         payload = tier1BlueprintToAgentPayload(blueprint, {
@@ -5249,7 +5257,7 @@ export function createProgram(): Command {
       }
 
       await run(async () => {
-        const created = (await initClient.agents.create(payload.body)) as Record<string, unknown>;
+        const created = (await initClient.agents.create(await preparePixelMLPayload(initClient, payload.body, 'agent'))) as Record<string, unknown>;
         const agentId = created["id"] as string | undefined;
         if (!agentId) throw new Error("Agent create did not return an id.");
         return {
@@ -5304,6 +5312,32 @@ export function createProgram(): Command {
   // ═════════════════════════════════════════════════════════════════
   // node-types  (SDK-based)
   // ═════════════════════════════════════════════════════════════════
+  const pixelmlToolsCmd = program.command('pixelml').description('PixelML catalog discovery.')
+    .command('tools').description('Search and describe tools using a PixelML connection.');
+  pixelmlToolsCmd.command('list').description('Search one bounded page of PixelML tools.')
+    .requiredOption('--connection <id>', 'PixelML connection ID')
+    .option('--project-id <id>', 'Project ID')
+    .option('--search <query>', 'Server-side search')
+    .option('--category <category>', 'Category')
+    .option('--limit <n>', 'Page size (1–100)')
+    .option('--offset <n>', 'Offset')
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(() => client.pixelmlTools.list({ connectionId: opts.connection, projectId: opts.projectId, search: opts.search, category: opts.category,
+        limit: parseOptionalInteger(opts.limit, '--limit', 1), offset: parseOptionalInteger(opts.offset, '--offset', 0) }));
+    });
+  pixelmlToolsCmd.command('describe').description('Describe a PixelML tool and show workflow/agent configuration examples.')
+    .requiredOption('--connection <id>', 'PixelML connection ID')
+    .requiredOption('--model <id>', 'Router tool ID')
+    .option('--project-id <id>', 'Project ID')
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      await run(async () => {
+        const result = await client.pixelmlTools.describe({ connectionId: opts.connection, projectId: opts.projectId, model: opts.model });
+        return { ...result, configure: pixelMLConfigureExample(result, opts.connection) };
+      });
+    });
+
   const nodeTypesCmd = program
     .command("node-types")
     .description("Node type discovery commands.");
@@ -5356,6 +5390,8 @@ export function createProgram(): Command {
     .option("--input-config <json>", "Input config JSON")
     .option("--connection <name>", "Connection name")
     .option("--search-term <term>", "Search term")
+    .option('--limit <n>', 'Page size')
+    .option('--offset <n>', 'Offset')
     .action(async (opts) => {
       const client = buildClient(program.opts());
       await run(() => client.nodeTypes.dynamicOptions({
@@ -5365,6 +5401,7 @@ export function createProgram(): Command {
         inputConfig: opts.inputConfig ? JSON.parse(opts.inputConfig) : undefined,
         connection: opts.connection,
         searchTerm: opts.searchTerm,
+        paginatedOptions: opts.limit !== undefined || opts.offset !== undefined ? { limit: parseOptionalInteger(opts.limit, '--limit', 1) ?? 100, offset: parseOptionalInteger(opts.offset, '--offset', 0) ?? 0 } : undefined,
       }));
     });
 
@@ -6442,7 +6479,7 @@ export function createProgram(): Command {
 
       const workforceName = (opts.name as string | undefined) ?? blueprint.name;
       let connectionsByCategory: Record<string, string> = {};
-      if (opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory === "pixelml"))) {
+      if (opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => (plugin.connectionCategory === "pixelml" || plugin.nodeTypeName === "pml_run_tool")))) {
         connectionsByCategory.pixelml = "<workspace-pixelml-connection>";
       }
       if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory))) {

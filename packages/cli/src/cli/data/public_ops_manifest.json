@@ -735,5 +735,68 @@
       "workflow_runs",
       "outputs"
     ]
+  },
+  {
+    "operation_id": "list_pixelml_tools_v1_pixelml_tools_get",
+    "method": "GET",
+    "path": "/v1/pixelml/tools",
+    "tags": [
+      "pixelml"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-executed",
+    "support_rationale": "Read-only catalog discovery or configured schema resolution; does not execute a provider tool.",
+    "exposed_to_end_user": true,
+    "ci_live_execute": true,
+    "intents": [
+      "build"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "projects",
+      "connections"
+    ]
+  },
+  {
+    "operation_id": "describe_pixelml_tool_v1_pixelml_tools__tool_id__get",
+    "method": "GET",
+    "path": "/v1/pixelml/tools/{tool_id}",
+    "tags": [
+      "pixelml"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-executed",
+    "support_rationale": "Read-only catalog discovery or configured schema resolution; does not execute a provider tool.",
+    "exposed_to_end_user": true,
+    "ci_live_execute": true,
+    "intents": [
+      "build"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "projects",
+      "connections"
+    ]
+  },
+  {
+    "operation_id": "resolve_configured_node_schema_v1_node_types_name__node_type_name__resolve_schema_post",
+    "method": "POST",
+    "path": "/v1/node_types/name/{node_type_name}/resolve_schema",
+    "tags": [
+      "node_type"
+    ],
+    "security_len": 1,
+    "support_scope": "supported-executed",
+    "support_rationale": "Read-only catalog discovery or configured schema resolution; does not execute a provider tool.",
+    "exposed_to_end_user": true,
+    "ci_live_execute": true,
+    "intents": [
+      "build"
+    ],
+    "stage": "discover",
+    "dependencies": [
+      "projects",
+      "connections"
+    ]
   }
 ]

@@ -3800,6 +3800,254 @@
           }
         }
       }
+    },
+    "/v1/pixelml/tools": {
+      "get": {
+        "tags": [
+          "pixelml"
+        ],
+        "summary": "List Pixelml Tools",
+        "operationId": "list_pixelml_tools_v1_pixelml_tools_get",
+        "security": [
+          {
+            "AuthHTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PmlToolPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pixelml/tools/{tool_id}": {
+      "get": {
+        "tags": [
+          "pixelml"
+        ],
+        "summary": "Describe Pixelml Tool",
+        "operationId": "describe_pixelml_tool_v1_pixelml_tools__tool_id__get",
+        "security": [
+          {
+            "AuthHTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PmlToolDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/node_types/name/{node_type_name}/resolve_schema": {
+      "post": {
+        "tags": [
+          "node_type"
+        ],
+        "summary": "Resolve Configured Node Schema",
+        "operationId": "resolve_configured_node_schema_v1_node_types_name__node_type_name__resolve_schema_post",
+        "security": [
+          {
+            "AuthHTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "node_type_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Node Type Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JevSchemaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PmlResolvedSchema"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  ],
+                  "title": "Response Resolve Configured Node Schema V1 Node Types Name  Node Type Name  Resolve Schema Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4828,16 +5076,16 @@
           },
           "max_file_size": {
             "type": "integer",
-            "maximum": 52428800.0,
-            "minimum": 1.0,
+            "maximum": 52428800,
+            "minimum": 1,
             "title": "Max File Size",
             "description": "Maximum file size in bytes",
             "default": 10485760
           },
           "max_count_per_message": {
             "type": "integer",
-            "maximum": 10.0,
-            "minimum": 1.0,
+            "maximum": 10,
+            "minimum": 1,
             "title": "Max Count Per Message",
             "description": "Maximum number of attachments per message",
             "default": 5
@@ -4911,7 +5159,7 @@
           },
           "size": {
             "type": "integer",
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Size",
             "description": "File size in bytes"
           },
@@ -4987,16 +5235,16 @@
           },
           "top_k": {
             "type": "integer",
-            "maximum": 10.0,
-            "minimum": 1.0,
+            "maximum": 10,
+            "minimum": 1,
             "title": "Top K",
             "description": "The number of knowledge to retrieve",
             "default": 5
           },
           "threshold": {
             "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "maximum": 1,
+            "minimum": 0,
             "title": "Threshold",
             "description": "The threshold to use for the agent knowledge",
             "default": 0.5
@@ -5043,16 +5291,16 @@
           },
           "top_k": {
             "type": "integer",
-            "maximum": 10.0,
-            "minimum": 1.0,
+            "maximum": 10,
+            "minimum": 1,
             "title": "Top K",
             "description": "The number of knowledge to retrieve",
             "default": 5
           },
           "threshold": {
             "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "maximum": 1,
+            "minimum": 0,
             "title": "Threshold",
             "description": "The threshold to use for the agent knowledge",
             "default": 0.5
@@ -5110,8 +5358,8 @@
           },
           "timeout": {
             "type": "integer",
-            "maximum": 300.0,
-            "minimum": 1.0,
+            "maximum": 300,
+            "minimum": 1,
             "title": "Timeout",
             "description": "The timeout for the agent tool run in seconds",
             "default": 150
@@ -5184,7 +5432,7 @@
             "type": "number",
             "title": "Avg Messages Per Thread",
             "description": "Average messages per thread",
-            "default": 0.0
+            "default": 0
           }
         },
         "type": "object",
@@ -5886,8 +6134,8 @@
           },
           "timeout": {
             "type": "integer",
-            "maximum": 300.0,
-            "minimum": 1.0,
+            "maximum": 300,
+            "minimum": 1,
             "title": "Timeout",
             "description": "The timeout for the agent tool run in seconds",
             "default": 150
@@ -5939,8 +6187,8 @@
           },
           "timeout": {
             "type": "integer",
-            "maximum": 300.0,
-            "minimum": 1.0,
+            "maximum": 300,
+            "minimum": 1,
             "title": "Timeout",
             "description": "The timeout for the agent tool run in seconds",
             "default": 150
@@ -6306,8 +6554,8 @@
           },
           "timeout": {
             "type": "integer",
-            "maximum": 300.0,
-            "minimum": 1.0,
+            "maximum": 300,
+            "minimum": 1,
             "title": "Timeout",
             "description": "The timeout for the agent tool run in seconds",
             "default": 150
@@ -9443,7 +9691,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -9749,31 +9997,31 @@
             "type": "number",
             "title": "Current Balance",
             "description": "Current credit balance",
-            "default": 0.0
+            "default": 0
           },
           "credits_burned_30d": {
             "type": "number",
             "title": "Credits Burned 30D",
             "description": "Credits burned in last 30 days",
-            "default": 0.0
+            "default": 0
           },
           "credits_burned_total": {
             "type": "number",
             "title": "Credits Burned Total",
             "description": "Total credits burned all time",
-            "default": 0.0
+            "default": 0
           },
           "credits_refunded": {
             "type": "number",
             "title": "Credits Refunded",
             "description": "Total credits refunded",
-            "default": 0.0
+            "default": 0
           },
           "credits_purchased": {
             "type": "number",
             "title": "Credits Purchased",
             "description": "Total credits purchased",
-            "default": 0.0
+            "default": 0
           }
         },
         "type": "object",
@@ -10170,8 +10418,8 @@
           },
           "sequence": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Sequence"
           }
         },
@@ -10229,8 +10477,8 @@
           },
           "sequence": {
             "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
+            "maximum": 100,
+            "minimum": 0,
             "title": "Sequence"
           }
         },
@@ -11750,7 +11998,7 @@
           },
           "size": {
             "type": "integer",
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Size",
             "description": "File size in bytes"
           },
@@ -12080,7 +12328,7 @@
           },
           "size": {
             "type": "integer",
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Size",
             "description": "File size in bytes"
           },
@@ -13872,8 +14120,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 200.0,
-                "minimum": 1.0
+                "maximum": 200,
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -14099,8 +14347,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 200.0,
-                "minimum": 1.0
+                "maximum": 200,
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -14144,13 +14392,13 @@
             "type": "number",
             "title": "Default Retry Wait Min",
             "description": "Default minimum wait time between retries (seconds)",
-            "default": 1.0
+            "default": 1
           },
           "default_retry_wait_max": {
             "type": "number",
             "title": "Default Retry Wait Max",
             "description": "Default maximum wait time between retries (seconds)",
-            "default": 60.0
+            "default": 60
           },
           "node_overrides": {
             "additionalProperties": {
@@ -14630,8 +14878,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 200.0,
-                "minimum": 1.0
+                "maximum": 200,
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -15785,28 +16033,28 @@
           },
           "followers_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Followers Count",
             "description": "Number of users following this creator",
             "default": 0
           },
           "created_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Created Count",
             "description": "Number of published marketplace items",
             "default": 0
           },
           "likes_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Likes Count",
             "description": "Total likes across all creator items",
             "default": 0
           },
           "total_mixes": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Total Mixes",
             "description": "Total mixes/remixes across all creator items",
             "default": 0
@@ -15902,21 +16150,21 @@
           },
           "followers_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Followers Count",
             "description": "Number of users following this creator",
             "default": 0
           },
           "created_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Created Count",
             "description": "Number of published marketplace items",
             "default": 0
           },
           "likes_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Likes Count",
             "description": "Total likes across all creator items",
             "default": 0
@@ -16113,7 +16361,7 @@
           },
           "price_cents": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Price Cents",
             "description": "Price in cents (0 for free items)"
           },
@@ -16145,28 +16393,28 @@
           },
           "num_uses": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Uses",
             "description": "Number of times this item has been used",
             "default": 0
           },
           "num_likes": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Likes",
             "description": "Number of likes this item has received",
             "default": 0
           },
           "num_views": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Views",
             "description": "Number of times this item has been viewed",
             "default": 0
           },
           "num_mixes": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Mixes",
             "description": "Number of times this item has been mixed/remixed",
             "default": 0
@@ -16295,7 +16543,7 @@
           },
           "price_cents": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Price Cents",
             "description": "Price in cents (0 for free items)",
             "default": 0
@@ -16413,7 +16661,7 @@
           },
           "price_cents": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Price Cents",
             "description": "Price in cents (0 for free items)",
             "default": 0
@@ -16544,7 +16792,7 @@
           },
           "price_cents": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Price Cents",
             "description": "Price in cents (0 for free items)"
           },
@@ -16576,28 +16824,28 @@
           },
           "num_uses": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Uses",
             "description": "Number of times this item has been used",
             "default": 0
           },
           "num_likes": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Likes",
             "description": "Number of likes this item has received",
             "default": 0
           },
           "num_views": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Views",
             "description": "Number of times this item has been viewed",
             "default": 0
           },
           "num_mixes": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Num Mixes",
             "description": "Number of times this item has been mixed/remixed",
             "default": 0
@@ -16830,7 +17078,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -16939,7 +17187,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -17325,8 +17573,8 @@
         "properties": {
           "temperature": {
             "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
+            "maximum": 1,
+            "minimum": 0,
             "title": "Temperature",
             "description": "The temperature to use for the model",
             "default": 0.1
@@ -17335,7 +17583,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 50000.0
+                "maximum": 50000
               },
               {
                 "type": "null"
@@ -17348,7 +17596,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 3000000.0
+                "maximum": 3000000
               },
               {
                 "type": "null"
@@ -18283,7 +18531,8 @@
         "type": "string",
         "enum": [
           "popular",
-          "data"
+          "data",
+          "pixelml"
         ],
         "title": "NodeTypeCategoryEnum",
         "description": "Enum for node type category."
@@ -19126,7 +19375,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19138,7 +19387,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19150,7 +19399,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19162,7 +19411,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19193,7 +19442,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19205,7 +19454,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19217,7 +19466,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19229,7 +19478,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19260,7 +19509,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19272,7 +19521,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19284,7 +19533,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19296,7 +19545,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19327,7 +19576,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19339,7 +19588,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19351,7 +19600,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19363,7 +19612,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19394,7 +19643,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19406,7 +19655,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19418,7 +19667,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19430,7 +19679,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19461,7 +19710,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19473,7 +19722,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19485,7 +19734,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19497,7 +19746,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19528,7 +19777,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19540,7 +19789,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19552,7 +19801,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19564,7 +19813,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19595,7 +19844,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19607,7 +19856,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19619,7 +19868,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19631,7 +19880,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19662,7 +19911,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19674,7 +19923,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19686,7 +19935,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19698,7 +19947,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19729,7 +19978,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19741,7 +19990,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19753,7 +20002,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19765,7 +20014,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19796,7 +20045,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19808,7 +20057,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19820,7 +20069,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19832,7 +20081,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19863,7 +20112,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19875,7 +20124,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19887,7 +20136,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19899,7 +20148,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19930,7 +20179,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19942,7 +20191,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19954,7 +20203,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -19966,7 +20215,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -19997,7 +20246,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -20009,7 +20258,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -20021,7 +20270,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -20033,7 +20282,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -20064,7 +20313,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -20076,7 +20325,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -20088,7 +20337,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1.0
+                "minimum": 1
               },
               {
                 "type": "null"
@@ -20100,7 +20349,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -21608,8 +21857,8 @@
           },
           "size": {
             "type": "integer",
-            "maximum": 10485760.0,
-            "minimum": 0.0,
+            "maximum": 10485760,
+            "minimum": 0,
             "title": "Size",
             "description": "File size in bytes (max 10MB)"
           },
@@ -24531,8 +24780,8 @@
           },
           "max_tokens": {
             "type": "integer",
-            "maximum": 32000.0,
-            "minimum": 1.0,
+            "maximum": 32000,
+            "minimum": 1,
             "title": "Max Tokens",
             "default": 10000
           },
@@ -24868,7 +25117,7 @@
             "type": "number",
             "title": "Success Rate",
             "description": "Success rate percentage",
-            "default": 0.0
+            "default": 0
           },
           "nodes": {
             "anyOf": [
@@ -25072,13 +25321,13 @@
             "type": "number",
             "title": "Total Credits Used",
             "description": "Total credits consumed",
-            "default": 0.0
+            "default": 0
           },
           "avg_credits_per_run": {
             "type": "number",
             "title": "Avg Credits Per Run",
             "description": "Average credits per run",
-            "default": 0.0
+            "default": 0
           },
           "last_run_at": {
             "anyOf": [
@@ -25283,7 +25532,7 @@
             "type": "number",
             "title": "Success Rate",
             "description": "Success rate percentage",
-            "default": 0.0
+            "default": 0
           },
           "avg_run_duration_seconds": {
             "anyOf": [
@@ -26036,7 +26285,7 @@
           "operation_cost": {
             "type": "number",
             "title": "Operation Cost",
-            "default": 0.0
+            "default": 0
           },
           "input": {
             "anyOf": [
@@ -26317,7 +26566,7 @@
             "type": "number",
             "title": "Operation Cost",
             "description": "Cost of the operation",
-            "default": 0.0
+            "default": 0
           }
         },
         "type": "object",
@@ -26895,7 +27144,7 @@
             "type": "number",
             "title": "Workforce Success Rate",
             "description": "Workforce run success rate",
-            "default": 0.0
+            "default": 0
           }
         },
         "type": "object",
@@ -27936,6 +28185,215 @@
         ],
         "title": "NodeType",
         "description": "DTO for node_type models."
+      },
+      "PmlToolPage": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PmlToolSummary"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "total",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "title": "PmlToolPage"
+      },
+      "PmlToolSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "PmlToolSummary"
+      },
+      "PmlToolDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input Schema"
+          },
+          "output_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Output Schema"
+          },
+          "schema_hash": {
+            "type": "string",
+            "title": "Schema Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "input_schema",
+          "output_schema",
+          "schema_hash"
+        ],
+        "title": "PmlToolDetail"
+      },
+      "JevSchemaRequest": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "node_input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Node Input"
+          },
+          "connection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "node_input"
+        ],
+        "title": "JevSchemaRequest",
+        "description": "Resolve configured node schemas without executing a provider request."
+      },
+      "PmlResolvedSchema": {
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "input_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Input Schema"
+          },
+          "output_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Output Schema"
+          },
+          "schema_hash": {
+            "type": "string",
+            "title": "Schema Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "input_schema",
+          "output_schema",
+          "schema_hash"
+        ],
+        "title": "PmlResolvedSchema"
       }
     },
     "securitySchemes": {

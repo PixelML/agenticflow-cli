@@ -63,7 +63,7 @@ export function pluginSpecToConfig(
   connectionsByCategory: Partial<Record<"pixelml", string>> = {},
 ): AgentPluginToolConfig {
   let connection: string | null = null;
-  if (spec.connectionCategory === "pixelml") {
+  if (spec.connectionCategory === "pixelml" || spec.nodeTypeName === "pml_run_tool") {
     const resolved = connectionsByCategory.pixelml;
     if (!resolved) {
       throw new Error(
