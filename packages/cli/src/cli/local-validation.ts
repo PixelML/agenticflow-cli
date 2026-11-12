@@ -11,6 +11,114 @@ export interface LocalValidationIssue {
   message: string;
 }
 
+function isReference(value: unknown): value is string {
+  return typeof value === 'string' && /^\s*\{\{(?:(?!\{\{|\}\})[\s\S])+\}\}\s*$/.test(value);
+}
+
+function validatePixelMLConfig(raw: unknown, connection: unknown, wrapped: boolean, issues: LocalValidationIssue[], path: string): void {
+  if (typeof connection !== 'string' || !connection.trim() || connection.includes('{{')) addIssue(issues, `${path}.connection`, 'requires a fixed PixelML connection');
+  if (!validateObject(raw, issues, `${path}.input_config`, true)) return;
+  const config: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!['model', 'parameters', 'schema_hash'].includes(key)) addIssue(issues, `${path}.input_config.${key}`, 'unsupported Run Tool configuration field');
+    if (wrapped) {
+      if (!isRecord(value) || !('value' in value)) addIssue(issues, `${path}.input_config.${key}`, 'agent fields must be wrapped in {value: ...}');
+      else config[key] = value.value;
+    } else config[key] = value;
+  }
+  if (typeof config.model !== 'string' || !config.model.trim() || config.model.includes('{{')) addIssue(issues, `${path}.input_config.model`, 'requires a fixed model ID');
+  if (!isRecord(config.parameters) && !isReference(config.parameters)) addIssue(issues, `${path}.input_config.parameters`, 'must be an object or whole-value reference');
+  if (config.schema_hash != null && (typeof config.schema_hash !== 'string' || config.schema_hash.includes('{{'))) addIssue(issues, `${path}.input_config.schema_hash`, 'must be a fixed schema hash');
+}
+
+function validatePixelMLPlugins(value: unknown, issues: LocalValidationIssue[]): void {
+  if (!Array.isArray(value)) return;
+  value.forEach((plugin, index) => {
+    if (isRecord(plugin) && plugin.plugin_id === 'pml_run_tool') validatePixelMLConfig(plugin.input_config, plugin.connection, true, issues, `$.plugins[${index}]`);
+  });
+}
+
+/** Keep workflow raw inputs and agent fixed wrappers distinct. */
+export function pixelMLConfigureExample(detail: { id: string; schema_hash: string }, connection: string) {
+  return {
+    workflow: { name: 'run_tool', node_type_name: 'pml_run_tool', connection, input_config: { model: detail.id, parameters: '{{parameters}}', schema_hash: detail.schema_hash } },
+    agent: { plugin_id: 'pml_run_tool', plugin_version: 'v1.0.0', connection, input_config: { model: { value: detail.id }, parameters: { value: {} }, schema_hash: { value: detail.schema_hash } } },
+  };
+}
+
+interface PixelMLBuildClient {
+  nodeTypes: { resolveSchema(options: { name: string; projectId?: string; connection?: string; inputConfig: Record<string, unknown> }): Promise<unknown> };
+}
+
+export function hasPixelMLTools(payload: unknown, kind: 'workflow' | 'agent'): boolean {
+  if (!isRecord(payload)) return false;
+  const rows = payload[kind === 'workflow' ? 'nodes' : 'plugins'];
+  return Array.isArray(rows) && rows.some(row => isRecord(row) && row[kind === 'workflow' ? 'node_type_name' : 'plugin_id'] === 'pml_run_tool');
+}
+
+/** Resolve each selected model, preserve expressions, and pin the reviewed schema hash.
+ * Local checks cover known literal types; full JSON Schema validation follows reference resolution on the server.
+ */
+export async function preparePixelMLBuild(client: PixelMLBuildClient, raw: unknown, kind: 'workflow' | 'agent') {
+  if (!isRecord(raw)) throw new Error('Build payload must be an object.');
+  const payload = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
+  const issues: LocalValidationIssue[] = [];
+  const schemas: Record<string, unknown> = {};
+  const key = kind === 'workflow' ? 'nodes' : 'plugins';
+  const rows = payload[key];
+  if (!Array.isArray(rows)) return { payload, issues, schemas };
+  for (const [index, row] of rows.entries()) {
+    if (!isRecord(row) || row[kind === 'workflow' ? 'node_type_name' : 'plugin_id'] !== 'pml_run_tool') continue;
+    const path = `$.${key}[${index}]`;
+    const before = issues.length;
+    validatePixelMLConfig(row.input_config, row.connection, kind === 'agent', issues, path);
+    if (issues.length !== before) continue;
+    const fields = row.input_config as Record<string, unknown>;
+    const input = kind === 'agent' ? Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, (v as Record<string, unknown>).value])) : fields;
+    const response = await client.nodeTypes.resolveSchema({ name: 'pml_run_tool', projectId: typeof payload.project_id === 'string' ? payload.project_id : undefined, connection: row.connection as string, inputConfig: input });
+    const resolved = isRecord(response) && isRecord(response.body) ? response.body : response;
+    if (!isRecord(resolved) || !isRecord(resolved.input_schema) || !isRecord(resolved.output_schema) || typeof resolved.schema_hash !== 'string' || resolved.model !== input.model) throw new Error('Invalid PixelML resolved schema response.');
+    schemas[path] = resolved;
+    if (input.schema_hash != null && input.schema_hash !== resolved.schema_hash) {
+      addIssue(issues, `${path}.input_config.schema_hash`, 'schema changed; describe the tool and review configuration before refreshing its hash');
+      continue;
+    }
+    validatePixelMLLiterals(input, resolved.input_schema, `${path}.input_config`, issues, kind === 'agent', resolved.input_schema);
+    fields.schema_hash = kind === 'agent' ? { ...(isRecord(fields.schema_hash) ? fields.schema_hash : {}), value: resolved.schema_hash } : resolved.schema_hash;
+  }
+  return { payload, issues, schemas };
+}
+
+function validatePixelMLLiterals(value: unknown, schema: unknown, path: string, issues: LocalValidationIssue[], partial: boolean, root: Record<string, unknown>, depth = 0): void {
+  if (isReference(value) || !isRecord(schema) || depth > 64) return;
+  if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/')) {
+    const target = schema.$ref.slice(2).split('/').reduce<unknown>((current, token) => isRecord(current) ? current[token.replace(/~1/g, '/').replace(/~0/g, '~')] : undefined, root);
+    validatePixelMLLiterals(value, target, path, issues, partial, root, depth + 1);
+  }
+  if (Array.isArray(schema.allOf)) for (const branch of schema.allOf) validatePixelMLLiterals(value, branch, path, issues, partial, root, depth + 1);
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives)) {
+    const candidates = alternatives.map(branch => { const errors: LocalValidationIssue[] = []; validatePixelMLLiterals(value, branch, path, errors, partial, root, depth + 1); return errors; });
+    if (candidates.length && candidates.every(errors => errors.length)) addIssue(issues, path, 'does not match any allowed schema type');
+  }
+  const types = Array.isArray(schema.type) ? schema.type : typeof schema.type === 'string' ? [schema.type] : [];
+  const matches = (type: unknown) => type === 'object' ? isRecord(value) : type === 'array' ? Array.isArray(value) : type === 'null' ? value === null : type === 'integer' ? typeof value === 'number' && Number.isInteger(value) : typeof value === type;
+  if (types.length && !types.some(matches)) { addIssue(issues, path, `must match schema type ${types.join(' or ')} or be a whole-value reference`); return; }
+  // Interpolated strings are checked after runtime substitution.
+  const templated = typeof value === 'string' && value.includes('{{');
+  if (!templated && Array.isArray(schema.enum) && !schema.enum.some(item => JSON.stringify(item) === JSON.stringify(value))) addIssue(issues, path, 'must match an allowed schema value');
+  if (isRecord(value)) {
+    if (!partial && Array.isArray(schema.required)) for (const key of schema.required) if (typeof key === 'string' && !(key in value)) addIssue(issues, `${path}.${key}`, 'is required by the selected tool');
+    for (const [key, child] of Object.entries(value)) {
+      const properties = isRecord(schema.properties) ? schema.properties : {};
+      if (key in properties) validatePixelMLLiterals(child, properties[key], `${path}.${key}`, issues, partial, root, depth + 1);
+      else if (isRecord(schema.additionalProperties)) validatePixelMLLiterals(child, schema.additionalProperties, `${path}.${key}`, issues, partial, root, depth + 1);
+      else if (schema.additionalProperties === false) addIssue(issues, `${path}.${key}`, 'is not allowed by the selected tool');
+    }
+  }
+  if (Array.isArray(value)) value.forEach((child, index) => validatePixelMLLiterals(child, Array.isArray(schema.items) ? schema.items[index] : schema.items, `${path}[${index}]`, issues, false, root, depth + 1));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -192,6 +300,7 @@ function validateNodePayload(node: unknown, issues: LocalValidationIssue[], path
   if (isRecord(node["input_config"])) {
     validateAiNodeInput(String(node["node_type_name"] ?? ""), node["input_config"] as Record<string, unknown>, issues, `${path}.input_config`);
   }
+  if (node.node_type_name === 'pml_run_tool') validatePixelMLConfig(node.input_config, node.connection, false, issues, path);
 
   if (node["output_mapping"] != null) {
     validateStringMap(node["output_mapping"], issues, `${path}.output_mapping`, false);
@@ -310,6 +419,7 @@ export function validateAgentCreatePayload(payload: unknown): LocalValidationIss
   validateString(payload["name"], issues, "$.name", { required: true, minLength: 1 });
   validateString(payload["project_id"], issues, "$.project_id", { required: true, minLength: 1 });
   validateToolsArray(payload["tools"], issues, "$.tools", true);
+  validatePixelMLPlugins(payload.plugins, issues);
 
   if (payload["visibility"] != null) {
     const visibility = payload["visibility"];
@@ -347,6 +457,7 @@ export function validateAgentUpdatePayload(payload: unknown): LocalValidationIss
     addIssue(issues, "$.description", "must be a string or null");
   }
   if (payload["tools"] != null) validateToolsArray(payload["tools"], issues, "$.tools");
+  validatePixelMLPlugins(payload.plugins, issues);
   if (payload["recursion_limit"] != null) {
     validateNumber(payload["recursion_limit"], issues, "$.recursion_limit", {
       min: 10,

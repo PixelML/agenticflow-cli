@@ -10,6 +10,25 @@ export interface Playbook {
 }
 
 export const PLAYBOOKS: Record<string, Playbook> = {
+  'pixelml-tools': {
+    topic: 'pixelml-tools',
+    title: 'Discover and configure PixelML tools',
+    summary: 'Search the catalog, describe a selected tool, then build a workflow or agent using one Run Tool node.',
+    content: [
+      'Select an existing PixelML connection in the current project; connection IDs are required for discovery and builds.',
+      'af pixelml tools list --connection <id> --search image --limit 30 --offset 0',
+      'Search is server-side. Use has_more and offset + data.length for the next page; do not download the whole catalog.',
+      "af pixelml tools describe --connection <id> --model '<router-tool-id>'",
+      'Describe preserves input_schema, output_schema and schema_hash and includes separate workflow and agent configure examples.',
+      'Workflow: node_type_name=pml_run_tool, connection=<id>, input_config={model, parameters, schema_hash}.',
+      'Agent: plugin_id=pml_run_tool, connection=<id>, input_config={model:{value:model}, parameters:{value:fixedParameters}, schema_hash:{value:hash}}.',
+      'Model and connection are fixed. Agent parameters may be partially fixed; empty objects leave arguments to the LLM. Fixed arrays, null and scalars remain whole values.',
+      'Preserve literal {{references}} and native numbers, booleans, objects, arrays and null. Whole parameters may be an expression returning an object.',
+      'Use existing workflow create/update/validate or agent create/update. Online preparation resolves each selected schema, checks known literal types, and pins its hash. Dry-run/local-only checks structure without discovery.',
+      'A changed schema hash requires a new describe and explicit configuration review. Runtime resolves references and performs full JSON Schema validation.',
+      'Saving does not execute. Execution uses the existing workflow/agent run APIs only when requested.',
+    ].join('\n'),
+  },
   "first-touch": {
     topic: "first-touch",
     title: "First Touch — AI Agent Onboarding",

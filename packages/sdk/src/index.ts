@@ -28,6 +28,7 @@ export {
   WorkflowsResource,
   ConnectionsResource,
   NodeTypesResource,
+  PixelMLToolsResource,
   UploadsResource,
   AgentThreadsResource,
   KnowledgeResource,
@@ -41,6 +42,7 @@ export {
 } from "./resources/index.js";
 export type { PaperclipConfig, PaperclipCompany, PaperclipAgent } from "./resources/index.js";
 export type { WorkforceListOptions, WorkforceSchema } from "./resources/index.js";
+export type { PixelMLToolSummary, PixelMLToolDetail, PixelMLToolPage, PixelMLToolScope, PixelMLToolListOptions } from './resources/index.js';
 
 // ── createClient ────────────────────────────────────────────────────
 import { AgenticFlowSDK, type AgenticFlowSDKOptions } from "./core.js";
@@ -48,6 +50,7 @@ import { AgentsResource } from "./resources/agents.js";
 import { WorkflowsResource } from "./resources/workflows.js";
 import { ConnectionsResource } from "./resources/connections.js";
 import { NodeTypesResource } from "./resources/node-types.js";
+import { PixelMLToolsResource } from './resources/pixelml-tools.js';
 import { UploadsResource } from "./resources/uploads.js";
 import { AgentThreadsResource } from "./resources/agent-threads.js";
 import { KnowledgeResource } from "./resources/knowledge.js";
@@ -71,6 +74,8 @@ export interface AgenticFlowClient {
   connections: ConnectionsResource;
   /** Node-type discovery, search, dynamic options */
   nodeTypes: NodeTypesResource;
+  /** Paginated PixelML catalog discovery using a project connection. */
+  pixelmlTools: PixelMLToolsResource;
   /** Anonymous upload sessions */
   uploads: UploadsResource;
   /** Agent thread CRUD, messages */
@@ -123,6 +128,7 @@ export function createClient(options: AgenticFlowSDKOptions = {}): AgenticFlowCl
     workflows: new WorkflowsResource(sdk),
     connections: new ConnectionsResource(sdk),
     nodeTypes: new NodeTypesResource(sdk),
+    pixelmlTools: new PixelMLToolsResource(sdk),
     uploads: new UploadsResource(sdk),
     agentThreads: new AgentThreadsResource(sdk),
     knowledge: new KnowledgeResource(sdk),

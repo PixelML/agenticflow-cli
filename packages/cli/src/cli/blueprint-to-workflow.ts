@@ -26,6 +26,7 @@ import type { CompanyBlueprint, WorkflowNodeSpec } from "./company-blueprints.js
  */
 const LLM_PROVIDER_CATEGORIES = ["straico", "openai", "anthropic", "google", "deepseek", "groq"];
 const DEFAULT_CONNECTION_CATEGORIES: Record<string, string> = {
+  pml_run_tool: "pixelml",
   pml_llm: "pixelml",
   ai_decision: "pixelml",
   ai_switch: "pixelml",
@@ -215,6 +216,7 @@ export function workflowBlueprintToPayload(
   const resolveConnection = (nodeType: string, explicit: unknown, explicitCategory: unknown): string | null => {
     if (explicit === null) return null;
     if (typeof explicit === "string" && explicit.length > 0) {
+      if (nodeType === 'pml_run_tool') return explicit;
       return explicit.startsWith("{{") ? explicit : connectionReference(explicit);
     }
     // A blueprint can explicitly disable auto-discovery for a node.
@@ -229,7 +231,7 @@ export function workflowBlueprintToPayload(
     }
     const categoryConnection = options.connectionsByCategory?.[category]
       ?? (category === "pixelml" ? options.pixelmlConnectionId : undefined);
-    if (categoryConnection) return connectionReference(categoryConnection);
+    if (categoryConnection) return nodeType === 'pml_run_tool' ? categoryConnection : connectionReference(categoryConnection);
     if (nodeType === "llm" && options.llmConnectionId && explicitCategory == null) {
       return connectionReference(options.llmConnectionId);
     }

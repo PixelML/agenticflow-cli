@@ -74,6 +74,7 @@ export class NodeTypesResource {
     inputConfig?: Record<string, unknown>;
     connection?: string;
     searchTerm?: string;
+    paginatedOptions?: { limit: number; offset: number };
   }): Promise<unknown> {
     const projectId = options.projectId ?? this.client.projectId;
     const body: Record<string, unknown> = {
@@ -83,8 +84,15 @@ export class NodeTypesResource {
       project_id: projectId ?? null,
     };
     if (options.searchTerm != null) body["search_term"] = options.searchTerm;
+    if (options.paginatedOptions != null) body["paginated_options"] = options.paginatedOptions;
     return (await this.client.post(`/v1/node_types/name/${options.name}/dynamic_options`, {
       json: body,
     })).data;
+  }
+
+  async resolveSchema(options: { name: string; projectId?: string; connection?: string; inputConfig: Record<string, unknown> }): Promise<unknown> {
+    const body: Record<string, unknown> = { project_id: options.projectId ?? this.client.projectId, node_input: options.inputConfig };
+    if (options.connection !== undefined) body.connection = options.connection;
+    return (await this.client.post('/v1/node_types/name/{name}/resolve_schema', { pathParams: { name: options.name }, json: body })).data;
   }
 }
