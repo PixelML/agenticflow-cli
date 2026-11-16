@@ -5,10 +5,19 @@ on:
     tags:
       - "cli-v*"
       - "sdk-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing tag to stage (for example sdk-v1.7.0 or cli-v1.12.0)'
+        required: true
+        type: string
 
 permissions:
-  contents: write   # Create GitHub Release
+  contents: read
   id-token: write   # npm provenance attestation
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 defaults:
   run:
@@ -16,18 +25,19 @@ defaults:
 
 jobs:
   release-cli:
-    if: startsWith(github.ref_name, 'cli-v')
+    if: startsWith(inputs.release_tag || github.ref_name, 'cli-v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Extract version
         id: meta
         run: |
-          VERSION="${GITHUB_REF_NAME#cli-v}"
+          VERSION="${RELEASE_TAG#cli-v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "📦 CLI v$VERSION"
 
@@ -36,6 +46,9 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Install npm with staged publishing support
+        run: npm install --global npm@11.15.0
 
       - name: Install dependencies
         run: npm ci
@@ -56,56 +69,46 @@ jobs:
         working-directory: packages/cli
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version --allow-same-version
 
-      - name: Publish to npm (trusted publishing)
+      - name: Stage package on npm (approval required)
         working-directory: packages/cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "CLI v${{ steps.meta.outputs.version }}" \
-            --generate-notes \
-            --notes "## 📦 @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
-
-          \`\`\`bash
-          npm install -g @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }}
-          \`\`\`
-
-          [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})
-
-          ---"
+        # Dispatch builds a tag using a workflow on main; its OIDC source is main.
+        # Only tag-push runs can attest the checked-out source accurately.
+        run: npm stage publish --access public --provenance=${{ github.event_name == 'push' }}
 
       - name: Summary
         run: |
-          echo "## ✅ CLI v${{ steps.meta.outputs.version }} released" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-cli/v/${{ steps.meta.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "- GitHub Release created with auto-generated notes" >> "$GITHUB_STEP_SUMMARY"
+          echo "## CLI v${{ steps.meta.outputs.version }} staged — approval required" >> "$GITHUB_STEP_SUMMARY"
+          echo "- @pixelml/agenticflow-cli@${{ steps.meta.outputs.version }} is awaiting review; it is not published yet." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Review it in npmjs.com → Staged Packages and approve with 2FA." >> "$GITHUB_STEP_SUMMARY"
+          echo "- After approval, verify the npm version and create the GitHub Release for ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
 
   release-sdk:
-    if: startsWith(github.ref_name, 'sdk-v')
+    if: startsWith(inputs.release_tag || github.ref_name, 'sdk-v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Extract version
         id: meta
         run: |
-          VERSION="${GITHUB_REF_NAME#sdk-v}"
+          VERSION="${RELEASE_TAG#sdk-v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "📦 SDK v$VERSION"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Install npm with staged publishing support
+        run: npm install --global npm@11.15.0
 
       - name: Install dependencies
         run: npm ci
@@ -120,31 +123,17 @@ jobs:
         working-directory: packages/sdk
         run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version --allow-same-version
 
-      - name: Publish to npm
+      - name: Stage package on npm (approval required)
         working-directory: packages/sdk
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "SDK v${{ steps.meta.outputs.version }}" \
-            --generate-notes \
-            --notes "## 📦 @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
-
-          \`\`\`bash
-          npm install @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }}
-          \`\`\`
-
-          [View on npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})
-
-          ---"
+        # Dispatch builds a tag using a workflow on main; its OIDC source is main.
+        # Only tag-push runs can attest the checked-out source accurately.
+        run: npm stage publish --access public --provenance=${{ github.event_name == 'push' }}
 
       - name: Summary
         run: |
-          echo "## ✅ SDK v${{ steps.meta.outputs.version }} released" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Published to [npm](https://www.npmjs.com/package/@pixelml/agenticflow-sdk/v/${{ steps.meta.outputs.version }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "- GitHub Release created with auto-generated notes" >> "$GITHUB_STEP_SUMMARY"
+          echo "## SDK v${{ steps.meta.outputs.version }} staged — approval required" >> "$GITHUB_STEP_SUMMARY"
+          echo "- @pixelml/agenticflow-sdk@${{ steps.meta.outputs.version }} is awaiting review; it is not published yet." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Review it in npmjs.com → Staged Packages and approve with 2FA." >> "$GITHUB_STEP_SUMMARY"
+          echo "- After approval, verify the npm version and create the GitHub Release for ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
