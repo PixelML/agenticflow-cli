@@ -53,6 +53,11 @@ Publish → **Run workflow**, select the updated branch and enter `sdk-v1.7.0`
 building the source from the selected tag. Re-running an old run uses its old
 workflow and will repeat the original failure.
 
+Tag-push runs include npm provenance. Manual retries omit provenance because
+GitHub identifies the dispatch branch/commit, not the tag being built; attaching
+that provenance would misidentify the package source. Review the selected tag
+and staged package before approval.
+
 Do not stage a version that is already staged or published. Review and approve
 the existing staged package instead. GitHub Releases are created manually after
 npm approval; the staging workflow has no repository write permission.

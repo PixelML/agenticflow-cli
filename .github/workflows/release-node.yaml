@@ -73,7 +73,9 @@ jobs:
         working-directory: packages/cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm stage publish --access public --provenance
+        # Dispatch builds a tag using a workflow on main; its OIDC source is main.
+        # Only tag-push runs can attest the checked-out source accurately.
+        run: npm stage publish --access public --provenance=${{ github.event_name == 'push' }}
 
       - name: Summary
         run: |
@@ -125,7 +127,9 @@ jobs:
         working-directory: packages/sdk
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm stage publish --access public --provenance
+        # Dispatch builds a tag using a workflow on main; its OIDC source is main.
+        # Only tag-push runs can attest the checked-out source accurately.
+        run: npm stage publish --access public --provenance=${{ github.event_name == 'push' }}
 
       - name: Summary
         run: |
