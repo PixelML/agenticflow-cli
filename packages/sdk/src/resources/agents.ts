@@ -1,6 +1,19 @@
 import type { AgenticFlowSDK } from "../core.js";
 import { AgentStream, type StreamRequest } from "../streaming.js";
 
+/**
+ * Fill the conversation id and per-message ids. PixelML-backed agents
+ * (pml_run_tool plugins, pixelml/* models) reject messages without an id:
+ * the id makes paid tool calls idempotent when a request is retried.
+ */
+export function withMessageIds(payload: StreamRequest): StreamRequest {
+  return {
+    ...payload,
+    id: payload.id ?? crypto.randomUUID(),
+    messages: payload.messages.map((m) => (m.id ? m : { ...m, id: crypto.randomUUID() })),
+  };
+}
+
 /** Result of a non-streaming agent run. */
 export interface AgentRunResult {
   /** Agent response text. */
@@ -9,12 +22,24 @@ export interface AgentRunResult {
   threadId: string;
   /** "completed" | "timeout" | "failed" */
   status: string;
+  /** User message id. Resend it with the same thread id and content to resume a pending tool job. */
+  messageId?: string;
+  /** Last error text the stream reported, if any. */
+  error?: string;
+  /** Tool names the agent called (Gateway tools start with "pixelml_"). */
+  toolCalls?: string[];
+  /** How many times the request was resent to resume a pending Gateway tool job. */
+  resumes?: number;
 }
 
 /** Options for `agents.run()`. */
 export interface AgentRunOptions {
   /** Message to send. */
   message: string;
+  /** User message id. Pass the id from an earlier run (same thread and content) to resume it. */
+  messageId?: string;
+  /** Max resends while a Gateway tool call is pending (default 4). */
+  maxResumes?: number;
   /** Thread ID to continue a conversation. Auto-generated if omitted. */
   threadId?: string;
   /** Max milliseconds to wait. Default 120000 (2 min). */
@@ -100,7 +125,7 @@ export class AgentsResource {
 
   // ── Stream (authenticated) ─────────────────────────────────────────
   async stream(agentId: string, payload: StreamRequest): Promise<AgentStream> {
-    const body = { ...payload, id: payload.id ?? crypto.randomUUID() };
+    const body = withMessageIds(payload);
     const response = await this.client.requestStream("POST", `/v1/agents/${agentId}/stream`, {
       json: body,
     });
@@ -109,7 +134,7 @@ export class AgentsResource {
 
   // ── Stream Anonymous ───────────────────────────────────────────────
   async streamAnonymous(agentId: string, payload: StreamRequest): Promise<AgentStream> {
-    const body = { ...payload, id: payload.id ?? crypto.randomUUID() };
+    const body = withMessageIds(payload);
     const response = await this.client.requestStream("POST", `/v1/agents/anonymous/${agentId}/stream`, {
       json: body,
     });
@@ -134,26 +159,47 @@ export class AgentsResource {
    */
   async run(agentId: string, options: AgentRunOptions): Promise<AgentRunResult> {
     const threadId = options.threadId ?? crypto.randomUUID();
+    // Keep one message id for the whole run: PixelML-backed agents resume a
+    // pending tool job only when the same thread id, message id and content
+    // are sent again (no server-side polling of agent tool jobs).
+    const messageId = options.messageId ?? crypto.randomUUID();
     const timeoutMs = options.timeoutMs ?? 120_000;
     const pollIntervalMs = options.pollIntervalMs ?? 2_000;
+    const maxResumes = options.maxResumes ?? 4;
+    const start = Date.now();
 
     const streamReq: StreamRequest = {
       id: threadId,
-      messages: [{ role: "user", content: options.message }],
+      messages: [{ id: messageId, role: "user", content: options.message }],
     };
 
-    // 1. Stream to get response text + thread_id
-    const stream = await this.stream(agentId, streamReq);
-    const text = await stream.text();
-    const resolvedThreadId = stream.threadId ?? threadId;
-
-    // 2. If we got text, return immediately
-    if (text && text.trim()) {
-      return { response: text, threadId: resolvedThreadId, status: "completed" };
+    // 1. Stream; resend the same request while a Gateway tool call is pending.
+    let resolvedThreadId = threadId;
+    let lastError: string | undefined;
+    const toolCalls: string[] = [];
+    for (let attempt = 0; ; attempt++) {
+      const stream = await this.stream(agentId, streamReq);
+      const parts = await stream.parts();
+      resolvedThreadId = stream.threadId ?? resolvedThreadId;
+      const text = parts.filter((p) => p.type === "textDelta").map((p) => p.value as string).join("");
+      const errors = parts.filter((p) => p.type === "error").map((p) => (typeof p.value === "string" ? p.value : JSON.stringify(p.value)));
+      for (const p of parts) {
+        if (p.type === "toolCall") {
+          const name = (p.value as Record<string, unknown> | null)?.["toolName"];
+          if (typeof name === "string" && !toolCalls.includes(name)) toolCalls.push(name);
+        }
+      }
+      if (text.trim()) {
+        return { response: text, threadId: resolvedThreadId, messageId, status: "completed", toolCalls, resumes: attempt };
+      }
+      lastError = errors[errors.length - 1] ?? lastError;
+      const gatewayCall = toolCalls.some((name) => name.startsWith("pixelml_"));
+      const timeLeft = timeoutMs - (Date.now() - start);
+      if (!gatewayCall || attempt >= maxResumes || timeLeft <= 0) break;
+      await new Promise((r) => setTimeout(r, Math.min(timeLeft, 5_000 * (attempt + 1))));
     }
 
-    // 3. Fallback: poll thread until processed, then fetch messages
-    const start = Date.now();
+    // 2. Fallback: poll thread until processed, then fetch messages
     while (Date.now() - start < timeoutMs) {
       try {
         const thread = (await this.client.get(`/v1/agent-threads/${resolvedThreadId}`)).data as Record<string, unknown> | null;
@@ -165,11 +211,11 @@ export class AgentsResource {
           };
           const assistantMsgs = history.messages?.filter((m) => m.role === "assistant") ?? [];
           const lastMsg = assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].content : "";
-          return { response: lastMsg, threadId: resolvedThreadId, status: "completed" };
+          return { response: lastMsg, threadId: resolvedThreadId, messageId, status: "completed", toolCalls };
         }
 
         if (status === "failed") {
-          return { response: "", threadId: resolvedThreadId, status: "failed" };
+          return { response: "", threadId: resolvedThreadId, messageId, status: "failed", error: lastError, toolCalls };
         }
       } catch {
         // Thread not ready yet
@@ -177,7 +223,7 @@ export class AgentsResource {
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
 
-    return { response: "", threadId: resolvedThreadId, status: "timeout" };
+    return { response: "", threadId: resolvedThreadId, messageId, status: "timeout", error: lastError, toolCalls };
   }
 
   // ── Upload File (authenticated) ────────────────────────────────────

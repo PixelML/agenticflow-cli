@@ -91,7 +91,7 @@ describe("tier1BlueprintToAgentPayload", () => {
 
     expect(result.body.name).toBe("My Agent");
     expect(result.body.project_id).toBe("proj-1");
-    expect(result.body.model).toBe("agenticflow/gpt-4o-mini");
+    expect(result.body.model).toBe("agenticflow/gpt-5-nano");
     expect(result.body.recursion_limit).toBe(100);
     expect(result.body.description).toBe("A test blueprint");
     expect(Array.isArray(result.body.plugins)).toBe(true);

@@ -23,6 +23,7 @@ export {
 } from "./exceptions.js";
 export {
   AgentsResource,
+  withMessageIds,
   type AgentRunResult,
   type AgentRunOptions,
   WorkflowsResource,

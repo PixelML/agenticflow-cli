@@ -37,6 +37,8 @@ export interface StreamPart {
 // ── Stream request types ────────────────────────────────────────────
 
 export interface StreamMessage {
+  /** Message id. Auto-generated if omitted; PixelML-backed agents require one. */
+  id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   experimental_attachments?: Array<{

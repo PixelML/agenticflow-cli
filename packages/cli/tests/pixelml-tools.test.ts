@@ -62,9 +62,12 @@ it('describes encoded models with schemas, hash and distinct workflow/agent exam
   expect(output[0]).toMatchObject({ ...detail, configure: { workflow: { node_type_name: 'pml_run_tool', connection: 'c', input_config: { model: input.model, schema_hash: 'hash' } }, agent: { plugin_id: 'pml_run_tool', connection: 'c', input_config: { model: { value: input.model }, schema_hash: { value: 'hash' }, parameters: { value: {} } } } } });
 });
 
-it('requires connection before network', async () => {
-  await expect(cli(['pixelml', 'tools', 'list'])).rejects.toThrow(/connection/);
-  expect(calls).toHaveLength(0);
+it('without --connection, looks up the project PixelML connection before any catalog call', async () => {
+  vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  // The default mock returns no connection rows, so the lookup finds no PixelML connection.
+  await expect(cli(['pixelml', 'tools', 'list'])).rejects.toThrow(/exit 1/);
+  expect(calls.every(call => call.url.pathname.endsWith('/app_connections/'))).toBe(true);
 });
 
 it('validates raw workflow input and preserves typed references through create/get', async () => {

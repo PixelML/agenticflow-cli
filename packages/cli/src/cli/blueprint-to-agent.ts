@@ -68,7 +68,7 @@ export function pluginSpecToConfig(
     if (!resolved) {
       throw new Error(
         `Plugin "${spec.nodeTypeName}" requires a pixelml connection, but none was supplied. ` +
-          `Run 'af connections list' to find the workspace's pixelml connection id, then pass it to the deploy flow.`,
+          `Run 'af pixelml status --json' for setup steps (API key at https://platform.pixelml.com, then add a PixelML connection in AgenticFlow).`,
       );
     }
     connection = resolved;
@@ -139,7 +139,7 @@ export function tier1BlueprintToAgentPayload(
   // "latest X?" prompts, even when the system prompt explicitly forbids
   // cutoff-based refusals. `agenticflow/gpt-4o-mini` follows the system prompt
   // and routes to web_search correctly. Callers can still override via --model.
-  const model = options.model ?? "agenticflow/gpt-4o-mini";
+  const model = options.model ?? "agenticflow/gpt-5-nano";
   const agentName = options.agentName ?? blueprint.name;
 
   const body: Record<string, unknown> = {
@@ -189,7 +189,12 @@ function buildTier1SystemPrompt(
 ): string {
   const plugins = slot.plugins ?? [];
   const pluginIds = plugins.map((p) => p.nodeTypeName);
-  const pluginList = plugins.map((p) => `- ${p.nodeTypeName}`).join("\n");
+  // Gateway plugins all share node type pml_run_tool; name each by its tool id.
+  const pluginList = plugins
+    .map((p) => p.nodeTypeName === "pml_run_tool"
+      ? `- Pixel ML AI Gateway tool: ${String((p.input?.["model"] as { value?: unknown } | undefined)?.value ?? "unknown")}`
+      : `- ${p.nodeTypeName}`)
+    .join("\n");
   const hasWebSearch = pluginIds.includes("web_search");
   const hasWebRetrieval = pluginIds.includes("web_retrieval");
   const hasApiCall = pluginIds.includes("api_call");
@@ -216,6 +221,18 @@ function buildTier1SystemPrompt(
     toolGuidance.push(
       `- **agenticflow_generate_image**: Use for generating visuals when the user asks for an image, graphic, thumbnail, or visual accompaniment. Write a SPECIFIC, descriptive prompt — don't pass the user's message verbatim if it's vague.`,
     );
+  }
+
+  if (slot.systemPromptOverride) {
+    return [
+      slot.systemPromptOverride,
+      ``,
+      `AVAILABLE TOOLS:`,
+      pluginList,
+      ``,
+      `- Never say "my knowledge cutoff is...": use your tools for anything current.`,
+      `- If a tool returns an error or no data, say so and try another listed tool once. Do not loop.`,
+    ].join("\n");
   }
 
   return [
