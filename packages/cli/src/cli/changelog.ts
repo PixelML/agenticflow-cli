@@ -23,6 +23,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "NEW 9 Gateway blueprints (af blueprints list --gateway): gateway-company-brief, gateway-seo-content-brief, gateway-social-trend-brief, gateway-local-market-scan, gateway-amazon-product-research, gateway-competitor-ads-scan, gateway-research-agent, gateway-growth-agent, gateway-lead-researcher",
       "NEW af bootstrap reports providers (connected categories, PixelML status); blueprints carry uses_pixelml_gateway",
       "NEW af bootstrap --compact (~10 KB instead of ~160 KB), af workflow run-status --compact, list-runs --fields, positional id on af blueprints get/show, 429 hints with retry_after_seconds",
+      "NEW --help and af context lead with the blueprint path; af pixelml tools list retries long phrases word by word and suggests matching Gateway blueprints; af workflow run waits and retries once on a short 429; agent init lists every agent blueprint and defaults to agenticflow/gpt-5-nano",
       "FIX connection lookup pages through every connection (was the first 10 rows; two paths sent limit 200 and got HTTP 422)",
       "FIX af agent run sends message ids (PixelML agents rejected runs with HTTP 400), shows the real stream error, and resumes a pending Gateway tool call; new --message-id flag",
     ],

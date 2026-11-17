@@ -159,6 +159,19 @@ describe('fresh-agent friction fixes', () => {
     expect([...errors, ...output.map(o => JSON.stringify(o))].join('\n')).toMatch(/Wait 60 s/);
   });
 
+  it('tools list: a long phrase with no match retries its main words and suggests Gateway blueprints', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const u = new URL(url);
+      if (u.pathname.endsWith('/app_connections/')) return Response.json([conn(1, 'pixelml')]);
+      const q = u.searchParams.get('search');
+      return Response.json(q === 'keyword' ? { data: [{ id: 'pixelml.kw.ideas' }], total: 1 } : { data: [], total: 0 });
+    }));
+    await run(['pixelml', 'tools', 'list', '--search', 'keyword search volume SEO']);
+    expect(output[0].data.map((r: any) => r.id)).toEqual(['pixelml.kw.ideas']);
+    expect(output[0].search_note).toMatch(/whole phrase/);
+    expect(output[0].matching_blueprints[0].id).toBe('gateway-seo-content-brief');
+  });
+
   it('run-status --compact keeps status and steps only', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ id: 'r1', workflow_id: 'w1', status: 'running', workflow_config_override: { nodes: [] }, state: { nodes_state: [{ node_name: 'places', status: 'running', error: { code: 'PIXELML_RESUMABLE' } }] } })));
     await run(['workflow', 'run-status', '--run-id', 'r1', '--compact']);

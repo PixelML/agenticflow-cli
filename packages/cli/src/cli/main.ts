@@ -645,6 +645,21 @@ function summarizeBlueprints(): Record<string, unknown> {
   };
 }
 
+const STOP_WORDS = new Set(["with", "from", "that", "this", "for", "find", "data", "tool", "tools", "best", "using", "search"]);
+
+/** Gateway blueprints whose name, description or use cases mention any of the words. */
+function suggestGatewayBlueprints(words: string[]): Array<{ id: string; name: string; deploy_command: string }> {
+  if (!words.length) return [];
+  return listBlueprints()
+    .filter(usesPixelMLGateway)
+    .filter((b) => {
+      const text = `${b.id} ${b.name} ${b.description} ${(b.useCases ?? []).join(" ")}`.toLowerCase();
+      return words.some((w) => text.includes(w));
+    })
+    .slice(0, 3)
+    .map((b) => ({ id: b.id, name: b.name, deploy_command: `af ${blueprintKind(b)} init --blueprint ${b.id} --json` }));
+}
+
 /** Small run view for agents: status, each step's status/error/output, run output. */
 function compactRun(runRow: Record<string, unknown>): Record<string, unknown> {
   const state = (runRow["state"] as Record<string, unknown> | undefined) ?? {};
@@ -671,11 +686,16 @@ function compactRun(runRow: Record<string, unknown>): Record<string, unknown> {
 /** Status hint; for 429 it names the server's retry_after_seconds. */
 function hintForStatus(statusCode: number, payload: unknown): string | undefined {
   if (statusCode === 429) {
-    const retry = (payload as { retry_after_seconds?: unknown; detail?: { retry_after_seconds?: unknown } } | null | undefined);
+    const retry = (payload as { retry_after_seconds?: unknown; error_code?: unknown; detail?: { retry_after_seconds?: unknown; error_code?: unknown } } | null | undefined);
     const seconds = Number(retry?.retry_after_seconds ?? retry?.detail?.retry_after_seconds);
+    const code = String(retry?.error_code ?? retry?.detail?.error_code ?? "");
+    const why = code === "WORKSPACE_CONCURRENT_JOB_LIMIT"
+      ? "The workspace's concurrent-run limit is full: runs still in progress (long Pixel ML AI Gateway jobs count too) hold every slot. Check a workflow's runs with `af workflow list-runs --workflow-id <id> --fields id,status --json`."
+      : "Rate limited (too many runs at once in this workspace).";
     if (Number.isFinite(seconds) && seconds > 0) {
-      return `Rate limited (too many runs at once in this workspace). Wait ${seconds} s, then retry the same command once. Do not loop; nothing was started.`;
+      return `${why} Nothing was started. Wait ${seconds} s, then retry the same command once; do not loop.`;
     }
+    return `${why} Nothing was started. Wait, then retry once.`;
   }
   return STATUS_HINT_MAP[statusCode];
 }
@@ -1048,7 +1068,9 @@ export function createProgram(): Command {
     .name("agenticflow")
     .description(
       "AgenticFlow CLI for agent-native API operations.\n\n" +
-      "  AI agents: run `af bootstrap --json` to get started in one command.",
+      "  AI agents: run `af bootstrap --compact --json` first, then deploy a blueprint:\n" +
+      "    af blueprints list --kind workflow|agent|workforce --json   (or --gateway for Pixel ML AI Gateway tools)\n" +
+      "    af <kind> init --blueprint <id> --json   → then run it. Build by hand only when no blueprint fits.",
     )
     .version(pkgVersion)
     .option("--api-key <key>", "API key for authentication")
@@ -1404,7 +1426,9 @@ export function createProgram(): Command {
         printResult({
           schema: "agenticflow.context.v1",
           invariants: [
-            "ALWAYS run `af bootstrap --json` first — it returns everything (auth, agents, workforces, blueprints, playbooks, what's new) in one call",
+            "ALWAYS run `af bootstrap --compact --json` first — auth, providers, agents, workforces, a blueprint summary, playbooks and what's new in ~10 KB (without --compact it lists all 390+ blueprints, ~160 KB)",
+            "PREFER a blueprint to a hand-built payload: `af blueprints list --kind workflow|agent|workforce --json` (or `--gateway`), then the entry's `deploy_command`. A blueprint is tested, wired and validated; hand-build only when none fits",
+            "FOR live web, business, SEO, social, commerce, finance or media data: `af pixelml status --json` (PixelML is optional; built-in tools work without it), then `af blueprints list --gateway --json`. Gateway agents: `af agent init --blueprint gateway-research-agent|gateway-growth-agent|gateway-lead-researcher`",
             "ALWAYS use --json for machine-readable output in automation",
             "ALWAYS use --dry-run before mutating create/deploy commands you're not 100% sure about",
             "ALWAYS use --fields on list commands (saves context window)",
@@ -1417,12 +1441,13 @@ export function createProgram(): Command {
             "NEVER hard-code IDs — fetch dynamically via list/get",
           ],
           bootstrap_sequence: [
-            "af bootstrap --json                            # single-call orientation (auth + agents + workforces + blueprints + playbooks + whats_new)",
+            "af bootstrap --compact --json                  # single-call orientation (~10 KB)",
+            "af blueprints list --kind workflow --fields id,name,deploy_command --json   # pick a ready blueprint",
             "af playbook first-touch                        # read the canonical onboarding walkthrough",
             "af schema <resource> --json                    # inspect payload shape for the resource you're about to touch",
           ],
           journey: [
-            "1. Orient: af bootstrap --json",
+            "1. Orient: af bootstrap --compact --json   (then: af blueprints list --json → af <kind> init --blueprint <id>)",
             "2. Learn:  af playbook <topic>   (migrate-from-paperclip, mcp-client-quirks, amazon-seller, …)",
             "3. Shape:  af schema <resource> [--field <name>]",
             "4. Preview: af <resource> create --body @file --dry-run --json",
@@ -1433,7 +1458,9 @@ export function createProgram(): Command {
             "9. Cleanup: af <resource> delete --<resource>-id <id> --json",
           ],
           discovery: {
-            bootstrap: "af bootstrap --json",
+            bootstrap: "af bootstrap --compact --json",
+            blueprints: "af blueprints list --kind workflow|agent|workforce --json",
+            pixelml_gateway: "af pixelml status --json",
             schemas: "af schema --json",
             schema_field: "af schema <resource> --field <name> --json",
             capabilities: "af discover --json",
@@ -1463,11 +1490,12 @@ export function createProgram(): Command {
         console.log("");
         console.log("If you are an AI agent, run: af context --json");
         console.log("");
-        console.log("Quick start (run bootstrap first — it returns everything):");
-        console.log("  1. af bootstrap --json               # auth + agents + models + blueprints + whats_new");
-        console.log("  2. af agent run --agent-id <id> --message \"Hi\" --json   # talk to an agent");
-        console.log("  3. af paperclip init --blueprint amazon-seller --json    # deploy a team");
-        console.log("  4. af changelog --json               # see what's new");
+        console.log("Quick start:");
+        console.log("  1. af bootstrap --compact --json     # auth + providers + agents + blueprint summary + whats_new");
+        console.log("  2. af blueprints list --kind workflow --fields id,name,deploy_command --json   # or --kind agent|workforce, or --gateway");
+        console.log("  3. af workflow init --blueprint <id> --json            # deploy (agent init / workforce init for other kinds)");
+        console.log("  4. af workflow run --workflow-id <id> --input '{...}' --wait --json");
+        console.log("  5. af pixelml status --json          # optional Pixel ML AI Gateway: ~3,000 live-data and media tools");
         console.log("");
         console.log("Discovery:");
         console.log("  af schema <resource> --json          # payload format for any resource");
@@ -4662,8 +4690,22 @@ export function createProgram(): Command {
         ? client.workflows.run(body)
         : client.workflows.runAnonymous(body);
 
+      /** One automatic retry on a short 429: agents often cannot sleep between calls. */
+      const executeRunWithRetry = async (): Promise<unknown> => {
+        try {
+          return await executeRun();
+        } catch (err) {
+          const payload = err instanceof APIError ? (err.payload as Record<string, unknown> | null) : null;
+          const seconds = Number(payload?.["retry_after_seconds"] ?? (payload?.["detail"] as Record<string, unknown> | undefined)?.["retry_after_seconds"]);
+          if (!(err instanceof APIError) || err.statusCode !== 429 || !Number.isFinite(seconds) || seconds <= 0 || seconds > 90) throw err;
+          console.error(`Workspace run limit reached; nothing was started. Waiting ${seconds} s, then retrying once…`);
+          await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+          return executeRun();
+        }
+      };
+
       try {
-        const result = await executeRun() as Record<string, unknown>;
+        const result = await executeRunWithRetry() as Record<string, unknown>;
         // --wait: poll run-status until terminal (success / failed / cancelled)
         if (opts.wait) {
           const runId = result["id"] as string | undefined;
@@ -5292,10 +5334,10 @@ export function createProgram(): Command {
       "Works in any workspace (no external connections, no MAS/workforce feature). " +
       "For Tier 3 (multi-agent) blueprints, use `af workforce init --blueprint <id>` instead.",
     )
-    .requiredOption("--blueprint <slug>", "Tier 1 blueprint id (research-assistant, content-creator, api-helper). See `af bootstrap --json > blueprints[]`.")
+    .requiredOption("--blueprint <slug>", `Agent blueprint id: ${listBlueprints().filter((b) => b.tier === 1).map((b) => b.id).join(", ")}. See \`af blueprints list --kind agent --json\`.`)
     .option("--name <name>", "Agent name (defaults to blueprint name)")
     .option("--project-id <id>", "Project ID (defaults to env / auth config)")
-    .option("--model <model>", "Model for the agent (default: agenticflow/gpt-4o-mini — reliably calls tools. gemini-2.0-flash refuses on 'latest X' prompts)", "agenticflow/gpt-4o-mini")
+    .option("--model <model>", "Model for the agent (default: agenticflow/gpt-5-nano, a built-in model that calls tools; the server maps the retired gpt-4o-mini to it)", "agenticflow/gpt-5-nano")
     .option("--dry-run", "Show the agent-create payload without writing")
     .action(async (opts) => {
       const blueprint = getBlueprint(opts.blueprint as string);
@@ -5518,8 +5560,30 @@ export function createProgram(): Command {
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const connectionId = await resolvePixelMLConnection(client, opts.connection);
-      await run(() => client.pixelmlTools.list({ connectionId, projectId: opts.projectId, search: opts.search, category: opts.category,
-        limit: parseOptionalInteger(opts.limit, '--limit', 1), offset: parseOptionalInteger(opts.offset, '--offset', 0) }));
+      const limit = parseOptionalInteger(opts.limit, '--limit', 1);
+      const offset = parseOptionalInteger(opts.offset, '--offset', 0);
+      await run(async () => {
+        type Page = { data?: Array<{ id: string }>; total?: number; [key: string]: unknown };
+        const first = (await client.pixelmlTools.list({ connectionId, projectId: opts.projectId, search: opts.search, category: opts.category, limit, offset })) as unknown as Page;
+        const words = String(opts.search ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
+        const blueprints = suggestGatewayBlueprints(words);
+        if ((first.total ?? first.data?.length ?? 0) > 0 || words.length < 2 || offset) {
+          return blueprints.length ? { ...first, matching_blueprints: blueprints } : first;
+        }
+        // Server search matches the whole phrase. Retry with the main words and merge.
+        const seen = new Set<string>();
+        const merged: Array<{ id: string }> = [];
+        for (const word of words.slice(0, 3)) {
+          const page = (await client.pixelmlTools.list({ connectionId, projectId: opts.projectId, search: word, category: opts.category, limit: Math.min(limit ?? 10, 10), offset: 0 })) as unknown as Page;
+          for (const row of page.data ?? []) if (!seen.has(row.id)) { seen.add(row.id); merged.push(row); }
+        }
+        return {
+          ...first,
+          data: merged,
+          search_note: `No tool matched the whole phrase "${opts.search}". Showing matches for: ${words.slice(0, 3).join(", ")}. Short job phrases work best, e.g. "keyword ideas", "company enrich", "tiktok search".`,
+          ...(blueprints.length ? { matching_blueprints: blueprints } : {}),
+        };
+      });
     });
   pixelmlToolsCmd.command('describe').description('Describe a Gateway tool: input/output schema, schema_hash, and ready workflow/agent configs.')
     .option('--connection <id>', 'PixelML connection ID (default: the project PixelML connection)')

@@ -139,7 +139,7 @@ export function tier1BlueprintToAgentPayload(
   // "latest X?" prompts, even when the system prompt explicitly forbids
   // cutoff-based refusals. `agenticflow/gpt-4o-mini` follows the system prompt
   // and routes to web_search correctly. Callers can still override via --model.
-  const model = options.model ?? "agenticflow/gpt-4o-mini";
+  const model = options.model ?? "agenticflow/gpt-5-nano";
   const agentName = options.agentName ?? blueprint.name;
 
   const body: Record<string, unknown> = {
