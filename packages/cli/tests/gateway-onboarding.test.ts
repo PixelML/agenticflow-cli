@@ -135,3 +135,34 @@ describe('af pixelml status', () => {
     expect(output[0]).toMatchObject({ connected: true, connection: { id: 'c2' }, catalog_total: 2981 });
   });
 });
+
+describe('fresh-agent friction fixes', () => {
+  let output: any[];
+  beforeEach(() => {
+    output = [];
+    vi.spyOn(console, 'log').mockImplementation(value => { try { output.push(JSON.parse(value)); } catch {} });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  const run = (args: string[]) => createProgram().exitOverride().parseAsync(['--api-key', 'test', '--workspace-id', 'ws-1', '--project-id', 'p', '--json', ...args], { from: 'user' });
+
+  it('blueprints show accepts a positional id', async () => {
+    await run(['blueprints', 'show', 'gateway-local-market-scan']);
+    expect(output[0]).toMatchObject({ id: 'gateway-local-market-scan' });
+  });
+
+  it('429 errors name the server retry_after_seconds', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ retry_after_seconds: 60 }, { status: 429 })));
+    vi.spyOn(process, 'exit').mockImplementation((() => { throw new Error('exit'); }) as never);
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((value: unknown) => { errors.push(String(value)); });
+    await expect(run(['workflow', 'run-status', '--run-id', 'r1'])).rejects.toThrow('exit');
+    expect([...errors, ...output.map(o => JSON.stringify(o))].join('\n')).toMatch(/Wait 60 s/);
+  });
+
+  it('run-status --compact keeps status and steps only', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ id: 'r1', workflow_id: 'w1', status: 'running', workflow_config_override: { nodes: [] }, state: { nodes_state: [{ node_name: 'places', status: 'running', error: { code: 'PIXELML_RESUMABLE' } }] } })));
+    await run(['workflow', 'run-status', '--run-id', 'r1', '--compact']);
+    expect(output[0]).toMatchObject({ id: 'r1', status: 'running', steps: [{ name: 'places', status: 'running', error: { code: 'PIXELML_RESUMABLE' } }] });
+    expect(output[0]).not.toHaveProperty('workflow_config_override');
+  });
+});

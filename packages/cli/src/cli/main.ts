@@ -627,6 +627,59 @@ const STATUS_HINT_MAP: Record<number, string> = {
   429: "Rate limited. Back off and retry with exponential delay.",
 };
 
+/** Blueprint counts and pointers, for `bootstrap --compact`. */
+function summarizeBlueprints(): Record<string, unknown> {
+  const all = listBlueprints();
+  const byKind: Record<string, number> = {};
+  for (const b of all) byKind[blueprintKind(b)] = (byKind[blueprintKind(b)] ?? 0) + 1;
+  return {
+    total: all.length,
+    by_kind: byKind,
+    agents_and_workforces: all.filter((b) => blueprintKind(b) !== "workflow").map((b) => b.id),
+    pixelml_gateway: all.filter(usesPixelMLGateway).map((b) => b.id),
+    next: [
+      "af blueprints list --kind workflow --fields id,name,deploy_command --json",
+      "af blueprints list --gateway --json",
+      "af blueprints get <id> --json",
+    ],
+  };
+}
+
+/** Small run view for agents: status, each step's status/error/output, run output. */
+function compactRun(runRow: Record<string, unknown>): Record<string, unknown> {
+  const state = (runRow["state"] as Record<string, unknown> | undefined) ?? {};
+  const steps = ((state["nodes_state"] as Array<Record<string, unknown>> | undefined) ?? []).map((node) => ({
+    name: node["node_name"],
+    status: node["status"],
+    started_at: node["started_at"] ?? null,
+    completed_at: node["completed_at"] ?? null,
+    error: node["error"] ?? null,
+    output: node["output"] ?? null,
+  }));
+  return {
+    schema: "agenticflow.workflow_run.compact.v1",
+    id: runRow["id"],
+    workflow_id: runRow["workflow_id"],
+    status: runRow["status"],
+    created_at: runRow["created_at"] ?? null,
+    updated_at: runRow["updated_at"] ?? null,
+    steps,
+    output: runRow["output"] ?? null,
+  };
+}
+
+/** Status hint; for 429 it names the server's retry_after_seconds. */
+function hintForStatus(statusCode: number, payload: unknown): string | undefined {
+  if (statusCode === 429) {
+    const retry = (payload as { retry_after_seconds?: unknown; detail?: { retry_after_seconds?: unknown } } | null | undefined);
+    const seconds = Number(retry?.retry_after_seconds ?? retry?.detail?.retry_after_seconds);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return `Rate limited (too many runs at once in this workspace). Wait ${seconds} s, then retry the same command once. Do not loop; nothing was started.`;
+    }
+  }
+  return STATUS_HINT_MAP[statusCode];
+}
+
 /** Wrap an async SDK call with error handling. */
 async function run(fn: () => Promise<unknown>): Promise<void> {
   try {
@@ -644,8 +697,7 @@ async function run(fn: () => Promise<unknown>): Promise<void> {
       };
       if (err.requestId) details["request_id"] = err.requestId;
       if (err.payload !== null && err.payload !== undefined) details["payload"] = err.payload;
-      const hint = STATUS_HINT_MAP[err.statusCode];
-      fail("request_failed", message, hint, details);
+      fail("request_failed", message, hintForStatus(err.statusCode, err.payload), details);
     }
     fail("request_failed", message);
   }
@@ -1151,6 +1203,7 @@ export function createProgram(): Command {
     .command("bootstrap")
     .description("Single-command AI agent setup: verify auth, list agents, return schemas. Combines context + doctor + schema + agent list.")
     .option("--strict", "Exit non-zero when the backend health check fails. Useful in CI / for scripts that shouldn't proceed into a degraded workspace.")
+    .option("--compact", "Small output for agents (~10 KB): blueprint counts and Gateway ids instead of all 390+ blueprints")
     .action(async (opts) => {
       // Combine everything an AI needs in one response
       const client = buildClient(program.opts());
@@ -1278,7 +1331,8 @@ export function createProgram(): Command {
           "agenticflow/qwen-3.5-flash",
         ],
         providers,
-        blueprints: listBlueprints().map((b) => {
+        ...(opts.compact ? { blueprints_summary: summarizeBlueprints() } : {}),
+        blueprints: opts.compact ? undefined : listBlueprints().map((b) => {
           const k = blueprintKind(b);
           return {
             id: b.id,
@@ -3070,10 +3124,11 @@ export function createProgram(): Command {
     .command("get")
     .aliases(["show"])
     .description("Get full details of a specific blueprint (agents, plugins, starter tasks, or workflow nodes). Alias: `show`.")
+    .argument("[id]", "Blueprint id (same as --id)")
     .option("--id <id>", "Blueprint id (e.g. research-assistant, dev-shop, summarize-url)")
     .option("--blueprint <id>", "Alias for --id")
-    .action((opts) => {
-      const id = (opts.id as string | undefined) ?? (opts.blueprint as string | undefined);
+    .action((positionalId: string | undefined, opts) => {
+      const id = (opts.id as string | undefined) ?? (opts.blueprint as string | undefined) ?? positionalId;
       if (!id) {
         fail(
           "missing_required_option",
@@ -4634,7 +4689,7 @@ export function createProgram(): Command {
           fail(
             "workflow_run_timeout",
             `Workflow did not reach terminal status within ${opts.timeout}s (last status: ${lastStatus})`,
-            `The run continues on the server. Check it with: af workflow run-status --run-id ${runId} --json. ` +
+            `The run continues on the server. Check it with: af workflow run-status --run-id ${runId} --compact --json. ` +
               "Do not start the workflow again for the same input: a Pixel ML AI Gateway (pml_run_tool) step can create another paid job.",
             { run_id: runId, last_status: lastStatus },
           );
@@ -4650,6 +4705,10 @@ export function createProgram(): Command {
         // Detect "Connection X not found" pattern
         const connMatch = errMsg.match(/[Cc]onnection\s+([0-9a-f-]{36})\s+not\s+found/);
         if (!connMatch) {
+          if (err instanceof APIError) {
+            fail("request_failed", errMsg, hintForStatus(err.statusCode, err.payload),
+              { status_code: err.statusCode, ...(err.payload != null ? { payload: err.payload } : {}) });
+          }
           fail("request_failed", errMsg);
         }
 
@@ -4798,6 +4857,7 @@ export function createProgram(): Command {
     .description("Get workflow run status. Accepts --run-id (alias) or --workflow-run-id (canonical).")
     .option("--workflow-run-id <id>", "Workflow run ID (canonical)")
     .option("--run-id <id>", "Alias for --workflow-run-id (returned as `id` from `workflow run`)")
+    .option("--compact", "Only status, per-step status/error/output and the run output (drops the workflow config)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
       const token = resolveToken(program.opts());
@@ -4808,6 +4868,11 @@ export function createProgram(): Command {
           "Run ID is required.",
           "Pass --workflow-run-id <id> or --run-id <id> (alias). The id is returned as `id` from `af workflow run`.",
         );
+      }
+      const fetchRun = () => (token ? client.workflows.getRun(runId as string) : client.workflows.getRunAnonymous(runId as string));
+      if (opts.compact) {
+        await run(async () => compactRun((await fetchRun()) as Record<string, unknown>));
+        return;
       }
       if (token) {
         await run(() => client.workflows.getRun(runId as string));
@@ -4887,14 +4952,15 @@ export function createProgram(): Command {
     .option("--limit <n>", "Limit")
     .option("--offset <n>", "Offset")
     .option("--sort-order <order>", "Sort order (asc|desc)")
+    .option("--fields <fields>", "Comma-separated fields to return (e.g. id,status,created_at)")
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.workflows.listRuns(opts.workflowId, {
+      await run(async () => applyFieldsFilter(await client.workflows.listRuns(opts.workflowId, {
         workspaceId: opts.workspaceId,
         limit: parseOptionalInteger(opts.limit as string | undefined, "--limit", 1),
         offset: parseOptionalInteger(opts.offset as string | undefined, "--offset", 0),
         sortOrder: opts.sortOrder,
-      }));
+      }), opts.fields as string | undefined));
     });
 
   workflowCmd
