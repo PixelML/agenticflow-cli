@@ -259,7 +259,9 @@ export function workflowBlueprintToPayload(
   if (missingConnections.length > 0) {
     warnings.push(
       `This workflow needs a connection: ${missingConnections.join(", ")}. ` +
-        `Create one in the UI (Connections → New) or via \`af connections create\`, then re-run init.`,
+        (missingConnections.includes("pixelml")
+          ? `For pixelml: get an API key at https://platform.pixelml.com, add a PixelML connection in AgenticFlow (Connections → PixelML), check with \`af pixelml status --json\`, then re-run init.`
+          : `Create one in the UI (Connections → New) or via \`af connections create\`, then re-run init.`),
     );
   }
 

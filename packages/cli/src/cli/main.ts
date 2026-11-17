@@ -96,6 +96,8 @@ import {
   type SkillDefinition,
 } from "./skill.js";
 import { fetchPlatformSkills, fetchPlatformPacks, PlatformCatalogError } from "./platform-catalog.js";
+import { usesPixelMLGateway } from "./gateway-blueprints.js";
+import { listAllConnections, pickConnection, pixelmlConnectionHint, pixelmlConnectionsUrl, PIXELML_PLATFORM_URL, BUILT_IN_FALLBACK_BLUEPRINTS } from "./utils/connections.js";
 import {
   exportCompany,
   importCompany,
@@ -1178,6 +1180,30 @@ export function createProgram(): Command {
         workforces = (await client.workforces.list({ limit: 10 })) as unknown[];
       } catch { /* no workforces or unauth */ }
 
+      // Providers: which model/tool connections the project has. PixelML is an
+      // optional provider (like openai/anthropic) that unlocks the Gateway catalog.
+      let providers: Record<string, unknown> = {};
+      try {
+        const rows = await listAllConnections(client, {
+          workspaceId: resolveWorkspaceId(program.opts().workspaceId),
+          projectId: resolveProjectId(program.opts().projectId),
+        });
+        const categories = [...new Set(rows.map((row) => row.category).filter((c): c is string => typeof c === "string" && c !== "mcp"))].sort();
+        const pixelml = pickConnection(rows, "pixelml");
+        providers = {
+          connected_categories: categories,
+          mcp_connections: rows.filter((row) => row.category === "mcp").length,
+          pixelml: pixelml
+            ? { connected: true, connection_id: pixelml.id, next: "af pixelml status --json  # ~3,000 Gateway tools; af blueprints list --gateway --json" }
+            : {
+                connected: false,
+                optional: true,
+                note: "Built-in tools work without it. Add PixelML for ~3,000 Gateway tools (web, business, SEO, social, commerce, finance, media).",
+                setup: `API key at ${PIXELML_PLATFORM_URL}, then ${pixelmlConnectionsUrl(resolveWorkspaceId(program.opts().workspaceId))}`,
+              },
+        };
+      } catch { /* connections unavailable — omit providers */ }
+
       // Annotate data-freshness so callers know whether the empty arrays mean
       // "nothing there" or "couldn't verify because backend was unreachable".
       // Matches codex-round-1 friction point F1 — previously an empty agents[]
@@ -1251,6 +1277,7 @@ export function createProgram(): Command {
           "agenticflow/deepseek-v3.2",
           "agenticflow/qwen-3.5-flash",
         ],
+        providers,
         blueprints: listBlueprints().map((b) => {
           const k = blueprintKind(b);
           return {
@@ -1265,6 +1292,7 @@ export function createProgram(): Command {
             agents: b.agents.length,
             node_count: b.workflowNodes?.length ?? 0,
             use_cases: b.useCases ?? null,
+            uses_pixelml_gateway: usesPixelMLGateway(b),
             // Deploy verb matches kind: workflow/agent/workforce → af <verb> init
             deploy_command: `af ${k} init --blueprint ${b.id} --json`,
             native_target: k,
@@ -3002,7 +3030,8 @@ export function createProgram(): Command {
     .option("--kind <kind>", "Filter by kind: workflow | agent | workforce")
     .option("--complexity <n>", "Filter by ladder rung: 0-6 (0=simplest, 6=workforce DAG)")
     .option("--tier <n>", "[LEGACY] Filter by tier: 1 or 3 (superseded by --kind)")
-    .option("--fields <fields>", "Comma-separated fields (id,name,kind,complexity,tier,deploy_command,use_cases,description)")
+    .option("--gateway", "Only blueprints that use Pixel ML AI Gateway tools (need a PixelML connection)")
+    .option("--fields <fields>", "Comma-separated fields (id,name,kind,complexity,tier,deploy_command,use_cases,uses_pixelml_gateway,description)")
     .action((opts) => {
       const kindFilter = opts.kind as string | undefined;
       if (kindFilter && !["workflow", "agent", "workforce"].includes(kindFilter)) {
@@ -3026,9 +3055,11 @@ export function createProgram(): Command {
         use_cases: b.useCases ?? null,
         agent_count: b.agents.length,
         node_count: b.workflowNodes?.length ?? 0,
+        uses_pixelml_gateway: usesPixelMLGateway(b),
         deploy_command: deployCommandForBlueprint(b),
       }));
       let filtered = all;
+      if (opts.gateway) filtered = filtered.filter((b) => b.uses_pixelml_gateway);
       if (kindFilter) filtered = filtered.filter((b) => b.kind === kindFilter);
       if (complexityFilter != null) filtered = filtered.filter((b) => b.complexity === complexityFilter);
       if (tierFilter != null) filtered = filtered.filter((b) => b.tier === tierFilter);
@@ -4100,10 +4131,9 @@ export function createProgram(): Command {
             try {
               const wsId = opts.workspaceId as string | undefined ?? resolveWorkspaceId(parentOpts.workspaceId);
               const projId = resolveProjectId(parentOpts.projectId);
-              const connections = await client.connections.list({
+              const connections = await listAllConnections(client, {
                 workspaceId: wsId,
                 projectId: projId,
-                limit: 200,
               }) as Record<string, unknown>[];
               if (Array.isArray(connections)) {
                 const category = skill.connection_category.toLowerCase();
@@ -4384,9 +4414,9 @@ export function createProgram(): Command {
       let pixelmlConnectionId: string | null = null;
       const needsLLM = (b.workflowNodes ?? []).some((n) => n.nodeType === "llm");
       const needsPixelML = JSON.stringify(b.workflowNodes ?? []).match(/\"(?:pml_llm|pml_run_tool|ai_decision|ai_switch)\"/);
-      if ((needsLLM || needsPixelML) && !opts.dryRun) {
+      if (needsLLM || needsPixelML) {
         try {
-          const conns = (await initClient.connections.list()) as Array<{ id: string; category?: string }>;
+          const conns = (await listAllConnections(initClient)) as Array<{ id: string; category?: string }>;
           if (needsLLM && !llmConnectionId) llmConnectionId = findWorkspaceLLMConnection(conns);
           if (needsPixelML) pixelmlConnectionId = findWorkspaceConnection(conns, "pixelml");
         } catch {
@@ -4412,7 +4442,9 @@ export function createProgram(): Command {
         fail(
           "missing_connection",
           `Workflow "${b.id}" requires a connection that wasn't found in the workspace: ${translated.missing_connections.join(", ")}.`,
-          `Create one via \`af connections create --body ...\` or in the UI, then re-run. Alternatively pass --llm-connection-id <id> to use a specific existing connection.`,
+          translated.missing_connections.includes("pixelml")
+            ? pixelmlConnectionHint(resolveWorkspaceId(program.opts().workspaceId))
+            : `Create one via \`af connections create --body ...\` or in the UI, then re-run. Alternatively pass --llm-connection-id <id> to use a specific existing connection.`,
         );
       }
 
@@ -4602,7 +4634,8 @@ export function createProgram(): Command {
           fail(
             "workflow_run_timeout",
             `Workflow did not reach terminal status within ${opts.timeout}s (last status: ${lastStatus})`,
-            `Check manually: af workflow run-status --run-id ${runId} --json`,
+            `The run continues on the server. Check it with: af workflow run-status --run-id ${runId} --json. ` +
+              "Do not start the workflow again for the same input: a Pixel ML AI Gateway (pml_run_tool) step can create another paid job.",
             { run_id: runId, last_status: lastStatus },
           );
           return;
@@ -4667,10 +4700,9 @@ export function createProgram(): Command {
           // 4. Fetch available connections
           const wsId = resolveWorkspaceId(program.opts().workspaceId);
           const projId = resolveProjectId(program.opts().projectId);
-          const connections = await client.connections.list({
+          const connections = await listAllConnections(client, {
             workspaceId: wsId,
             projectId: projId,
-            limit: 200,
           }) as Record<string, unknown>[];
 
           if (!Array.isArray(connections) || connections.length === 0) {
@@ -5074,6 +5106,7 @@ export function createProgram(): Command {
     .requiredOption("--agent-id <id>", "Agent ID")
     .requiredOption("--message <message>", "Message to send")
     .option("--thread-id <id>", "Thread ID for conversation continuity")
+    .option("--message-id <id>", "Message ID from an earlier run; with the same --thread-id and --message it resumes a pending Gateway tool job")
     .option("--timeout <seconds>", "Max seconds to wait for result", "120")
     .option("--poll-interval <seconds>", "Seconds between status checks", "2")
     .action(async (opts) => {
@@ -5105,17 +5138,30 @@ export function createProgram(): Command {
         const result = await client.agents.run(opts.agentId, {
           message: opts.message,
           threadId: opts.threadId,
+          messageId: opts.messageId,
           timeoutMs: Number.parseInt(opts.timeout, 10) * 1000,
           pollIntervalMs: Number.parseInt(opts.pollInterval, 10) * 1000,
         });
 
-        if (result.status === "failed") {
-          fail("agent_run_failed", `Agent run failed (thread: ${result.threadId})`);
+        const usedGateway = (result.toolCalls ?? []).some((name) => name.startsWith("pixelml_"));
+        const resumeCmd = `af agent run --agent-id ${opts.agentId} --thread-id ${result.threadId} --message-id ${result.messageId} --message ${JSON.stringify(opts.message)} --json`;
+        const runDetails = { thread_id: result.threadId, message_id: result.messageId, tool_calls: result.toolCalls ?? [], resumes: result.resumes ?? 0, error: result.error ?? null };
+        if (result.status === "failed" || (result.status !== "completed" && result.error)) {
+          fail("agent_run_failed",
+            `Agent run failed${result.error ? `: ${result.error}` : ""} (thread: ${result.threadId})`,
+            usedGateway
+              ? `A Pixel ML AI Gateway tool was called. Resume the same job (no new charge) with: ${resumeCmd}. ` +
+                "If it keeps failing, test the tool alone: af pixelml tools try --model <tool-id> --params '{...}' --json"
+              : `Inspect: af agent-threads messages --thread-id ${result.threadId} --json`,
+            runDetails);
         }
         if (result.status === "timeout") {
           fail("agent_run_timeout",
             `Agent did not respond within ${opts.timeout}s`,
-            `Thread: ${result.threadId}. Check with: af agent-threads messages --thread-id ${result.threadId}`);
+            usedGateway
+              ? `A Gateway tool job may still be running. Resume it (do not start a new run) with: ${resumeCmd}`
+              : `Thread: ${result.threadId}. Check with: af agent-threads messages --thread-id ${result.threadId}`,
+            runDetails);
         }
 
         // PDCA round 2 (2026-04-14): the backend sometimes returns
@@ -5131,6 +5177,8 @@ export function createProgram(): Command {
           status: isEmpty ? "completed_empty" : result.status,
           agent_id: opts.agentId,
           thread_id: result.threadId,
+          message_id: result.messageId,
+          tool_calls: result.toolCalls ?? [],
           response: result.response,
           ...(isEmpty
             ? {
@@ -5222,8 +5270,8 @@ export function createProgram(): Command {
         let connectionsByCategory: Partial<Record<"pixelml", string>> = {};
         if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => (plugin.connectionCategory === "pixelml" || plugin.nodeTypeName === "pml_run_tool")))) {
           try {
-            const connections = (await initClient.connections.list({ workspaceId: opts.workspaceId })) as Array<{ id: string; category?: string }>;
-            const pixelml = connections.find((connection) => connection.category === "pixelml");
+            const connections = await listAllConnections(initClient, { workspaceId: opts.workspaceId });
+            const pixelml = pickConnection(connections, "pixelml");
             if (pixelml) connectionsByCategory.pixelml = pixelml.id;
           } catch {
             // The translator emits the actionable missing-connection error.
@@ -5239,7 +5287,9 @@ export function createProgram(): Command {
           connectionsByCategory,
         });
       } catch (err) {
-        fail("invalid_blueprint", err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        fail("invalid_blueprint", message,
+          /pixelml connection/i.test(message) ? pixelmlConnectionHint(resolveWorkspaceId(program.opts().workspaceId)) : undefined);
         return; // unreachable, satisfies control flow
       }
 
@@ -5312,29 +5362,168 @@ export function createProgram(): Command {
   // ═════════════════════════════════════════════════════════════════
   // node-types  (SDK-based)
   // ═════════════════════════════════════════════════════════════════
-  const pixelmlToolsCmd = program.command('pixelml').description('PixelML catalog discovery.')
-    .command('tools').description('Search and describe tools using a PixelML connection.');
-  pixelmlToolsCmd.command('list').description('Search one bounded page of PixelML tools.')
-    .requiredOption('--connection <id>', 'PixelML connection ID')
+  // ═════════════════════════════════════════════════════════════════
+  // pixelml — Pixel ML AI Gateway (≈3,000 tools via one PixelML connection)
+  // ═════════════════════════════════════════════════════════════════
+  /** Resolve the project's PixelML connection, or fail with the onboarding hint. */
+  const resolvePixelMLConnection = async (client: AgenticFlowClient, explicit?: string): Promise<string> => {
+    if (explicit) return explicit;
+    const workspaceId = resolveWorkspaceId(program.opts().workspaceId);
+    let rows: Awaited<ReturnType<typeof listAllConnections>> = [];
+    try {
+      rows = await listAllConnections(client, { workspaceId, projectId: resolveProjectId(program.opts().projectId) });
+    } catch (err) {
+      fail("request_failed", `Could not list connections: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const match = pickConnection(rows, "pixelml");
+    if (!match) fail("pixelml_connection_missing", "No PixelML connection in the current project (PixelML is optional; Gateway tools need it).", pixelmlConnectionHint(workspaceId));
+    return match!.id;
+  };
+
+  const pixelmlCmd = program.command('pixelml').description('Pixel ML AI Gateway (optional provider): search, describe and try ~3,000 tools (web, business, SEO, social, commerce, finance, media). Start with `af pixelml status`.');
+  pixelmlCmd.command('status').description('Check the PixelML connection and catalog, and print the next commands. Run this first.')
     .option('--project-id <id>', 'Project ID')
-    .option('--search <query>', 'Server-side search')
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const workspaceId = resolveWorkspaceId(program.opts().workspaceId);
+      const projectId = (opts.projectId as string | undefined) ?? resolveProjectId(program.opts().projectId);
+      const rows = await listAllConnections(client, { workspaceId, projectId }).catch(() => []);
+      const match = pickConnection(rows, "pixelml");
+      if (!match) {
+        // Not an error: PixelML is optional. Built-in tools keep working.
+        printResult({
+          schema: "agenticflow.pixelml.status.v1",
+          connected: false,
+          optional: true,
+          project_id: projectId ?? null,
+          summary: "No PixelML connection. Built-in AgenticFlow tools and models work without it. Add PixelML (optional provider) to unlock ~3,000 Pixel ML AI Gateway tools.",
+          add_connection: {
+            step_1: `Get a Pixel ML API key at ${PIXELML_PLATFORM_URL}`,
+            step_2: `Add a PixelML connection at ${pixelmlConnectionsUrl(workspaceId)} (same project)`,
+            step_3: "Re-run: af pixelml status --json",
+          },
+          platform_url: PIXELML_PLATFORM_URL,
+          connections_url: pixelmlConnectionsUrl(workspaceId),
+          without_pixelml: BUILT_IN_FALLBACK_BLUEPRINTS.map((id) => {
+            const b = getBlueprint(id);
+            return b ? { id, deploy_command: deployCommandForBlueprint(b) } : null;
+          }).filter(Boolean),
+        });
+        return;
+      }
+      let catalogTotal: number | null = null;
+      let catalogError: string | null = null;
+      try {
+        const page = (await client.pixelmlTools.list({ connectionId: match!.id, projectId, limit: 1 })) as { total?: number };
+        catalogTotal = typeof page.total === "number" ? page.total : null;
+      } catch (err) {
+        catalogError = err instanceof Error ? err.message : String(err);
+      }
+      printResult({
+        schema: "agenticflow.pixelml.status.v1",
+        connected: true,
+        connection: { id: match!.id, name: match!.name ?? null, status: match!.status ?? null },
+        project_id: projectId ?? null,
+        catalog_total: catalogTotal,
+        ...(catalogError ? { catalog_error: catalogError } : {}),
+        areas: [
+          "web search & news", "page scrape & crawl", "company & people enrichment", "work email find/verify",
+          "SEO keywords, SERP & backlinks", "ad libraries", "TikTok/Instagram/YouTube/Reddit",
+          "Amazon/Shopify/Google Maps products & reviews", "stocks & filings", "image/video/audio generation",
+        ],
+        next: [
+          'af pixelml tools list --search "<the job, not the vendor>" --limit 10 --json',
+          "af pixelml tools describe --model <tool-id> --json",
+          "af pixelml tools try --model <tool-id> --params '{...}' --json",
+          "af blueprints list --json   # entries with uses_pixelml_gateway=true deploy Gateway tools",
+          "af playbook pixelml-tools",
+        ],
+      });
+    });
+
+  const pixelmlToolsCmd = pixelmlCmd.command('tools').description('Search, describe and try Gateway tools. --connection defaults to the project PixelML connection.');
+  pixelmlToolsCmd.command('list').description('Search one page of Gateway tools (server-side search; describe the job, not the vendor).')
+    .option('--connection <id>', 'PixelML connection ID (default: the project PixelML connection)')
+    .option('--project-id <id>', 'Project ID')
+    .option('--search <query>', 'Server-side search, e.g. "keyword ideas" or "company by domain"')
     .option('--category <category>', 'Category')
     .option('--limit <n>', 'Page size (1–100)')
     .option('--offset <n>', 'Offset')
     .action(async (opts) => {
       const client = buildClient(program.opts());
-      await run(() => client.pixelmlTools.list({ connectionId: opts.connection, projectId: opts.projectId, search: opts.search, category: opts.category,
+      const connectionId = await resolvePixelMLConnection(client, opts.connection);
+      await run(() => client.pixelmlTools.list({ connectionId, projectId: opts.projectId, search: opts.search, category: opts.category,
         limit: parseOptionalInteger(opts.limit, '--limit', 1), offset: parseOptionalInteger(opts.offset, '--offset', 0) }));
     });
-  pixelmlToolsCmd.command('describe').description('Describe a PixelML tool and show workflow/agent configuration examples.')
-    .requiredOption('--connection <id>', 'PixelML connection ID')
-    .requiredOption('--model <id>', 'Router tool ID')
+  pixelmlToolsCmd.command('describe').description('Describe a Gateway tool: input/output schema, schema_hash, and ready workflow/agent configs.')
+    .option('--connection <id>', 'PixelML connection ID (default: the project PixelML connection)')
+    .requiredOption('--model <id>', 'Tool ID from `af pixelml tools list`')
     .option('--project-id <id>', 'Project ID')
     .action(async (opts) => {
       const client = buildClient(program.opts());
+      const connectionId = await resolvePixelMLConnection(client, opts.connection);
       await run(async () => {
-        const result = await client.pixelmlTools.describe({ connectionId: opts.connection, projectId: opts.projectId, model: opts.model });
-        return { ...result, configure: pixelMLConfigureExample(result, opts.connection) };
+        const result = await client.pixelmlTools.describe({ connectionId, projectId: opts.projectId, model: opts.model });
+        return { ...result, configure: pixelMLConfigureExample(result, connectionId) };
+      });
+    });
+  pixelmlToolsCmd.command('try').description('Run one Gateway tool once and print its output (reuses one scratch workflow per tool). Charges your Gateway account.')
+    .option('--connection <id>', 'PixelML connection ID (default: the project PixelML connection)')
+    .requiredOption('--model <id>', 'Tool ID from `af pixelml tools list`')
+    .requiredOption('--params <json>', 'Tool parameters as a JSON object (inline or @file), matching `describe` input_schema')
+    .option('--project-id <id>', 'Project ID')
+    .option('--timeout <seconds>', 'Max seconds to wait for the job', '180')
+    .action(async (opts) => {
+      const client = buildClient(program.opts());
+      const connectionId = await resolvePixelMLConnection(client, opts.connection);
+      const projectId = (opts.projectId as string | undefined) ?? resolveProjectId(program.opts().projectId);
+      if (!projectId) fail("missing_project", "`af pixelml tools try` needs a project.", "Pass --project-id or run `af bootstrap --json`.");
+      const params = loadJsonPayload(opts.params);
+      if (typeof params !== "object" || params === null || Array.isArray(params)) fail("invalid_option_value", "--params must be a JSON object.");
+      const name = `pixelml try · ${opts.model}`.slice(0, 120);
+      const payload = {
+        name,
+        description: "Scratch workflow created by `af pixelml tools try`. Safe to delete.",
+        project_id: projectId,
+        public_runnable: false,
+        input_schema: { type: "object", title: "Parameters", properties: { parameters: { type: "object", title: "Parameters" } }, required: ["parameters"] },
+        nodes: [{ name: "run_tool", title: "Run Tool", node_type_name: "pml_run_tool", connection: connectionId, input_config: { model: opts.model, parameters: "{{parameters}}" } }],
+        output_mapping: { result: "{{run_tool}}" },
+      };
+      await run(async () => {
+        const existing = (await client.workflows.list({ projectId, searchQuery: name, limit: 20 })) as unknown;
+        const rows = Array.isArray(existing) ? existing : ((existing as { items?: unknown[] })?.items ?? []);
+        const found = (rows as Array<{ id: string; name?: string }>).find((row) => row.name === name);
+        const prepared = await preparePixelMLPayload(client, payload, 'workflow');
+        let workflowId: string;
+        if (found) {
+          await client.workflows.update(found.id, prepared);
+          workflowId = found.id;
+        } else {
+          workflowId = ((await client.workflows.create(prepared)) as { id: string }).id;
+        }
+        const queued = (await client.workflows.run({ workflow_id: workflowId, input: { parameters: params } })) as { id?: string };
+        const runId = queued.id;
+        if (!runId) throw new Error("Workflow run did not return an id.");
+        const deadline = Date.now() + Number.parseInt(opts.timeout as string, 10) * 1000;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          const poll = (await client.workflows.getRun(runId)) as Record<string, unknown>;
+          const status = poll["status"] as string | undefined;
+          if (status && ["success", "failed", "cancelled", "error"].includes(status)) {
+            const nodes = ((poll["state"] as Record<string, unknown> | undefined)?.["nodes_state"] as Array<Record<string, unknown>> | undefined) ?? [];
+            const node = nodes.find((row) => row["node_name"] === "run_tool") ?? nodes[0];
+            return {
+              schema: "agenticflow.pixelml.try.v1", status, model: opts.model, workflow_id: workflowId, run_id: runId,
+              output: node?.["output"] ?? poll["output"] ?? null, error: node?.["error"] ?? null,
+            };
+          }
+        }
+        return {
+          schema: "agenticflow.pixelml.try.v1", status: "pending", model: opts.model, workflow_id: workflowId, run_id: runId,
+          note: "The Gateway job is still running on the server. Do not start it again: that can create another paid job. " +
+            `Poll: af workflow run-status --run-id ${runId} --json`,
+        };
       });
     });
 
@@ -6484,9 +6673,10 @@ export function createProgram(): Command {
       }
       if (!opts.dryRun && blueprint.agents.some((slot) => (slot.plugins ?? []).some((plugin) => plugin.connectionCategory))) {
         try {
-          const connections = (await fullClient.connections.list({ workspaceId: opts.workspaceId })) as Array<{ id: string; category?: string }>;
+          const connections = await listAllConnections(fullClient, { workspaceId: opts.workspaceId });
           for (const connection of connections) {
-            if (connection.category && !connectionsByCategory[connection.category]) connectionsByCategory[connection.category] = connection.id;
+            if (!connection.category || connectionsByCategory[connection.category]) continue;
+            connectionsByCategory[connection.category] = (pickConnection(connections, connection.category) ?? connection).id;
           }
         } catch {
           // Missing connection errors are reported by the pure translator below.

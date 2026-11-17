@@ -26,6 +26,7 @@
 
 import type { WorkflowInputConfig } from "./ai-node-config.js";
 import { AI_DECISION_BLUEPRINTS } from "./ai-decision-blueprints.js";
+import { GATEWAY_BLUEPRINTS } from "./gateway-blueprints.js";
 
 export interface AgentPluginSpec {
   /** Node type name (e.g. "web_search", "agenticflow_generate_image"). */
@@ -226,6 +227,7 @@ export function blueprintComplexity(b: CompanyBlueprint): 0 | 1 | 2 | 3 | 4 | 5 
 
 export const BLUEPRINTS: Record<string, CompanyBlueprint> = {
   ...AI_DECISION_BLUEPRINTS,
+  ...GATEWAY_BLUEPRINTS,
   // ═══════════════════════════════════════════════════════════════════════
   // RUNGS 0-2 — Workflow blueprints (deterministic, node-chained)
   // Require an LLM-provider connection in the workspace (straico, openai,

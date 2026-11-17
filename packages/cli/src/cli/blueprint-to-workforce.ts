@@ -177,7 +177,7 @@ export function blueprintToAgentSpecs(
         if (!resolved) {
           throw new Error(
             `Tier 3 blueprint slot "${slot.role}" needs pixelml connection for plugin "${spec.nodeTypeName}". ` +
-              `Run 'af connections list' and provide a pixelml connection before deploying.`,
+              `Run 'af pixelml status --json' for setup steps (API key at https://platform.pixelml.com, then add a PixelML connection in AgenticFlow).`,
           );
         }
         connection = resolved;
